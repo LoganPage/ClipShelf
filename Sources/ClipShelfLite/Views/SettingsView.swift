@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = LoginItemController.isEnabled
     @State private var loginError: String?
     @State private var selectionColor = SelectionColorPreferences.color
+    @State private var selectionColorPreset = SelectionColorPreferences.selectedPreset
     @State private var switchToClickedRecord = SelectionClickBehaviorPreferences.switchToClickedRecord
     @State private var multiSelectionClickSelectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickSelectedBehavior
     @State private var multiSelectionClickUnselectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickUnselectedBehavior
@@ -17,11 +18,18 @@ struct SettingsView: View {
     @State private var pinHotKey = PinHotKeyDefaults.load()
     @State private var appIconChoice = AppIconPreferences.selected
     @State private var hostWindow: NSWindow?
+    @State private var appearanceMode = AppearancePreferences.mode
+    @State private var systemColorScheme = AppearancePreferences.systemColorScheme
+
+    private var resolvedColorScheme: ColorScheme {
+        appearanceMode == .system ? systemColorScheme : (appearanceMode.colorScheme ?? .light)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    appearanceSection
                     iconSection
                     screenshotSection
                     historySection
@@ -46,6 +54,8 @@ struct SettingsView: View {
             .padding(.vertical, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppTheme.settingsBackground)
+        .preferredColorScheme(resolvedColorScheme)
         .background(WindowReader { window in
             hostWindow = window
         })
@@ -61,6 +71,17 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: AppIconPreferences.changedNotification)) { notification in
             appIconChoice = notification.object as? AppIconChoice ?? AppIconPreferences.selected
         }
+        .onReceive(NotificationCenter.default.publisher(for: AppearancePreferences.changedNotification)) { notification in
+            appearanceMode = notification.object as? AppearanceMode ?? AppearancePreferences.mode
+            systemColorScheme = AppearancePreferences.systemColorScheme
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppearancePreferences.systemChangedNotification)) { _ in
+            systemColorScheme = AppearancePreferences.systemColorScheme
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SelectionColorPreferences.changedNotification)) { _ in
+            selectionColor = SelectionColorPreferences.color
+            selectionColorPreset = SelectionColorPreferences.selectedPreset
+        }
         .onReceive(NotificationCenter.default.publisher(for: SelectionClickBehaviorPreferences.changedNotification)) { notification in
             switchToClickedRecord = notification.object as? Bool ?? SelectionClickBehaviorPreferences.switchToClickedRecord
             multiSelectionClickSelectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickSelectedBehavior
@@ -68,6 +89,24 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: DragSelectionPreferences.changedNotification)) { notification in
             clickRecoveryDuration = notification.object as? TimeInterval ?? DragSelectionPreferences.clickRecoveryDuration
+        }
+    }
+
+    private var appearanceSection: some View {
+        settingsSection("暗黑模式") {
+            Picker("暗黑模式", selection: Binding(
+                get: { appearanceMode },
+                set: updateAppearanceMode
+            )) {
+                ForEach(AppearanceMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text("深色模式使用石墨背景和分层表面，类型颜色在暗色背景上保持清晰。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -182,31 +221,37 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                ColorPicker("选中记录底色", selection: Binding(
-                    get: { selectionColor },
-                    set: updateSelectionColor
-                ), supportsOpacity: false)
+                Text("选中记录底色")
+                    .font(.system(size: 13, weight: .medium))
 
-                HStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(selectionColor)
-                        .frame(width: 46, height: 24)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.secondary.opacity(0.24), lineWidth: 1)
-                        )
+                HStack(spacing: 8) {
+                    ForEach(SelectionColorPreset.allCases) { preset in
+                        selectionColorPresetButton(preset)
+                    }
+                }
 
-                    Text("记录被选中时只改变底色，文字保持黑色。")
+                HStack(spacing: 12) {
+                    ColorPicker("自定义颜色", selection: Binding(
+                        get: { selectionColor },
+                        set: updateSelectionColor
+                    ), supportsOpacity: false)
+
+                    Text(selectionColorPreset == nil ? "当前使用自定义颜色" : "预设会随浅色/深色模式自动切换")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
                     Spacer()
 
-                    Button("恢复默认颜色") {
+                    Button("恢复默认") {
                         SelectionColorPreferences.reset()
+                        selectionColorPreset = SelectionColorPreferences.selectedPreset
                         selectionColor = SelectionColorPreferences.color
                     }
                 }
+
+                Text("记录被选中时只改变底色，文字保持黑色。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Button("查看历史存储位置") {
@@ -294,7 +339,14 @@ struct SettingsView: View {
 
     private func updateSelectionColor(_ color: Color) {
         selectionColor = color
+        selectionColorPreset = nil
         SelectionColorPreferences.color = color
+    }
+
+    private func selectSelectionColorPreset(_ preset: SelectionColorPreset) {
+        selectionColorPreset = preset
+        selectionColor = preset.color
+        SelectionColorPreferences.select(preset)
     }
 
     private func updateSelectionClickBehavior(_ enabled: Bool) {
@@ -322,6 +374,42 @@ struct SettingsView: View {
         AppIconPreferences.selected = choice
     }
 
+    private func updateAppearanceMode(_ mode: AppearanceMode) {
+        appearanceMode = mode
+        AppearancePreferences.mode = mode
+    }
+
+    private func selectionColorPresetButton(_ preset: SelectionColorPreset) -> some View {
+        Button {
+            selectSelectionColorPreset(preset)
+        } label: {
+            VStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(preset.color)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 30)
+                    .overlay {
+                        if selectionColorPreset == preset {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Color(nsColor: .labelColor))
+                        }
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(selectionColorPreset == preset ? Color.accentColor : AppTheme.subtleBorder, lineWidth: selectionColorPreset == preset ? 2 : 1)
+                    }
+
+                Text(preset.title)
+                    .font(.caption2)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .help(preset.feeling)
+    }
+
     @ViewBuilder
     private func iconChoiceButton(_ choice: AppIconChoice) -> some View {
         Button {
@@ -330,7 +418,7 @@ struct SettingsView: View {
             VStack(spacing: 8) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(nsColor: .textBackgroundColor))
+                        .fill(AppTheme.rowBackground)
                     RoundedRectangle(cornerRadius: 16)
                         .stroke(appIconChoice == choice ? Color.accentColor : Color.secondary.opacity(0.18), lineWidth: appIconChoice == choice ? 2 : 1)
 
