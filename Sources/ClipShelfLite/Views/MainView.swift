@@ -14,6 +14,7 @@ struct MainView: View {
     @State private var dragSnapshotItems: [ClipItem]?
     @State private var historyScrollView: NSScrollView?
     @State private var selectionColor = SelectionColorPreferences.color
+    @State private var selectionColorPreset = SelectionColorPreferences.selectedPreset
     @State private var switchToClickedRecord = SelectionClickBehaviorPreferences.switchToClickedRecord
     @State private var multiSelectionClickSelectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickSelectedBehavior
     @State private var multiSelectionClickUnselectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickUnselectedBehavior
@@ -26,6 +27,8 @@ struct MainView: View {
     @State private var suppressRowTapUntil = Date.distantPast
     @StateObject private var updateChecker = AppUpdateChecker.shared
     @State private var hostWindow: NSWindow?
+    @State private var appearanceMode = AppearancePreferences.mode
+    @State private var systemColorScheme = AppearancePreferences.systemColorScheme
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = 10
     private let historyListVerticalInset: CGFloat = 8
@@ -41,6 +44,10 @@ struct MainView: View {
         dragSnapshotItems ?? liveFilteredItems
     }
 
+    private var resolvedColorScheme: ColorScheme {
+        appearanceMode == .system ? systemColorScheme : (appearanceMode.colorScheme ?? .light)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             toolbar
@@ -53,6 +60,7 @@ struct MainView: View {
         }
         .frame(minWidth: 680, minHeight: 520)
         .background(AppTheme.appBackground)
+        .preferredColorScheme(resolvedColorScheme)
         .overlay {
             ZStack {
                 if showingSettings {
@@ -79,6 +87,13 @@ struct MainView: View {
             endDragSelection()
             removeCommandKeyMonitor()
         }
+        .onReceive(NotificationCenter.default.publisher(for: AppearancePreferences.changedNotification)) { notification in
+            appearanceMode = notification.object as? AppearanceMode ?? AppearancePreferences.mode
+            systemColorScheme = AppearancePreferences.systemColorScheme
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppearancePreferences.systemChangedNotification)) { _ in
+            systemColorScheme = AppearancePreferences.systemColorScheme
+        }
     }
 
     private var settingsOverlay: some View {
@@ -87,7 +102,7 @@ struct MainView: View {
             let panelHeight = max(proxy.size.height - 96, 360)
 
             ZStack {
-                Color.black.opacity(0.16)
+                    AppTheme.overlayBackground
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -100,7 +115,7 @@ struct MainView: View {
                 .frame(width: panelWidth, height: panelHeight)
                 .background(
                     RoundedRectangle(cornerRadius: 18)
-                        .fill(Color(nsColor: .windowBackgroundColor))
+                        .fill(AppTheme.settingsBackground)
                         .shadow(color: Color.black.opacity(0.18), radius: 24, x: 0, y: 12)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 18))
@@ -124,6 +139,7 @@ struct MainView: View {
                             isFocused: focusedID == item.id,
                             isSelected: isSelected,
                             selectionColor: selectionColor,
+                            selectionColorIsPreset: selectionColorPreset != nil,
                             showsSeparator: index < filteredItems.count - 1 && !isSelected && !isNextSelected,
                             handleClick: { event in handleRowClick(item, event: event) },
                             handleCopy: { store.copy(actionItems(for: item)) },
@@ -196,6 +212,7 @@ struct MainView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: SelectionColorPreferences.changedNotification)) { _ in
                 selectionColor = SelectionColorPreferences.color
+                selectionColorPreset = SelectionColorPreferences.selectedPreset
             }
             .onReceive(NotificationCenter.default.publisher(for: SelectionClickBehaviorPreferences.changedNotification)) { notification in
                 switchToClickedRecord = notification.object as? Bool ?? SelectionClickBehaviorPreferences.switchToClickedRecord
@@ -897,11 +914,13 @@ struct MainView: View {
 }
 
 private struct ClipRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let item: ClipItem
     @ObservedObject var store: ClipStore
     let isFocused: Bool
     let isSelected: Bool
     let selectionColor: Color
+    let selectionColorIsPreset: Bool
     let showsSeparator: Bool
     let handleClick: (NSEvent?) -> Void
     let handleCopy: () -> Void
@@ -926,7 +945,7 @@ private struct ClipRow: View {
                     Text(DateText.formatter.string(from: item.createdAt))
                 }
                 .font(.caption)
-                .foregroundStyle(isSelected ? Color.black.opacity(0.72) : Color.secondary)
+                .foregroundStyle(isSelected ? selectedMetadataColor : Color.secondary)
             }
 
             Spacer()
@@ -966,7 +985,7 @@ private struct ClipRow: View {
         .frame(height: 58)
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .foregroundStyle(isSelected ? Color.black : Color.primary)
+        .foregroundStyle(isSelected ? selectedTextColor : Color.primary)
         .background(rowBackground)
         .overlay(alignment: .bottom) {
             if showsSeparator {
@@ -985,7 +1004,7 @@ private struct ClipRow: View {
 
     private var rowBackground: Color {
         if isSelected {
-            return selectionColor
+            return selectionColor.opacity(colorScheme == .dark && !selectionColorIsPreset ? 0.68 : 1)
         }
 
         if isFocused {
@@ -993,6 +1012,14 @@ private struct ClipRow: View {
         }
 
         return Color.clear
+    }
+
+    private var selectedTextColor: Color {
+        colorScheme == .dark ? .white : .black
+    }
+
+    private var selectedMetadataColor: Color {
+        colorScheme == .dark ? .white.opacity(0.72) : .black.opacity(0.72)
     }
 
     @ViewBuilder
@@ -1010,7 +1037,7 @@ private struct ClipRow: View {
             if let data = item.imageData, let image = NSImage(data: data) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 7)
-                        .fill(Color.black.opacity(0.06))
+                        .fill(AppTheme.imageThumbnailBackground)
                     Image(nsImage: image)
                         .resizable()
                         .scaledToFit()
@@ -1034,34 +1061,18 @@ private struct ClipRow: View {
     }
 }
 
-private enum AppTheme {
-    static let appBackground = Color(nsColor: .windowBackgroundColor)
-    static let rowBackground = Color(nsColor: .textBackgroundColor)
-    static let searchBackground = Color(nsColor: .textBackgroundColor)
-    static let subtleBorder = Color(nsColor: .separatorColor).opacity(0.42)
-    static let focusedBackground = Color(nsColor: .controlAccentColor).opacity(0.10)
-    static let selectedBackground = Color(nsColor: .labelColor).opacity(0.90)
-    static let iconBackground = Color(nsColor: .labelColor).opacity(0.92)
-    static let iconForeground = Color(nsColor: .windowBackgroundColor)
-    static let textPreviewBackground = Color(red: 0.90, green: 0.95, blue: 0.98)
-    static let textPreviewForeground = Color(red: 0.10, green: 0.32, blue: 0.42)
-    static let filePreviewBackground = Color(red: 0.91, green: 0.96, blue: 0.92)
-    static let filePreviewForeground = Color(red: 0.12, green: 0.38, blue: 0.20)
-    static let imagePreviewBackground = Color(red: 0.98, green: 0.94, blue: 0.88)
-    static let imagePreviewForeground = Color(red: 0.56, green: 0.30, blue: 0.04)
-}
-
 private struct ChatGPTIconButtonStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var colorScheme
     let isSelected: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(isSelected ? Color.black : Color.secondary)
+            .foregroundStyle(isSelected ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary)
             .frame(width: 36, height: 32)
             .background(
                 RoundedRectangle(cornerRadius: 9)
-                    .fill(isSelected ? Color.black.opacity(configuration.isPressed ? 0.12 : 0.07) : Color(nsColor: .controlBackgroundColor).opacity(configuration.isPressed ? 1 : 0.72))
+                    .fill(isSelected ? AppTheme.selectedActionBackground.opacity(configuration.isPressed ? 1.5 : 1) : AppTheme.actionButtonBackground.opacity(configuration.isPressed ? 1.2 : 1))
             )
     }
 }

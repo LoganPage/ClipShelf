@@ -31,10 +31,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: AppIconPreferences.changedNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appearanceDidChange(_:)),
+            name: AppearancePreferences.changedNotification,
+            object: nil
+        )
+        DistributedNotificationCenter.default.addObserver(
+            self,
+            selector: #selector(systemAppearanceDidChange(_:)),
+            name: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil
+        )
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         NotificationCenter.default.removeObserver(self)
+        DistributedNotificationCenter.default.removeObserver(self)
         HotKeyManager.shared.unregister()
     }
 
@@ -59,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.window = window
         }
 
+        AppearancePreferences.apply(to: window)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -82,6 +96,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func appIconDidChange(_ notification: Notification) {
         updateStatusItemIcon()
+    }
+
+    @objc func appearanceDidChange(_ notification: Notification) {
+        AppearancePreferences.apply(to: window)
+    }
+
+    @objc func systemAppearanceDidChange(_ notification: Notification) {
+        guard AppearancePreferences.mode == .system else { return }
+        DispatchQueue.main.async {
+            AppearancePreferences.apply(to: self.window)
+            NotificationCenter.default.post(name: AppearancePreferences.systemChangedNotification, object: nil)
+        }
     }
 
     private func normalizeGlobalHotKeyIfNeeded() {
