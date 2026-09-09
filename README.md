@@ -1,5 +1,8 @@
 # ClipShelf
 
+> Windows 体验版已开源：[Windows 1.0.22 源码、构建说明与已知限制](Windows/README.md)。下方说明仍针对 macOS。
+
+
 ## 中文
 
 ClipShelf 是一个简洁的 macOS 剪贴板历史工具，支持文字、文件和截图记录。它适合想让普通 macOS 截图自动进入剪贴板，同时继续保留原截图文件的人。
@@ -161,3 +164,4 @@ If you prefer to avoid warnings for non-notarized apps, you can build ClipShelf 
 ### License
 
 ClipShelf is open-source under the MIT License.
+
