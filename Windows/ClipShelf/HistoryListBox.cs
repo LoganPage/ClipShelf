@@ -35,7 +35,18 @@ public sealed class HistoryListBox : ListBox
 
     // WPF batches this replacement into one selection transaction instead of
     // clearing then notifying once per row on every pointer movement.
-    public void ReplaceSelection(IEnumerable items) => SetSelectedItems(items);
+    public void ReplaceSelection(IEnumerable items)
+    {
+        var desired = items.Cast<object>().ToHashSet();
+        var existing = SelectedItems.Cast<object>().ToHashSet();
+        var removed = existing.Except(desired).ToArray();
+        var added = desired.Except(existing).ToArray();
+        if (removed.Length + added.Length == 0) return;
+        // The common drag step crosses one row: avoid rebuilding WPF's selection.
+        if (removed.Length == 1 && added.Length == 0) SelectedItems.Remove(removed[0]);
+        else if (added.Length == 1 && removed.Length == 0) SelectedItems.Add(added[0]);
+        else SetSelectedItems(desired);
+    }
 
     /// <summary>Stop at the current scroll position before a new selection/navigation intent.</summary>
     public void CancelWheelMotion()

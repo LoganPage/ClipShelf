@@ -89,18 +89,18 @@ public static class CopyOnlyTests
                 typeof(MainWindow).GetProperty("PendingSearch", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!.SetValue(window, pending);
             }
             Check(sequence == NativeMethods.GetClipboardSequenceNumber() && selected.SequenceEqual(list.SelectedItems.Cast<ClipItem>().Select(item => item.Id)) && window.IsVisible && window.WindowState == WindowState.Normal, "Legacy shortcuts do not alter clipboard, selection, or window visibility");
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < 3; i++)
             {
                 // Reproduce changing selection after a toolbar button owned focus.
                 copy.Focus(); window.ApplyRowSelection(i, ModifierKeys.None);
                 row = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(i); row.Focus();
                 sequence = NativeMethods.GetClipboardSequenceNumber();
-                Check(await window.HandleHistoryKeyAsync(Key.Space, ModifierKeys.None, row), $"Image {i + 1}: Space is handled as preview");
+                Check(await window.HandleHistoryKeyAsync(Key.Space, ModifierKeys.None, row), $"Record {i + 1}: Space is handled as preview");
                 var preview = window.OwnedWindows.OfType<PreviewWindow>().Single();
-                for (int wait = 0; wait < 100 && !Descendants<Image>(preview).Any(image => image.Source is not null); wait++) await Task.Delay(10);
-                Check(preview.Title.EndsWith(((ClipItem)list.Items[i]).DisplayTitle, StringComparison.Ordinal) && Descendants<Image>(preview).Any(image => image.Source is BitmapSource), $"Image {i + 1}: the newly selected image is actually decoded and displayed");
-                Check(sequence == NativeMethods.GetClipboardSequenceNumber() && window.IsVisible && window.WindowState == WindowState.Normal, $"Image {i + 1}: preview never writes the clipboard or hides/minimizes the shelf");
-                preview.Close(); await Idle();
+                await Idle(); await preview.PendingRender;
+                Check(preview.IsVisible && preview.Session.Error is null && (i < 2 ? preview.Session.Presented?.Image.PixelWidth == 320 : preview.Session.PresentedText?.Text == "Synthetic clipboard-free record"), $"Record {i + 1}: Space displays image/text without pasting");
+                Check(sequence == NativeMethods.GetClipboardSequenceNumber() && window.IsVisible && window.WindowState == WindowState.Normal, $"Record {i + 1}: preview never writes the clipboard or hides/minimizes the shelf");
+                preview.Close(); await Task.Delay(210); await preview.Cleanup; await Idle();
             }
             var menu = window.BuildHistoryContextMenu((ClipItem)list.Items[1]);
             Check(menu.Items.OfType<MenuItem>().Count() == 5 && menu.Items.OfType<MenuItem>().All(item => item.InputGestureText != "Ctrl+V" && !(item.Header?.ToString() ?? "").Contains("粘贴")), "Record menu has five labelled actions without paste");

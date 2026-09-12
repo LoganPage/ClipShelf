@@ -45,13 +45,9 @@ public sealed class SettingsPanel : UserControl
         themeCard.Children.Add(Label("应用主题", "选择浅色、深色，或与 Windows 保持一致。"));
         var modes = new[] { "System", "Light", "Dark" }; var labels = new[] { "跟随系统", "浅色", "深色" };
         var segments = new UniformGridCompat(3);
-        for (int i = 0; i < 3; i++) { string mode = modes[i]; var b = Button(labels[i], () => { S.Theme = mode; Changed(); RefreshChoiceHighlights(); }); b.Margin = new Thickness(i == 0 ? 0 : 6, 12, 0, 0); appearanceChoices.Add((b, () => S.Theme == mode)); segments.Children.Add(b); }
+        for (int i = 0; i < 3; i++) { string mode = modes[i]; var b = Button(labels[i], () => { S.Theme = mode; owner.ApplyPreferences(appearanceOnly: true); RefreshChoiceHighlights(); }); b.Margin = new Thickness(i == 0 ? 0 : 6, 12, 0, 0); appearanceChoices.Add((b, () => S.Theme == mode)); segments.Children.Add(b); }
         themeCard.Children.Add(segments);
 
-        var icons = Card(appearance); var iconRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
-        icons.Children.Add(Label("应用图标", "保留熟悉的四款设计，选择后立即生效。"));
-        for (int i = 1; i <= 4; i++) { int choice = i; var content = new StackPanel(); content.Children.Add(new Image { Source = ThemeManager.Icon(i), Width = 40, Height = 40 }); content.Children.Add(new TextBlock { Text = $"方案 {i}", FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 5, 0, 0) }); var b = Button(content, () => { S.AppIcon = choice; Changed(); RefreshChoiceHighlights(); }); b.Margin = new Thickness(0, 0, 8, 0); b.Padding = new Thickness(12, 8, 12, 8); System.Windows.Automation.AutomationProperties.SetName(b, $"图标方案 {i}"); appearanceChoices.Add((b, () => S.AppIcon == choice)); iconRow.Children.Add(b); }
-        icons.Children.Add(iconRow);
 
         var shots = Card(Section("截图"));
         shots.Children.Add(Toggle("监听截图文件夹", () => S.WatchScreenshots, value => { S.WatchScreenshots = value; Changed(); }));
@@ -92,16 +88,17 @@ public sealed class SettingsPanel : UserControl
         keys.Children.Add(ShortcutRow("取消选择", S.ClearSelectionHotKey, value => { if (!ValidateShortcut(value, S.GlobalHotKey, S.PinHotKey)) return false; S.ClearSelectionHotKey = value; owner.Store.SaveSettings(); return true; }));
         keys.Children.Add(ShortcutRow("置顶选中记录", S.PinHotKey, value => { if (!ValidateShortcut(value, S.GlobalHotKey, S.ClearSelectionHotKey)) return false; S.PinHotKey = value; owner.Store.SaveSettings(); return true; }));
         keys.Children.Add(Note("点击右侧输入框，按下新的组合键。"));
-        keys.Children.Add(Note("↑↓ 选择 · Space 预览 · Ctrl+A 全选 · Ctrl+C 复制\nDelete 删除 · Ctrl+Z 撤销 · Shift+F10 菜单 · Ctrl+F 搜索\n复制后，在需要输入的位置按 Ctrl+V 粘贴；ClipShelf 不自动切换应用。"));
+        keys.Children.Add(Note("↑↓ 选择 · Space 预览 · Ctrl+A 全选 · Ctrl+C 复制\n预览支持文字、图片及 PDF / DOCX / PPTX；不需要 Office。↑↓ 切换记录，←→ 翻文档页，Home/End 首末页，Space/Esc 关闭，滚轮滚动内容。\nDelete 删除 · Ctrl+Z 撤销 · Shift+F10 菜单 · Ctrl+F 搜索\n复制后，在需要输入的位置按 Ctrl+V 粘贴；ClipShelf 不自动切换应用。"));
 
         var startup = Card(Section("启动与托盘"));
         startup.Children.Add(Toggle("开机时启动 ClipShelf", () => S.LaunchAtLogin, value => { S.LaunchAtLogin = value; Changed(); }));
-        startup.Children.Add(Note("关闭窗口后继续记录。左键托盘图标打开窗口，右键暂停或退出。"));
+        startup.Children.Add(ChoiceRow("点击关闭按钮时", new[] { "最小化到托盘", "退出程序" }, new[] { "Tray", "Exit" }, () => S.CloseToTray ? "Tray" : "Exit", value => { S.CloseToTray = value == "Tray"; Changed(); }));
+        startup.Children.Add(Note("托盘模式下继续记录；退出程序会停止记录。左键托盘图标可重新打开窗口。"));
         var data = Card(Section("数据管理"));
         data.Children.Add(Label("本地历史", $"最多保留 {S.MaxItems} 条，优先保留置顶记录。"));
         data.Children.Add(historyButtons);
         data.Children.Add(Note("Ctrl+Z 可撤销本次运行中最近 10 批删除。清空全部或退出后不再可撤销。"));
-        var about = new TextBlock { Text = "ClipShelf for Windows 1.0.22", FontSize = 12, Margin = new Thickness(0, 20, 0, 0), TextWrapping = TextWrapping.Wrap };
+        var about = new TextBlock { Text = "ClipShelf for Windows 1.0.25", FontSize = 12, Margin = new Thickness(0, 20, 0, 0), TextWrapping = TextWrapping.Wrap };
         about.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush"); body.Children.Add(about);
         RefreshChoiceHighlights();
     }

@@ -13,6 +13,10 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Length == 2 && e.Args[0] == "--native-preview-test") { await NativePreviewTests.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--native-preview-benchmark") { await NativePreviewBenchmark.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--theme-transition-test") { await ThemeTransitionTests.Run(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--preview-interaction-test") { await PreviewInteractionTests.Run(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--common-preview-test") { await CommonPreviewTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--file-record-test") { await FileRecordTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--file-preview-test") { await FilePreviewTests.RunAsync(e.Args[1]); return; }
@@ -35,6 +39,7 @@ public partial class App : Application
         if (e.Args.Length >= 2 && e.Args[0] == "--focus-demo") { FocusCueTests.RunDemo(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--tray-demo") { TrayInteractionTests.RunDemo(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--scroll-render-test") { await ScrollRenderingProbe.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--preview-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], previewStress: true); return; }
         DispatcherUnhandledException += (_, args) =>
         {
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipShelf");

@@ -2,12 +2,21 @@
  <!-- Nonzero glass selects DWM composition instead of resetting a legacy HWND region on every resize. The opaque client background still covers the glass. -->
  <shell:WindowChrome.WindowChrome><shell:WindowChrome CaptionHeight="30" ResizeBorderThickness="6" GlassFrameThickness="1" CornerRadius="0" UseAeroCaptionButtons="False"/></shell:WindowChrome.WindowChrome>
  <Window.Resources>
-  <DataTemplate x:Key="PinGlyphTemplate"><TextBlock Text="{Binding}" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></DataTemplate>
+  <DataTemplate x:Key="PinGlyphTemplate">
+   <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24"><Canvas.RenderTransform><RotateTransform Angle="35" CenterX="12" CenterY="12"/></Canvas.RenderTransform>
+    <Path x:Name="PinHead" Data="M7,3 L17,3 15,6 15,11 19,15 5,15 9,11 9,6 Z" Fill="Transparent" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" StrokeLineJoin="Round"/>
+    <Path Data="M12,15 L12,22" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" StrokeEndLineCap="Round"/>
+   </Canvas></Viewbox>
+   <DataTemplate.Triggers>
+    <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=Button}}" Value="Pinned"><Setter TargetName="PinHead" Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></DataTrigger>
+    <DataTrigger Binding="{Binding DataContext.IsPinned, RelativeSource={RelativeSource AncestorType=Button}}" Value="True"><Setter TargetName="PinHead" Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></DataTrigger>
+   </DataTemplate.Triggers>
+  </DataTemplate>
   <!-- Shared ControlCorners / OverlayCorners are defined once in App.xaml. -->
   <ControlTemplate x:Key="HistoryScrollTemplate" TargetType="ScrollViewer">
    <Grid Background="Transparent" ClipToBounds="True">
     <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" CanContentScroll="{TemplateBinding CanContentScroll}" Margin="0"/>
-    <ScrollBar x:Name="PART_VerticalScrollBar" Orientation="Vertical" HorizontalAlignment="Right" Margin="0,3,2,3" Width="9" MinWidth="0" Minimum="0" Maximum="{TemplateBinding ScrollableHeight}" ViewportSize="{TemplateBinding ViewportHeight}" Value="{Binding VerticalOffset, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}" Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}" Focusable="False"/>
+    <ScrollBar x:Name="PART_VerticalScrollBar" Orientation="Vertical" HorizontalAlignment="Right" Margin="0,3,2,3" Width="13" MinWidth="0" Minimum="0" Maximum="{TemplateBinding ScrollableHeight}" ViewportSize="{TemplateBinding ViewportHeight}" Value="{Binding VerticalOffset, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}" Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}" Focusable="False"/>
    </Grid>
   </ControlTemplate>
  </Window.Resources>
@@ -16,14 +25,14 @@
  <Grid>
   <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="*"/></Grid.RowDefinitions>
   <Grid>
-   <Ellipse x:Name="WindowFocusLight" Width="8" Height="8" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="14,0,0,0" AutomationProperties.Name="窗口焦点状态">
+   <Ellipse x:Name="WindowFocusLight" Width="10" Height="10" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="14,0,0,0" AutomationProperties.Name="窗口焦点状态">
     <Ellipse.Style><Style TargetType="Ellipse"><Setter Property="Fill" Value="#92989F"/><Setter Property="ToolTip" Value="窗口未聚焦"/><Style.Triggers><DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"><Setter Property="Fill" Value="#32B96B"/><Setter Property="ToolTip" Value="窗口已聚焦"/></DataTrigger></Style.Triggers></Style></Ellipse.Style>
    </Ellipse>
    <TextBlock Text="ClipShelf" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
     <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" ToolTip="最小化" AutomationProperties.Name="最小化" Click="Minimize_Click"/>
     <Button ToolTip="最大化 / 还原" AutomationProperties.Name="最大化 / 还原" Click="Maximize_Click"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CaptionButton}"><Setter Property="Content" Value="&#xE922;"/><Style.Triggers><DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized"><Setter Property="Content" Value="&#xE923;"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
-    <Button Style="{StaticResource CaptionButton}" Tag="CloseCaption" Content="&#xE8BB;" ToolTip="隐藏到托盘" AutomationProperties.Name="隐藏到托盘" Click="Hide_Click"/>
+    <Button Style="{StaticResource CaptionButton}" Tag="CloseCaption" Content="&#xE8BB;" ToolTip="关闭（行为可在设置中选择）" AutomationProperties.Name="关闭" Click="Hide_Click"/>
    </StackPanel>
   </Grid>
   <Grid Grid.Row="1">
@@ -58,7 +67,7 @@
       <ListBox.Template><ControlTemplate TargetType="local:HistoryListBox"><ScrollViewer x:Name="PART_ScrollViewer" Focusable="False" Padding="0" CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}" VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}" HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly" Template="{StaticResource HistoryScrollTemplate}"><ItemsPresenter/></ScrollViewer></ControlTemplate></ListBox.Template>
       <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="VerticalContentAlignment" Value="Stretch"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="FocusVisualStyle" Value="{StaticResource RowKeyboardFocusVisual}"/><Setter Property="AutomationProperties.Name" Value="{Binding DisplayTitle}"/><Setter Property="AutomationProperties.HelpText" Value="{Binding KindLabel}"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border CornerRadius="{DynamicResource SquareCorners}" x:Name="RowBg" Background="{TemplateBinding Background}" SnapsToDevicePixels="True"><ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="RowBg" Property="Background" Value="{DynamicResource SelectedBrush}"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
       <ListBox.ItemTemplate><DataTemplate DataType="{x:Type local:ClipItem}">
-       <Grid Height="74" Margin="12,0">
+       <local:CachedHistoryRow Height="74" Margin="12,0">
         <Grid.ColumnDefinitions><ColumnDefinition Width="64"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <local:RoundedClipBorder x:Name="Tile" Width="52" Height="40" HorizontalAlignment="Left" CornerRadius="{DynamicResource ControlCorners}" Background="{DynamicResource TextTileBrush}" VerticalAlignment="Center" ClipToBounds="True">
          <Grid><local:RecordTypeIcon x:Name="TypeIcon" Item="{Binding}" Palette="{DynamicResource TextBrush}" ToolTip="{Binding KindLabel}"><local:RecordTypeIcon.Style><Style TargetType="local:RecordTypeIcon"><Setter Property="Visibility" Value="Hidden"/><Style.Triggers><DataTrigger Binding="{Binding Source, ElementName=Thumbnail}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></local:RecordTypeIcon.Style></local:RecordTypeIcon><Image x:Name="Thumbnail" local:ThumbnailLoader.Path="{Binding ImagePath}" Visibility="Collapsed" Stretch="Uniform" Margin="2" RenderOptions.BitmapScalingMode="HighQuality"/></Grid>
@@ -73,7 +82,7 @@
          <Button Style="{StaticResource IconButton}" Content="&#xE74D;" Tag="Delete" ToolTip="删除记录" AutomationProperties.Name="删除此记录" Margin="0" Click="RowAction_Click"/>
         </StackPanel>
         <Border x:Name="RowSeparator" Grid.Column="1" Grid.ColumnSpan="2" Height="1" Background="{DynamicResource BorderBrush}" VerticalAlignment="Bottom" Opacity="0.45"/>
-       </Grid>
+       </local:CachedHistoryRow>
        <DataTemplate.Triggers>
         <DataTrigger Binding="{Binding Kind}" Value="File"><Setter TargetName="Tile" Property="Background" Value="Transparent"/></DataTrigger>
         <DataTrigger Binding="{Binding Kind}" Value="Image"><Setter TargetName="Tile" Property="Background" Value="{DynamicResource ImageTileBrush}"/><Setter TargetName="Thumbnail" Property="Visibility" Value="Visible"/></DataTrigger>

@@ -139,8 +139,12 @@ public sealed class WindowAppearance : IDisposable
         };
     }
 
-    private uint ResourceColor(string key) => window.TryFindResource(key) is SolidColorBrush brush
-        ? (uint)(brush.Color.R | (brush.Color.G << 8) | (brush.Color.B << 16)) : ColorDefault;
+    private uint ResourceColor(string key)
+    {
+        if (window.TryFindResource(key) is not SolidColorBrush brush) return ColorDefault;
+        var color = (Color)brush.GetAnimationBaseValue(SolidColorBrush.ColorProperty);
+        return (uint)(color.R | (color.G << 8) | (color.B << 16));
+    }
 
     private int Set(int attribute, uint value) => DwmSetWindowAttribute(handle, attribute, ref value, sizeof(uint));
 

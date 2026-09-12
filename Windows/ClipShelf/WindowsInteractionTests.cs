@@ -585,6 +585,8 @@ public static class WindowsInteractionTests
             Select(1); window.BeginRowPointer(1, At(1), ModifierKeys.None, activationOnly: true);
             window.CompleteRowPointer(At(1));
             check(list.SelectedItems.Count == 1, "Activation click on selected record preserves selection");
+            window.BeginRowPointer(2, At(2), ModifierKeys.None, activationOnly: true); window.CompleteRowPointer(At(2));
+            check(Selected(1), "Activation click on a different record also preserves selection");
             window.BeginRowPointer(1, At(1), ModifierKeys.None); window.CompleteRowPointer(At(1));
             check(list.SelectedItems.Count == 0, "Second active click can deselect normally");
             Select(1); window.BeginRowPointer(1, At(1), ModifierKeys.None); End();

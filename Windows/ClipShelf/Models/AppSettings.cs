@@ -15,7 +15,7 @@ public sealed class AppSettings
     public string Theme { get; set; } = "System";
     public string SelectionPreset { get; set; } = "coolGrayBlue";
     public string SelectionColor { get; set; } = "#2870DB";
-    public int AppIcon { get; set; } = 1;
+    public int AppIcon { get; set; } = 2;
     public string ClickBehavior { get; set; } = "KeepSelection";
     public bool DeselectOnRepeatedClick { get; set; }
     public bool SwitchToClickedRecord { get; set; }
@@ -24,6 +24,7 @@ public sealed class AppSettings
     public int ClickRecoveryMilliseconds { get; set; } = 600;
     public int MaxItems { get; set; } = 100;
     public bool LaunchAtLogin { get; set; }
+    public bool CloseToTray { get; set; } = true;
     public double WindowWidth { get; set; } = 720;
     public double WindowHeight { get; set; } = 540;
 

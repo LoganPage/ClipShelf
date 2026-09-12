@@ -50,6 +50,7 @@ public partial class MainWindow : Window
     private Guid? focusedId, anchorId;
     private IInputElement? settingsReturnFocus;
     private PreviewWindow? preview;
+    private readonly PreviewCacheService previewCache = new();
     private static readonly int showMessage = RegisterWindowMessage("ClipShelf.Windows.Show");
     private static readonly int quitMessage = RegisterWindowMessage("ClipShelf.Windows.Quit");
     public MainWindow(HistoryStore store, bool demo = false)
@@ -109,10 +110,10 @@ public partial class MainWindow : Window
         Show(); Activate(); Topmost = true; Topmost = false;
         RestoreHistoryFocus();
     }
-    public void ApplyPreferences()
+    public void ApplyPreferences(bool appearanceOnly = false)
     {
         Store.SaveSettings(); ThemeManager.Apply(Store.Settings); windowAppearance.Refresh(); UpdateIcon();
-        Integration?.ApplySettings();
+        if (!appearanceOnly) Integration?.ApplySettings();
         if (!demo && Integration is not null) StatusText.Text = Integration.ScreenshotStatus;
         UpdateActions();
     }
@@ -221,7 +222,8 @@ public partial class MainWindow : Window
         SelectionBadge.Visibility = count > 0 ? Visibility.Visible : Visibility.Hidden;
         AutomationProperties.SetName(SelectionCountText, SelectionCountText.Text);
         string pinGesture = HistoryShortcutPolicy.IsReserved(Store.Settings.PinHotKey) ? "" : Store.Settings.PinHotKey;
-        bool allPinned = count > 0 && Selected().All(item => item.IsPinned);
+        bool allPinned = count > 0 && HistoryList.SelectedItems.Cast<ClipItem>().All(item => item.IsPinned);
+        PinButton.Tag = allPinned ? "Pinned" : null;
         PinButton.SetResourceReference(ForegroundProperty, allPinned ? "AccentBrush" : "TextBrush");
         foreach (var (button, verb, shortcut) in new[] { (CopyButton, "复制", "Ctrl+C"), (PinButton, "置顶 / 取消置顶", pinGesture), (DeleteButton, "删除", "Delete") })
         {
@@ -305,6 +307,7 @@ public partial class MainWindow : Window
     private void History_MouseDown(object sender, MouseButtonEventArgs e)
     {
         suppressDragRelease = false;
+        if (activationPointer) { pendingDeselectId = null; e.Handled = true; return; }
         if (Ancestor<ScrollBar>(e.OriginalSource as DependencyObject) is not null) return;
         var container = Ancestor<ListBoxItem>(e.OriginalSource as DependencyObject);
         if (container?.DataContext is not ClipItem item) { ClearSelectionState(); HistoryList.Focus(); return; }
@@ -399,8 +402,7 @@ public partial class MainWindow : Window
     {
         if (preview?.IsVisible == true) { preview.Close(); preview = null; return; }
         var selected = Selected(); if (selected.Count != 1) return;
-        preview = new PreviewWindow(visible, visible.IndexOf(selected[0])) { Owner = this };
-        preview.Show();
+        OpenDocumentPreview(visible.IndexOf(selected[0]));
     }
     private void Folder_Click(object sender, RoutedEventArgs e) => ChooseFolder();
     public void ChooseFolder()
@@ -443,8 +445,8 @@ public partial class MainWindow : Window
     private void Card_MouseDown(object sender, MouseButtonEventArgs e) { e.Handled = true; }
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
     private void Maximize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-    private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
-    private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; Hide(); } }
+    private void Hide_Click(object sender, RoutedEventArgs e) { if (Store.Settings.CloseToTray) Hide(); else Quit(); }
+    private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; if (Store.Settings.CloseToTray) Hide(); else Quit(); } }
     public async void Quit()
     {
         if (quitting) return;
@@ -462,7 +464,9 @@ public partial class MainWindow : Window
             ShowShelf(); ShowStatus("历史记录尚未保存，已暂缓退出。请检查磁盘空间后重试。"); return;
         }
         Store.Changed -= StoreChanged; SystemEvents.UserPreferenceChanged -= SystemAppearanceChanged;
-        toastTimer.Stop(); dragTimer.Stop(); DisposeTray(); preview?.Close(); Close(); Application.Current.Shutdown();
+        toastTimer.Stop(); dragTimer.Stop(); DisposeTray();
+        if (preview is { } activePreview) await activePreview.CloseAndReleaseAsync();
+        previewCache.Dispose(); Close(); Application.Current.Shutdown();
     }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int RegisterWindowMessage(string name);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);

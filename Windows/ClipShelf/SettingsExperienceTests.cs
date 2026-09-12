@@ -80,11 +80,11 @@ public static class SettingsExperienceTests
                 store.TogglePinned(new[] { first.Id }); await Idle();
                 var pinned = Pin(first);
                 Check(pinned.Content?.ToString() == "\uE718" && ReferenceEquals(pinned.Foreground, window.FindResource("AccentBrush")), theme + ": same pushpin glyph changes to accent immediately");
-                Check(FindAll<TextBlock>(pinned).Any(t => t.Text == "\uE718" && ReferenceEquals(t.Foreground, window.FindResource("AccentBrush"))), theme + ": rendered pin glyph uses accent, not the implicit text brush");
+                Check(FindAll<System.Windows.Shapes.Path>(pinned).Any(t => t.Name == "PinHead" && ReferenceEquals(t.Fill, window.FindResource("AccentBrush"))), theme + ": pinned head is filled with accent");
                 Check(AutomationProperties.GetName(pinned) == "取消置顶此记录" && pinned.ToolTip?.ToString() == "取消置顶此记录", theme + ": pin status retains accessible and hover descriptions");
                 Check(!FindAll<TextBlock>(list).Any(t => t.Text == "已置顶"), theme + ": history rows have no redundant pinned label");
                 Check(ReferenceEquals(toolbar.Foreground, window.FindResource("AccentBrush")), theme + ": selected pinned record also colors toolbar pin");
-                Check(FindAll<TextBlock>(toolbar).Any(t => t.Text == "\uE718" && ReferenceEquals(t.Foreground, window.FindResource("AccentBrush"))), theme + ": rendered toolbar glyph also uses accent");
+                Check(FindAll<System.Windows.Shapes.Path>(toolbar).Any(t => t.Name == "PinHead" && ReferenceEquals(t.Fill, window.FindResource("AccentBrush"))), theme + ": toolbar pin head is also filled");
                 Save((FrameworkElement)window.Content, Path.Combine(directory, "pin-" + theme.ToLowerInvariant() + ".png"));
                 list.ReplaceSelection(new[] { first, second }); await Idle();
                 Check(ReferenceEquals(toolbar.Foreground, window.FindResource("TextBrush")), theme + ": mixed selection does not claim all records are pinned");
@@ -95,7 +95,7 @@ public static class SettingsExperienceTests
                 var content = (ContentControl)window.FindName("SettingsContent");
                 var settings = new SettingsPanel(window); content.Content = settings; overlay.Visibility = Visibility.Visible;
                 await Idle(); scroll = FindAll<SmoothScrollViewer>(settings).Single();
-                Check(scroll.Template.FindName("PART_VerticalScrollBar", scroll) is System.Windows.Controls.Primitives.ScrollBar { ActualWidth: <= 10 }, theme + ": settings scrollbar does not inherit the oversized system minimum width");
+                Check(scroll.Template.FindName("PART_VerticalScrollBar", scroll) is System.Windows.Controls.Primitives.ScrollBar { ActualWidth: 13 }, theme + ": settings scrollbar has a 13 DIP hit target");
                 Check(scroll.ScrollableHeight > 500 && !scroll.CanContentScroll, theme + ": settings uses physical continuous scrolling");
                 DependencyObject? ancestor = scroll; bool noEffect = true;
                 while (ancestor is not null) { if (ancestor is UIElement element && element.Effect is not null) noEffect = false; ancestor = VisualTreeHelper.GetParent(ancestor); }

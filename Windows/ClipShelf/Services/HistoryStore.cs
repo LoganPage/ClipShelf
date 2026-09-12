@@ -362,6 +362,7 @@ public sealed class HistoryStore
         ClickRecoveryMilliseconds = source.ClickRecoveryMilliseconds,
         MaxItems = source.MaxItems,
         LaunchAtLogin = source.LaunchAtLogin,
+        CloseToTray = source.CloseToTray,
         WindowWidth = source.WindowWidth,
         WindowHeight = source.WindowHeight
     };

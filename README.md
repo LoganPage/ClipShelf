@@ -1,6 +1,6 @@
 # ClipShelf
 
-> Windows 体验版已开源：[Windows 1.0.22 源码、构建说明与已知限制](Windows/README.md)。下方说明仍针对 macOS。
+> Windows 体验版已开源：[Windows 1.1.1 源码、构建说明与已知限制](Windows/README.md)。下方说明仍针对 macOS。
 
 
 ## 中文

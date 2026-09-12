@@ -101,7 +101,7 @@ public partial class MainWindow
         dragBaseSelection = modifiers.HasFlag(ModifierKeys.Control) ? Selected().Select(item => item.Id).ToHashSet() : null;
         pointerDown = true; dragging = false; suppressDragRelease = false;
         downIndex = index; downPoint = point;
-        if (activationOnly && HistoryList.SelectedItems.Contains(visible[index])) { pendingDeselectId = null; interactionVersion++; return; }
+        if (activationOnly) { pendingDeselectId = null; pointerDown = false; interactionVersion++; return; }
         // Resolve a repeat click on release so starting a drag never clears the
         // selected row for one frame. Capture loss/cancel must never commit it.
         pendingDeselectId = CanDeselectOnClick(index, modifiers) ? visible[index].Id : null;
@@ -224,6 +224,7 @@ public partial class MainWindow
     {
         interactionVersion++;
         if (quitting) return false;
+        if (preview?.IsVisible == true) return true;
         if (SettingsOverlay.Visibility == Visibility.Visible)
         {
             if (key == Key.Escape && modifiers == ModifierKeys.None && Ancestor<TextBox>(origin)?.Tag as string != "ShortcutRecorder") { CloseSettings(); return true; }
@@ -396,6 +397,21 @@ public partial class MainWindow
     {
         int index = visible.IndexOf(item);
         if (index < 0) return;
-        preview?.Close(); preview = new PreviewWindow(visible.ToArray(), index) { Owner = this }; preview.Show();
+        OpenDocumentPreview(index);
+    }
+
+    private void OpenDocumentPreview(int index)
+    {
+        if (index < 0 || index >= visible.Count) return;
+        if (preview?.IsVisible == true) { preview.Activate(); return; }
+        var window = new PreviewWindow(visible.ToArray(), index, previewCache) { Owner = this };
+        if (HistoryList.ItemContainerGenerator.ContainerFromIndex(index) is FrameworkElement row)
+            window.SetAnimationOrigin(row.TranslatePoint(new Point(0, row.ActualHeight / 2), this).Y / Math.Max(1, ActualHeight));
+        preview = window;
+        window.Closed += (_, _) => {
+            if (ReferenceEquals(preview, window)) preview = null;
+            Dispatcher.BeginInvoke(new Action(() => { if (IsActive && !quitting) RestoreHistoryFocus(false); }));
+        };
+        window.Show();
     }
 }

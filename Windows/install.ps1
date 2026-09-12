@@ -1,7 +1,8 @@
-param([switch]$NoLaunch)
+param([switch]$NoLaunch, [string]$SourcePath)
 $ErrorActionPreference = 'Stop'
 $clipSource = Join-Path $PSScriptRoot 'ClipShelf'
 if (-not (Test-Path -LiteralPath (Join-Path $clipSource 'ClipShelf.exe'))) { $clipSource = Join-Path $PSScriptRoot 'dist\ClipShelf' }
+if ($SourcePath) { $clipSource = (Resolve-Path -LiteralPath $SourcePath).Path }
 if (-not (Test-Path -LiteralPath (Join-Path $clipSource 'ClipShelf.exe'))) { throw 'ClipShelf.exe was not found beside this installer.' }
 $clipDestination = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\ClipShelf'
 $clipExe = Join-Path $clipDestination 'ClipShelf.exe'

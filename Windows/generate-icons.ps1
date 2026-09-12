@@ -9,7 +9,7 @@ $clipAssetDirectory = Join-Path $PSScriptRoot 'ClipShelf\Assets'
 $clipIconDestination = Join-Path $clipAssetDirectory 'ClipShelf.ico'
 $clipIconSizes = @(16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
 $clipCrop = [Drawing.RectangleF]::new(36, 36, 440, 440)
-$clipSourceBitmap = [Drawing.Bitmap]::new((Join-Path $clipAssetDirectory 'AppIcon1.png'))
+$clipSourceBitmap = [Drawing.Bitmap]::new((Join-Path $clipAssetDirectory 'AppIcon2.png'))
 $clipIconFrames = [Collections.Generic.List[byte[]]]::new()
 try {
     if ($clipSourceBitmap.Width -ne 512 -or $clipSourceBitmap.Height -ne 512) {

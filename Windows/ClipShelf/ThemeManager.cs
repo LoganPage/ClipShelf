@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Media.Animation;
 using Microsoft.Win32;
 
 namespace ClipShelf;
@@ -14,12 +15,17 @@ public static class ThemeManager
 {
     private static readonly BitmapSource?[] icons = new BitmapSource?[4];
     public static bool IsDark { get; private set; }
+    private static bool initialized;
+    private static bool animate;
     public static readonly string[] Presets = { "coolGrayBlue", "appleBlue", "neutralGray", "lavenderGray", "tealGray", "Custom" };
     public static readonly string[] PresetNames = { "冷灰蓝 · 稳重耐看", "Apple 蓝 · 交互明显", "中性灰 · 极简克制", "淡紫灰 · 柔和有感", "青灰 · 清爽工具感", "自定义颜色" };
     public static void Apply(AppSettings settings)
     {
+        settings.AppIcon = 2;
         using var reg = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-        IsDark = settings.Theme == "Dark" || (settings.Theme == "System" && reg?.GetValue("AppsUseLightTheme") is int value && value == 0);
+        bool nextDark = settings.Theme == "Dark" || (settings.Theme == "System" && reg?.GetValue("AppsUseLightTheme") is int value && value == 0);
+        animate = initialized && SystemParameters.ClientAreaAnimation && !SystemParameters.HighContrast;
+        IsDark = nextDark;
         var colors = new Dictionary<string, (string light, string dark)> {
             ["ScrollThumbBrush"]=("#C4C7CC","#626872"),["ScrollThumbHoverBrush"]=("#858B94","#959DA9"),["ScrollThumbDragBrush"]=("#555D68","#CBD1D9"),
             ["BackgroundBrush"]=("#F6F7F9","#131519"),["SurfaceBrush"]=("#FFFFFF","#202329"),["SearchBrush"]=("#FFFFFF","#1B1D21"),["SettingsBrush"]=("#FFFFFF","#1E2127"),
@@ -33,18 +39,18 @@ public static class ThemeManager
         string[] dark = { "#283544", "#173A5E", "#343538", "#373146", "#243B3D" };
         int preset = Array.IndexOf(Presets, settings.SelectionPreset);
         Set("SelectedBrush", preset >= 0 && preset < 5 ? (IsDark ? dark[preset] : light[preset]) : settings.SelectionPreset == "Custom" ? settings.SelectionColor : (IsDark ? dark[0] : light[0]));
+        initialized = true;
     }
     private static void Set(string name, string color)
     {
         try {
             var parsed = (Color)ColorConverter.ConvertFromString(color);
-            if (Application.Current.Resources[name] is SolidColorBrush current && current.Color == parsed) return;
-            var b = new SolidColorBrush(parsed); b.Freeze(); Application.Current.Resources[name] = b;
+            ThemeTransition.Set(name, parsed, animate);
         } catch (FormatException) { }
     }
     public static BitmapSource Icon(int choice)
     {
-        int index = Math.Clamp(choice, 1, 4) - 1;
+        int index = 1; // One identity across the window, shell and tray.
         if (icons[index] is BitmapSource icon) return icon;
         var source = new BitmapImage(); source.BeginInit(); source.CacheOption = BitmapCacheOption.OnLoad;
         source.UriSource = new Uri($"pack://application:,,,/Assets/AppIcon{index + 1}.png");
