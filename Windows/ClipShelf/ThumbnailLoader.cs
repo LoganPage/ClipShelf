@@ -18,6 +18,7 @@ public static class ThumbnailLoader
     private static readonly Dictionary<string, LinkedListNode<(string Path, BitmapImage Image)>> cache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly LinkedList<(string Path, BitmapImage Image)> recent = new();
     public static string? GetPath(DependencyObject target) => (string?)target.GetValue(PathProperty);
+    internal static void ClearCache() { lock (gate) { cache.Clear(); recent.Clear(); } }
     public static void SetPath(DependencyObject target, string? value) => target.SetValue(PathProperty, value);
 
     private static void PathChanged(DependencyObject target, DependencyPropertyChangedEventArgs e)

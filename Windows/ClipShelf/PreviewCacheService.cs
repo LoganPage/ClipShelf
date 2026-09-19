@@ -83,5 +83,15 @@ internal sealed class PreviewCacheService : IDisposable
         } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
     internal static void TryDelete(string path) { try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+    internal async Task<CleanupResult> ClearGeneratedAsync(string updateRoot, CancellationToken token)
+    {
+        await diskWriter.WaitAsync(token);
+        try
+        {
+            lock (sync) { pages.Clear(); bytes = 0; models.Clear(); modelBytes = 0; }
+            return await Task.Run(() => CacheCleanupService.Clean(Root, updateRoot, token), token);
+        }
+        finally { diskWriter.Release(); }
+    }
     public void Dispose() { lock (sync) { pages.Clear(); bytes = 0; models.Clear(); modelBytes = 0; } Scheduler.Dispose(); }
 }

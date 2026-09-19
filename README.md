@@ -6,12 +6,12 @@
 
 | 系统 | 直接下载 | 使用说明 |
 |---|---|---|
-| **Windows 10 / 11（x64）** | **[Windows 1.2.4 体验版 ZIP](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.2.4/ClipShelf-Windows-v1.2.4-public-x64.zip)** | [Windows 安装、使用与常见问题](Windows/README.md) |
+| **Windows 10 / 11（x64）** | **[Windows 1.2.9 体验版 ZIP](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.2.9/ClipShelf-Windows-v1.2.9-public-x64.zip)** | [Windows 安装、使用与常见问题](Windows/README.md) |
 | **macOS 13+** | **[macOS 1.2.0 ZIP](https://github.com/LoganPage/ClipShelf/releases/download/v1.2.0/ClipShelf.zip)** | [下方 Mac 说明](#macos-中文说明) |
 
 > **普通用户不要下载 Source code**，它是给开发者的源码。两端独立编号：`windows-v…` 是 Windows，现有 `v…` 发布是 Mac；发布列表第一项或“Latest”不一定是 Windows 新版。
 
-[Windows 版本详情](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.2.4) · [Mac 版本详情](https://github.com/LoganPage/ClipShelf/releases/tag/v1.2.0) · [全部历史版本](https://github.com/LoganPage/ClipShelf/releases) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
+[Windows 版本详情](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.2.9) · [Mac 版本详情](https://github.com/LoganPage/ClipShelf/releases/tag/v1.2.0) · [全部历史版本](https://github.com/LoganPage/ClipShelf/releases) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
 
 ## Windows：三步开始
 

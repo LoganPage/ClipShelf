@@ -19,6 +19,7 @@ public partial class MainWindow
     internal async void RunUpdateAction()
     {
         if (UpdateInstalling) return;
+        if (cleanupRunning) { UpdateStatus = "正在清理缓存，请完成后再更新。"; UpdateChanged?.Invoke(); return; }
         if (updateCancellation is not null) { updateCancellation.Cancel(); return; }
         using var cancellation = new CancellationTokenSource(); updateCancellation = cancellation;
         try

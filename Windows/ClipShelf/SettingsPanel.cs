@@ -110,6 +110,36 @@ public sealed class SettingsPanel : UserControl
         data.Children.Add(Label("本地历史", $"最多保留 {S.MaxItems} 条，优先保留置顶记录。"));
         data.Children.Add(historyButtons);
         data.Children.Add(Note("Ctrl+Z 可撤销本次运行中最近 10 批删除。清空全部或退出后不再可撤销。"));
+        var cleanup = Card(Section("缓存清理"));
+        cleanup.Children.Add(Label("一键清理", "清理预览缓存、内存缩略图和过期更新下载包。不删除历史、置顶记录、原文件或备份。"));
+        var cleanupStatus = Note(owner.CleanupStatus); cleanupStatus.MinHeight = 36; cleanup.Children.Add(cleanupStatus);
+        var cleanupButton = Button("一键清理", owner.RunCleanup);
+        cleanupButton.Name = "CleanCacheButton"; cleanupButton.HorizontalAlignment = HorizontalAlignment.Left;
+        cleanup.Children.Add(cleanupButton);
+        cleanup.Children.Add(Note("清理后首次预览可能稍慢；正在使用的缓存会按需重新生成。"));
+        void RefreshCleanup() { cleanupStatus.Text = owner.CleanupStatus; cleanupButton.IsEnabled = !owner.CleanupRunning; cleanupButton.Content = owner.CleanupRunning ? "正在清理…" : "一键清理"; }
+        Loaded += (_, _) => { owner.CleanupChanged += RefreshCleanup; RefreshCleanup(); };
+        Unloaded += (_, _) => owner.CleanupChanged -= RefreshCleanup;
+        var historyCleanup = Card(Section("清理旧历史（可选）"));
+        historyCleanup.Children.Add(Note("只移除所选天数之前的未置顶记录，不删除原文件。不随缓存清理自动执行。"));
+        int retentionDays = 30; ClipItem[]? confirmedItems = null;
+        var historyStatus = Note("先查看待清理数量，再确认执行。可在本次运行中回到主列表按 Ctrl+Z 撤销。 ");
+        var historyConfirm = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 8, 0, 0) };
+        historyCleanup.Children.Add(ChoiceRow("保留最近", new[] { "7 天", "30 天", "90 天" }, new[] { "7", "30", "90" }, () => retentionDays.ToString(), value => { retentionDays = int.Parse(value); confirmedItems = null; historyConfirm.Visibility = Visibility.Collapsed; historyStatus.Text = "先查看待清理数量，再确认执行。"; }));
+        historyCleanup.Children.Add(historyStatus);
+        var inspectHistory = Button("查看待清理记录数量", () => {
+            confirmedItems = owner.OldHistory(retentionDays);
+            historyStatus.Text = confirmedItems.Length == 0 ? "没有符合条件的旧记录。" : $"将清理 {retentionDays} 天前的 {confirmedItems.Length} 条未置顶记录。置顶记录和原文件保留。";
+            historyConfirm.Visibility = confirmedItems.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        });
+        inspectHistory.HorizontalAlignment = HorizontalAlignment.Left; historyCleanup.Children.Add(inspectHistory);
+        historyConfirm.Children.Add(Button("确认清理这些记录", () => {
+            if (confirmedItems is null) return;
+            int count = owner.CleanOldHistory(confirmedItems, retentionDays); confirmedItems = null;
+            historyConfirm.Visibility = Visibility.Collapsed; historyStatus.Text = $"已清理 {count} 条旧记录。返回主列表按 Ctrl+Z 可撤销；退出程序后不可撤销。";
+        }));
+        var cancelHistory = Button("取消", () => { confirmedItems = null; historyConfirm.Visibility = Visibility.Collapsed; historyStatus.Text = "已取消，历史未改动。"; });
+        cancelHistory.Margin = new Thickness(8, 0, 0, 0); historyConfirm.Children.Add(cancelHistory); historyCleanup.Children.Add(historyConfirm);
         var about = new TextBlock { Text = $"ClipShelf for Windows {WindowsUpdateService.CurrentVersion}", FontSize = 12, Margin = new Thickness(0, 20, 0, 0), TextWrapping = TextWrapping.Wrap };
         about.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush"); body.Children.Add(about);
         RefreshChoiceHighlights();
