@@ -8,7 +8,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <RootNamespace>ClipShelf</RootNamespace>
     <AssemblyName>ClipShelf</AssemblyName>
-    <Version>1.2.9</Version>
+    <Version>1.2.10</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\ClipShelf.ico</ApplicationIcon>
   </PropertyGroup>

@@ -25,8 +25,10 @@ public sealed class AppSettings
     public int MaxItems { get; set; } = 100;
     public bool LaunchAtLogin { get; set; }
     public bool CloseToTray { get; set; } = true;
-    public double WindowWidth { get; set; } = 720;
-    public double WindowHeight { get; set; } = 540;
+    public const double DefaultWindowWidth = 680;
+    public const double DefaultWindowHeight = 552;
+    public double WindowWidth { get; set; } = DefaultWindowWidth;
+    public double WindowHeight { get; set; } = DefaultWindowHeight - 30;
 
     private static string DefaultScreenshotFolder()
     {

@@ -64,8 +64,10 @@ public partial class MainWindow : Window
         windowAppearance = new WindowAppearance(this);
         HistoryList.ItemsSource = displayed;
         InitializeHistoryInteraction();
-        Width = Math.Clamp(store.Settings.WindowWidth, MinWidth, SystemParameters.WorkArea.Width);
-        Height = Math.Clamp(store.Settings.WindowHeight + 30, MinHeight, SystemParameters.WorkArea.Height);
+        // Start compact; resizing remains available for the current run. Existing
+        // persisted dimensions are retained for compatibility, not startup sizing.
+        Width = Math.Min(AppSettings.DefaultWindowWidth, Math.Max(MinWidth, SystemParameters.WorkArea.Width));
+        Height = Math.Min(AppSettings.DefaultWindowHeight, Math.Max(MinHeight, SystemParameters.WorkArea.Height));
         UpdateIcon();
         store.Changed += StoreChanged;
         toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; toastTimer.Stop(); };

@@ -50,7 +50,11 @@ internal static class CacheCleanupTests
             foreach (string text in new[] { "old", "pinned", "new" }) store.Add(new ClipItem { Kind = ClipKind.Text, Text = text, Title = text });
             var old = store.Items.Single(i => i.Text == "old"); old.CreatedAt = DateTimeOffset.Now.AddDays(-60);
             var pinned = store.Items.Single(i => i.Text == "pinned"); pinned.CreatedAt = old.CreatedAt; pinned.IsPinned = true;
+            store.Settings.WindowWidth = 1100; store.Settings.WindowHeight = 850;
             var window = new MainWindow(store, demo: true);
+            Check(window.Width == 680 && window.Height == 552, "startup uses compact default despite previous saved size");
+            window.Width = 800; window.Height = 650;
+            Check(window.Width == 800 && window.Height == 650, "manual resize remains available");
             Check(window.OldHistory(30).Length == 1, "history age and pin filter");
             var candidates = window.OldHistory(30); old.IsPinned = true;
             Check(window.CleanOldHistory(candidates, 30) == 0, "newly pinned record protected at confirmation");

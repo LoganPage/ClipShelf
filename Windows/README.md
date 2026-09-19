@@ -1,18 +1,18 @@
 # ClipShelf Windows 使用说明
 
-[← 返回仓库首页](../README.md) · [下载页面](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.2.9) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
+[← 返回仓库首页](../README.md) · [下载页面](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.2.10) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
 
 把复制过的文字、图片和文件保存在本机，随时搜索、预览和再次复制。
 
 ## 1. 下载 Windows 版
 
-**[下载 ClipShelf Windows 1.2.9（x64 ZIP）](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.2.9/ClipShelf-Windows-v1.2.9-public-x64.zip)**
+**[下载 ClipShelf Windows 1.2.10（x64 ZIP）](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.2.10/ClipShelf-Windows-v1.2.10-public-x64.zip)**
 
 - 系统：Windows 10 2004 或更新版本，推荐 Windows 11。
 - 架构：x64；当前没有单独的 ARM64 安装包。
 - 状态：体验版，尚未签名；已包含 .NET 运行时，无需另外安装。
 
-> 只想使用软件，请下载上面的 **ClipShelf-Windows-v1.2.9-public-x64.zip**。不要下载 GitHub 自动生成的 **Source code**，那是源码，不是可直接运行的软件。名称只有 **ClipShelf.zip** 的现有发布包属于 Mac 版。
+> 只想使用软件，请下载上面的 **ClipShelf-Windows-v1.2.10-public-x64.zip**。不要下载 GitHub 自动生成的 **Source code**，那是源码，不是可直接运行的软件。名称只有 **ClipShelf.zip** 的现有发布包属于 Mac 版。
 >
 > Mac 和 Windows 使用不同的版本号。发布列表的第一项或“Latest”不一定是 Windows 新版；Windows 用户以本页下载入口为准。
 
@@ -139,13 +139,11 @@ PDF 引擎冷启动、大文件及复杂排版仍有限制；Word/PPT 使用近�
 **遇到问题怎么反馈？**  
 [提交 Issue](https://github.com/LoganPage/ClipShelf/issues)，注明 Windows 版本、ClipShelf 版本、复现步骤和文件类型。截图与样本请先脱敏，不要直接附上个人剪贴板历史。
 
-## 7. 1.2.9 更新摘要（相较 1.2.4）
+## 7. 1.2.10 更新摘要（相较 1.2.9）
 
-- 新增手动缓存清理：清理可再生成的缓存和过期更新下载包，显示释放空间。
-- 新增可选旧历史清理：保留最近 7／30／90 天，确认数量后清理未置顶旧记录，支持本次运行内撤销。
-- 焦点指示灯保持原来的纯色绿点／灰点，撤回实验性的光晕和立体效果。
-- 功能说明统一为浅色/深色圆角提示，贴近按钮并对齐，避免距离过远。
-- 保留文字、图片、PDF/DOCX/PPTX 预览及其他格式说明页；历史和设置保持兼容。
+- 默认启动窗口调整为紧凑的 680 × 552 逻辑像素，更接近 Windows 桌面上的轻量工具尺寸。
+- 运行中仍可自由调整窗口大小；从托盘重新打开时保留当次运行的尺寸。
+- 历史记录、设置、预览、清理、托盘和自动更新行为保持兼容。
 
 ---
 
