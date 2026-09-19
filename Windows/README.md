@@ -1,21 +1,139 @@
-# ClipShelf for Windows
+# ClipShelf Windows 使用说明
 
-Windows 原生历史剪贴板，基于 [LoganPage/ClipShelf](https://github.com/LoganPage/ClipShelf) 的 Mac 版设计与图标移植。当前版本：1.1.1 体验版。推荐 Windows 11，最低 Windows 10 2004，x64；自包含包无需另装 .NET。
+[← 返回仓库首页](../README.md) · [下载页面](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.1.1) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
 
-## 本次更新
+把复制过的文字、图片和文件保存在本机，随时搜索、预览和再次复制。
 
-- Excel 等不支持的文件按 Space 也会打开快速预览窗口，中央显示“不支持快速预览”提示、完整文件位置，以及默认应用打开/在资源管理器中显示按钮。不读取这些文件的正文。
-- 主列表、设置和预览的共享滚动条向右移动 2 DIP，保留原有粗细、拖动命中范围和悬停/拖动颜色。
-- 保留文字、剪贴板图片及常见图片预览。PDF 直接按页渲染；DOCX/PPTX 使用本地原生 OOXML 解析，不启动 Office/LibreOffice，不转 PDF，不用 Windows Preview Handler。
-- 翻页缓存、相邻页预加载、后台增量分页、请求取消与过期结果拦截；切页保留上一帧，减少白屏闪烁。
+## 1. 下载 Windows 版
 
-## 安装与使用
+**[下载 ClipShelf Windows 1.1.1（x64 ZIP）](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.1.1/ClipShelf-Windows-v1.1.1-public-x64.zip)**
 
-完整解压 Windows 发布 ZIP，运行 ClipShelf/ClipShelf.exe。需要桌面/开始菜单快捷方式时，在解压目录运行 `powershell -ExecutionPolicy Bypass -File .\install.ps1`。仅安装当前用户，无需管理员权限。升级前从托盘正常退出并备份 `%LOCALAPPDATA%\ClipShelf`；覆盖安装保留历史和设置。
+- 系统：Windows 10 2004 或更新版本，推荐 Windows 11。
+- 架构：x64；当前没有单独的 ARM64 安装包。
+- 状态：体验版，尚未签名；已包含 .NET 运行时，无需另外安装。
 
-Ctrl+Shift+V 呼出窗口；Ctrl+C 复制选中记录，再到目标应用手动粘贴。支持中文/拼音搜索、置顶、多选、删除撤销、截图文件夹监听、托盘和浅深色主题。关闭按钮行为可在设置中选择托盘或退出。
+> 只想使用软件，请下载上面的 **ClipShelf-Windows-v1.1.1-public-x64.zip**。不要下载 GitHub 自动生成的 **Source code**，那是源码，不是可直接运行的软件。名称只有 **ClipShelf.zip** 的现有发布包属于 Mac 版。
+>
+> Mac 和 Windows 使用不同的版本号。发布列表的第一项或“Latest”不一定是 Windows 新版；Windows 用户以本页下载入口为准。
 
-Space 打开/关闭预览，Esc 关闭；↑/↓ 切换可预览记录，←/→ 翻文档页，Home/End 首末页，滚轮只滚动内容。文字和图片保留；图片多帧目前显示首帧。DOC/PPT、Excel、媒体、ZIP、文件夹等只显示说明和文件位置；完整内容交给默认应用。
+## 2. 解压并打开
+
+1. 下载 ZIP 后，右键选择“全部解压”，保留整个文件夹。
+2. 打开解压后的 `ClipShelf` 文件夹。
+3. 双击 `ClipShelf.exe` 即可使用。
+
+不要在 ZIP 里面直接运行，也不要只把 EXE 单独拖出来；它需要同目录的其他文件。
+
+### 可选：创建桌面和开始菜单快捷方式
+
+在解压后能看到 `install.ps1` 的文件夹中打开终端，运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+脚本只安装到当前用户目录，无需管理员权限。只想便携使用可跳过这一步。
+
+## 3. 日常使用
+
+- 正常复制文字、图片或文件，ClipShelf 会在本机记录历史。
+- 按 **Ctrl+Shift+V** 打开主窗口；快捷键可在设置中修改。
+- 搜索记录，选中后按 **Ctrl+C** 复制，再到目标应用按 **Ctrl+V** 粘贴。
+- 用大头针置顶常用记录；支持多选、批量复制和撤销删除。
+- 点击托盘图标可重新打开窗口；关闭按钮是退到托盘还是退出，可在设置中选择。
+
+**ClipShelf 不会自动粘贴，也不会因预览而向其他应用输入内容。**
+
+### 主窗口快捷键
+
+| 操作 | 快捷键 |
+|---|---|
+| 呼出主窗口 | Ctrl+Shift+V |
+| 选择上一条 / 下一条 | ↑ / ↓ |
+| 打开快速预览 | Space（空格） |
+| 复制选中记录 | Ctrl+C |
+| 多选 / 连续选择 | Ctrl+点击 / Shift+点击 |
+| 全选 | Ctrl+A |
+| 删除选中记录 | Delete |
+| 撤销最近一次删除 | Ctrl+Z |
+
+搜索框内的快捷键保持普通文字编辑行为。删除历史不会删除原始文件。
+
+## 4. 快速预览支持什么？
+
+| 内容 | 预览效果 |
+|---|---|
+| 文字记录 | 显示文字，可选择复制 |
+| 图片 | 显示剪贴板图片及 PNG、JPEG、BMP、GIF、TIFF、ICO；多帧图片显示首帧 |
+| PDF | 按页查看 |
+| Word：.docx | 本地近似排版预览，无需安装 Office |
+| PowerPoint：.pptx | 按幻灯片查看，本地近似排版 |
+| Excel、.doc、.ppt、音视频、ZIP、文件夹及其他格式 | 打开说明页，显示“不支持快速预览”、完整文件位置和打开按钮，不渲染正文 |
+
+**“能记录、复制文件”不等于“能预览该格式”。** Excel 仍可正常记录、搜索和复制；需要查看内容时，在预览说明页点击“默认应用打开”。
+
+### 预览窗口快捷键
+
+| 操作 | 快捷键 |
+|---|---|
+| 关闭预览 | Space / Esc |
+| 切换上一条 / 下一条可预览记录 | ↑ / ↓（跳过不支持的记录） |
+| 上一页 / 下一页 | ← / → |
+| 第一页 / 最后一页 | Home / End |
+| 滚动当前内容 | 鼠标滚轮 |
+
+Word/PPT 不是 Office 的完整替代品：复杂图表、SmartArt、浮动对象、合并表格等可能简化或显示占位，页数和排版也可能不同。需要精确排版时，请用默认应用打开原文件。
+
+## 5. 升级、备份和数据位置
+
+目前没有内置自动更新。升级步骤：
+
+1. 从托盘菜单选择“退出”，不要只关闭主窗口。
+2. 在资源管理器地址栏输入 `%LOCALAPPDATA%\ClipShelf`，复制整个文件夹作为备份。
+3. 下载并完整解压新版本。
+4. 已安装的用户重新运行新版 `install.ps1`；便携用户改为运行新版文件夹中的程序。
+
+历史和设置保存在运行包之外，正常覆盖安装会保留它们。
+
+| 内容 | 位置 |
+|---|---|
+| 历史、设置和历史图片 | `%LOCALAPPDATA%\ClipShelf` |
+| 脚本安装的程序 | `%LOCALAPPDATA%\Programs\ClipShelf` |
+| 可重新生成的文档预览缓存 | `%LOCALAPPDATA%\ClipShelf-PreviewCache` |
+
+记录及预览均在本机处理，不上传剪贴板或文档。不要把自己的数据文件夹、截图或设置上传到公开仓库。
+
+## 6. 常见问题
+
+**下载后没有 EXE？**  
+通常是下载了“Source code”。请使用本页顶部的 Windows ZIP 下载链接。
+
+**为什么看见 Mac 的版本号比 Windows 高？**  
+两端独立编号。Windows 标签以 `windows-` 开头，不需要追着 Mac 版本号更新。
+
+**为什么显示未知发布者？**  
+当前为未签名体验版。只从本仓库下载；若不愿运行未签名程序，可等待后续版本或自行审查源码后构建。不需要关闭系统安全防护。
+
+**为什么 PDF 首次打开慢，或 Word/PPT 和原文件不同？**  
+PDF 引擎冷启动、大文件及复杂排版仍有限制；Word/PPT 使用近似渲染。不承诺所有文件秒开或固定帧率。
+
+**关闭后程序还在？**  
+检查设置中的关闭按钮行为。需要完全退出时使用托盘菜单“退出”。
+
+**遇到问题怎么反馈？**  
+[提交 Issue](https://github.com/LoganPage/ClipShelf/issues)，注明 Windows 版本、ClipShelf 版本、复现步骤和文件类型。截图与样本请先脱敏，不要直接附上个人剪贴板历史。
+
+## 7. 1.1.1 更新摘要
+
+- 不支持的文件也可打开预览说明页，查看路径并交给默认应用。
+- 滚动条向右调整，保留拖动范围和颜色反馈。
+- 保留文字、图片预览；PDF/DOCX/PPTX 使用本地原生文档预览路径。
+- 增加页面缓存、相邻页预加载和过期请求拦截，减少切换时闪烁。
+
+---
+
+<details>
+<summary>开发者：原理、构建、测试与已知技术限制</summary>
 
 ## 原生文档预览与限制
 
@@ -36,3 +154,5 @@ Word/PPT 明确标记“近似预览”，不是完整 Office 排版。复杂浮
 当前部分旧测试仍期待四套图标、旧圆角/滚动条尺寸或即时主题切换，已在旧版复现失败，不应视作全量测试已通过。预览专项和本次修改单独验证。
 
 仅发布源代码、图标、授权文件及干净构建产物；不包含用户历史、设置、缓存、截图、测试报告或本机备份。许可证见 LICENSE 和 ClipShelf/ThirdPartyNotices.txt。
+
+</details>
