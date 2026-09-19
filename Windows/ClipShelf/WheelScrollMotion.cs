@@ -6,7 +6,7 @@ namespace ClipShelf;
 internal sealed class WheelScrollMotion
 {
     // A short critically damped response for wheel notches; units are radians/second, not frames.
-    private const double AngularFrequency = 28;
+    internal double ResponseFrequency { get; set; } = 28;
     internal double Position { get; private set; }
     internal double Target { get; private set; }
     internal double Velocity { get; private set; }
@@ -47,6 +47,7 @@ internal sealed class WheelScrollMotion
         // Exact critically damped spring solution: identical elapsed time gives identical
         // motion at 60, 120, 144, 240 Hz, or irregular callback intervals.
         double displacement = Position - Target;
+        double AngularFrequency = ResponseFrequency;
         double coefficient = Velocity + AngularFrequency * displacement;
         double decay = Math.Exp(-AngularFrequency * elapsedSeconds);
         if (decay == 0) { Reset(Target, maximum); return Position; }

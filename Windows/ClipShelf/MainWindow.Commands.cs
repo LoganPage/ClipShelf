@@ -111,6 +111,7 @@ public partial class MainWindow
 
     internal bool CompleteRowPointer(Point point)
     {
+        if (dragging) AdvanceDragFrame(point, 0); // Commit the final pointer position even between display frames.
         bool wasDragging = dragging || suppressDragRelease;
         Guid? candidate = pointerDown && !wasDragging ? pendingDeselectId : null;
         bool withinList = point.X >= 0 && point.X < HistoryList.ActualWidth

@@ -40,6 +40,18 @@ public sealed class SettingsPanel : UserControl
     }
     private void Build()
     {
+        var updates = Card(Section("版本与更新"));
+        updates.Children.Add(Label($"ClipShelf for Windows {WindowsUpdateService.CurrentVersion}", "检查开发者在 GitHub 发布的 Windows 新版（含体验版）。不会自动下载或安装。"));
+        var updateStatus = Note(owner.UpdateStatus);
+        updateStatus.MinHeight = 36; updates.Children.Add(updateStatus);
+        var updateButton = Button(owner.UpdateActionLabel, () => owner.RunUpdateAction());
+        updateButton.Name = "CheckForUpdatesButton";
+        updateButton.HorizontalAlignment = HorizontalAlignment.Left;
+        updates.Children.Add(updateButton);
+        void RefreshUpdate() { updateStatus.Text = owner.UpdateStatus; updateButton.Content = owner.UpdateActionLabel; updateButton.IsEnabled = !owner.UpdateInstalling; }
+        Loaded += (_, _) => { owner.UpdateChanged += RefreshUpdate; RefreshUpdate(); };
+        Unloaded += (_, _) => owner.UpdateChanged -= RefreshUpdate;
+        updates.Children.Add(Note("下载后校验完整性，备份历史和设置，再重启完成覆盖安装。"));
         var appearance = Section("外观");
         var themeCard = Card(appearance);
         themeCard.Children.Add(Label("应用主题", "选择浅色、深色，或与 Windows 保持一致。"));
@@ -98,7 +110,7 @@ public sealed class SettingsPanel : UserControl
         data.Children.Add(Label("本地历史", $"最多保留 {S.MaxItems} 条，优先保留置顶记录。"));
         data.Children.Add(historyButtons);
         data.Children.Add(Note("Ctrl+Z 可撤销本次运行中最近 10 批删除。清空全部或退出后不再可撤销。"));
-        var about = new TextBlock { Text = "ClipShelf for Windows 1.0.25", FontSize = 12, Margin = new Thickness(0, 20, 0, 0), TextWrapping = TextWrapping.Wrap };
+        var about = new TextBlock { Text = $"ClipShelf for Windows {WindowsUpdateService.CurrentVersion}", FontSize = 12, Margin = new Thickness(0, 20, 0, 0), TextWrapping = TextWrapping.Wrap };
         about.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush"); body.Children.Add(about);
         RefreshChoiceHighlights();
     }

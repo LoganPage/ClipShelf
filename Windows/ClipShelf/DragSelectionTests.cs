@@ -67,7 +67,7 @@ public static class DragSelectionTests
             var list = (HistoryListBox)window.FindName("HistoryList");
             var surface = (Border)window.FindName("HistoryBorder");
             var scroll = Descendant<ScrollViewer>(list) ?? throw new InvalidOperationException("Missing history scroll viewer.");
-            var timer = (DispatcherTimer)Field(window, "dragTimer")!;
+            bool DragFramesRunning() => Field(window, "dragRendering") is true;
             var nativeTimerField = typeof(ListBox).GetField("_autoScrollTimer", BindingFlags.Instance | BindingFlags.NonPublic);
             Check(nativeTimerField is not null, "This WPF runtime exposes the native ListBox auto-scroll timer for the control comparison");
             bool NativeTimerRunning() => nativeTimerField!.GetValue(list) is DispatcherTimer { IsEnabled: true };
@@ -146,7 +146,7 @@ public static class DragSelectionTests
                 "A row press leaves ListBox uncaptured and its competing native timer stopped");
             var up = ButtonEvent(surface, Mouse.PreviewMouseUpEvent);
             surface.RaiseEvent(up);
-            Check(!PointerDown() && !Dragging() && !surface.IsMouseCaptured && !timer.IsEnabled,
+            Check(!PointerDown() && !Dragging() && !surface.IsMouseCaptured && !DragFramesRunning(),
                 "The real release route ends pointer ownership and stops the application timer");
 
             // Exercise optional repeat-click cancellation with the same own-app
@@ -178,6 +178,25 @@ public static class DragSelectionTests
                 "Losing the surface's real capture discards pending deselection and ignores a stale release");
             store.Settings.DeselectOnRepeatedClick = false;
             checkingSyntheticCapture = false; capturePhase = "range-logic";
+
+            // Drive the exact frame-step method at different display cadences.
+            // This checks time-based motion, not the physical monitor's displayed FPS.
+            foreach (int hz in new[] { 60, 144, 240 })
+            {
+                scroll.ScrollToTop(); await Idle(); Begin(1); SetField(window, "dragging", true);
+                double previous = scroll.VerticalOffset; int moved = 0;
+                for (int frame = 0; frame < hz; frame++)
+                {
+                    window.AdvanceDragFrame(new Point(20, list.ActualHeight + 1), 1d / hz); await Idle();
+                    if (scroll.VerticalOffset > previous) moved++; previous = scroll.VerticalOffset;
+                }
+                metrics[$"drag-{hz}Hz-distance"] = scroll.VerticalOffset;
+                Check(moved == hz && Math.Abs(scroll.VerticalOffset - 22 / .03) < 4,
+                    $"{hz} Hz frame steps all advance, with the same one-second drag distance");
+                double top = scroll.VerticalOffset;
+                window.AdvanceDragFrame(new Point(20, -1), 1d / hz); await Idle();
+                Check(scroll.VerticalOffset < top, $"{hz} Hz direction reversal takes effect in the next step"); End();
+            }
 
             scroll.ScrollToTop(); await Idle();
             Begin(1); DragTo(6);
@@ -250,15 +269,15 @@ public static class DragSelectionTests
 
             Begin(12); checkingSyntheticCapture = true; capturePhase = "border-lost-capture";
             Check(surface.CaptureMouse(), "Lost-capture fixture obtains the border capture");
-            SetField(window, "dragging", true); timer.Start();
+            SetField(window, "dragging", true); Invoke(window, "StartDragFrames");
             var descendantCapture = new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount)
                 { RoutedEvent = Mouse.LostMouseCaptureEvent, Source = row };
             Invoke(window, "History_LostCapture", surface, descendantCapture);
-            Check(PointerDown() && Dragging() && timer.IsEnabled,
+            Check(PointerDown() && Dragging() && DragFramesRunning(),
                 "A descendant's lost-capture event cannot cancel the border-owned gesture");
             surface.ReleaseMouseCapture();
             checkingSyntheticCapture = false; capturePhase = "capture-lost";
-            Check(!PointerDown() && !Dragging() && !timer.IsEnabled && !surface.IsMouseCaptured,
+            Check(!PointerDown() && !Dragging() && !DragFramesRunning() && !surface.IsMouseCaptured,
                 "Losing the border's own capture stops the gesture and its timer immediately");
             double afterCaptureLoss = scroll.VerticalOffset;
             Edge(new Point(20, -20)); await Idle();
@@ -295,7 +314,7 @@ public static class DragSelectionTests
                 "Scroll-bar presses remain available to native thumb tracking instead of starting row dragging");
             Check(ReferenceEquals(source, list.ItemsSource) && resets == 0,
                 "The entire drag and deferred-refresh sequence preserves the items source without collection resets");
-            Check(!NativeTimerRunning() && !timer.IsEnabled && !PointerDown() && !Dragging(),
+            Check(!NativeTimerRunning() && !DragFramesRunning() && !PointerDown() && !Dragging(),
                 "Regression completion leaves both timers and all pointer state stopped");
             metrics["selectionEvents"] = selectionEvents;
             metrics["collectionResets"] = resets;

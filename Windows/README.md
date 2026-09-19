@@ -1,18 +1,18 @@
 # ClipShelf Windows 使用说明
 
-[← 返回仓库首页](../README.md) · [下载页面](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.1.1) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
+[← 返回仓库首页](../README.md) · [下载页面](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.2.4) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
 
 把复制过的文字、图片和文件保存在本机，随时搜索、预览和再次复制。
 
 ## 1. 下载 Windows 版
 
-**[下载 ClipShelf Windows 1.1.1（x64 ZIP）](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.1.1/ClipShelf-Windows-v1.1.1-public-x64.zip)**
+**[下载 ClipShelf Windows 1.2.4（x64 ZIP）](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.2.4/ClipShelf-Windows-v1.2.4-public-x64.zip)**
 
 - 系统：Windows 10 2004 或更新版本，推荐 Windows 11。
 - 架构：x64；当前没有单独的 ARM64 安装包。
 - 状态：体验版，尚未签名；已包含 .NET 运行时，无需另外安装。
 
-> 只想使用软件，请下载上面的 **ClipShelf-Windows-v1.1.1-public-x64.zip**。不要下载 GitHub 自动生成的 **Source code**，那是源码，不是可直接运行的软件。名称只有 **ClipShelf.zip** 的现有发布包属于 Mac 版。
+> 只想使用软件，请下载上面的 **ClipShelf-Windows-v1.2.4-public-x64.zip**。不要下载 GitHub 自动生成的 **Source code**，那是源码，不是可直接运行的软件。名称只有 **ClipShelf.zip** 的现有发布包属于 Mac 版。
 >
 > Mac 和 Windows 使用不同的版本号。发布列表的第一项或“Latest”不一定是 Windows 新版；Windows 用户以本页下载入口为准。
 
@@ -86,7 +86,17 @@ Word/PPT 不是 Office 的完整替代品：复杂图表、SmartArt、浮动对�
 
 ## 5. 升级、备份和数据位置
 
-目前没有内置自动更新。升级步骤：
+### 1.2.0 起：在应用内更新
+
+打开 **设置 → 版本与更新 → 检查更新**。发现新版后点击 **下载并安装**，程序会从本仓库下载 Windows 包、校验 SHA-256，保存并备份历史与设置，然后重启覆盖安装。包含开发者发布的 Windows 体验版，不会误装 Mac 包，也不会在后台静默安装。
+
+此功能适用于安装到 `%LOCALAPPDATA%\Programs\ClipShelf` 的版本；便携版仍使用下面的手动步骤。只有 GitHub 上已发布、含有效 SHA-256 校验信息的 Windows 包才会被识别。更新检查仅访问 GitHub，不发送历史、设置或文件内容。
+
+更新备份保存在 `%LOCALAPPDATA%\ClipShelf-backups`，临时下载在 `%LOCALAPPDATA%\ClipShelf-Updates`。失败时保留或恢复旧程序；备份不会自动删除。
+
+### 旧版或便携版：手动升级
+
+1.1.1 及更早版本没有内置更新入口，升级步骤：
 
 1. 从托盘菜单选择“退出”，不要只关闭主窗口。
 2. 在资源管理器地址栏输入 `%LOCALAPPDATA%\ClipShelf`，复制整个文件夹作为备份。
@@ -123,12 +133,13 @@ PDF 引擎冷启动、大文件及复杂排版仍有限制；Word/PPT 使用近�
 **遇到问题怎么反馈？**  
 [提交 Issue](https://github.com/LoganPage/ClipShelf/issues)，注明 Windows 版本、ClipShelf 版本、复现步骤和文件类型。截图与样本请先脱敏，不要直接附上个人剪贴板历史。
 
-## 7. 1.1.1 更新摘要
+## 7. 1.2.4 更新摘要（相较 1.1.1）
 
-- 不支持的文件也可打开预览说明页，查看路径并交给默认应用。
-- 滚动条向右调整，保留拖动范围和颜色反馈。
-- 保留文字、图片预览；PDF/DOCX/PPTX 使用本地原生文档预览路径。
-- 增加页面缓存、相邻页预加载和过期请求拦截，减少切换时闪烁。
+- 设置新增“版本与更新”：手动检查、下载并安装 Windows 新版，安装前备份数据。
+- 普通滚动、小幅滚轮输入与拖动多选改进，降低重复选择和滚动更新开销。
+- 主列表滚动条居中放入右侧空隙，保持拖动范围与颜色反馈。
+- 功能说明统一为浅色/深色圆角提示，贴近按钮并对齐，避免距离过远。
+- 保留文字、图片、PDF/DOCX/PPTX 预览及其他格式说明页；历史和设置保持兼容。
 
 ---
 
@@ -143,7 +154,7 @@ Word/PPT 明确标记“近似预览”，不是完整 Office 排版。复杂浮
 
 缓存分为元数据、模型、分页/场景和位图；位图与模型各有 64 MiB 预算，磁盘页缓存 512 MiB / 14 天，文件修改自动失效。ZIP/XML、页数、图片像素均有安全上限；超限或损坏在内容区提示，不弹阻塞窗口。用户文件不上传、不联网处理。
 
-仍是未签名体验版，无内置自动更新。PDF 引擎冷启动可能超过 300ms；大/复杂文档、高刷新率、多屏和各 DPI 实机仍需更广泛验证。不承诺固定 FPS 或与 Office 一致的页数。任意倍率缩放后的独立高清渲染层尚未实现。
+仍是未签名体验版，内置更新需用户主动检查并确认安装。PDF 引擎冷启动可能超过 300ms；大/复杂文档、高刷新率、多屏和各 DPI 实机仍需更广泛验证。不承诺固定 FPS 或与 Office 一致的页数。任意倍率缩放后的独立高清渲染层尚未实现。
 
 ## 开发与验证
 

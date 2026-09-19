@@ -8,12 +8,13 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <RootNamespace>ClipShelf</RootNamespace>
     <AssemblyName>ClipShelf</AssemblyName>
-    <Version>1.1.1</Version>
+    <Version>1.2.4</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\ClipShelf.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup><Resource Include="Assets\AppIcon2.png" /><Content Include="Assets\ClipShelf.ico" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><Content Include="ThirdPartyNotices.txt" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><Content Include="InstallUpdate.ps1" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><Content Include="Licenses\*.txt" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
   <ItemGroup><PackageReference Include="System.Drawing.Common" Version="8.0.31" /></ItemGroup>
 </Project>

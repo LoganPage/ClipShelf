@@ -40,7 +40,9 @@ public partial class MainWindow : Window
     private int rangeStart = -1, rangeEnd = -1;
     private const double RowHeight = 74;
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(3) };
-    private readonly DispatcherTimer dragTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };
+    private bool dragRendering;
+    private long dragFrameTick;
+    private TimeSpan dragRenderingTime = TimeSpan.MinValue;
     private bool quitting, refreshing, dragging, pointerDown, suppressDragRelease;
     private Point downPoint;
     private int anchor = -1, downIndex = -1;
@@ -67,7 +69,6 @@ public partial class MainWindow : Window
         UpdateIcon();
         store.Changed += StoreChanged;
         toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; toastTimer.Stop(); };
-        dragTimer.Tick += (_, _) => AutoScrollDrag();
         SourceInitialized += (_, _) => InitializeNative();
         Closing += OnClosing;
         SystemEvents.UserPreferenceChanged += SystemAppearanceChanged;
@@ -332,8 +333,9 @@ public partial class MainWindow : Window
         if (e.LeftButton != MouseButtonState.Pressed || !HistoryBorder.IsMouseCaptured) { EndDrag(); return; }
         var point = e.GetPosition(HistoryList);
         if (!dragging && (point - downPoint).Length < 6) return;
-        if (!dragging) { pendingDeselectId = null; dragging = true; dragTimer.Start(); }
-        UpdateDragSelection(point); e.Handled = true;
+        if (!dragging) { pendingDeselectId = null; dragging = true; StartDragFrames(); UpdateDragSelection(point); }
+        // Coalesce high-polling-rate mouse packets to the next display frame.
+        e.Handled = true;
     }
     private void UpdateDragSelection(Point point)
     {
@@ -352,13 +354,33 @@ public partial class MainWindow : Window
         if (dragging) UpdateDragSelection(e.GetPosition(HistoryList));
         e.Handled = true;
     }
-    private void AutoScrollDrag() => AutoScrollDragAt(Mouse.GetPosition(HistoryList));
+    private void StartDragFrames()
+    {
+        if (dragRendering) return;
+        dragRendering = true; dragFrameTick = Stopwatch.GetTimestamp(); dragRenderingTime = TimeSpan.MinValue;
+        CompositionTarget.Rendering += RenderDragFrame;
+    }
+    private void StopDragFrames()
+    {
+        if (!dragRendering) return;
+        CompositionTarget.Rendering -= RenderDragFrame; dragRendering = false;
+    }
+    private void RenderDragFrame(object? sender, EventArgs e)
+    {
+        if (e is RenderingEventArgs frame) { if (frame.RenderingTime == dragRenderingTime) return; dragRenderingTime = frame.RenderingTime; }
+        if (!dragging || !IsVisible || !HistoryBorder.IsMouseCaptured || Mouse.LeftButton != MouseButtonState.Pressed) { EndDrag(); return; }
+        long now = Stopwatch.GetTimestamp(); double seconds = Math.Clamp((now - dragFrameTick) / (double)Stopwatch.Frequency, 0, .05); dragFrameTick = now;
+        AdvanceDragFrame(Mouse.GetPosition(HistoryList), seconds);
+    }
     private void AutoScrollDragAt(Point point)
+        => AdvanceDragFrame(point, .03); // Deterministic input for isolated regression fixtures.
+    internal void AdvanceDragFrame(Point point, double seconds)
     {
         if (!dragging) return;
-        var scroll = HistoryScroll;
-        if (point.Y < 30) scroll?.ScrollToVerticalOffset(scroll.VerticalOffset - 22); else if (point.Y > HistoryList.ActualHeight - 30) scroll?.ScrollToVerticalOffset(scroll.VerticalOffset + 22);
-        UpdateDragSelection(point);
+        int direction = point.Y < 30 ? -1 : point.Y > HistoryList.ActualHeight - 30 ? 1 : 0;
+        double offset = direction == 0 ? HistoryScroll?.VerticalOffset ?? 0 : HistoryList.ScrollDragBy(direction * (22 / .03) * Math.Clamp(seconds, 0, .05));
+        int index = Math.Clamp((int)Math.Floor((point.Y + offset) / RowHeight), 0, Math.Max(0, visible.Count - 1));
+        SelectRangeWithBase(downIndex, index, dragBaseSelection);
     }
     private void SelectRange(int start, int end)
     {
@@ -370,7 +392,20 @@ public partial class MainWindow : Window
         start = Math.Clamp(start, 0, visible.Count - 1); end = Math.Clamp(end, 0, visible.Count - 1);
         if (rangeStart == start && rangeEnd == end && ReferenceEquals(cachedRangeBase, originalSelection)) return;
         int first = Math.Min(start, end), last = Math.Max(start, end);
-        HistoryList.ReplaceSelection(originalSelection is null ? visible.GetRange(first, last - first + 1)
+        // A moving endpoint normally changes one row. Do not rebuild/hash the
+        // entire selected range for that row, especially during edge scrolling.
+        if (rangeStart == start && ReferenceEquals(cachedRangeBase, originalSelection) && Math.Abs(rangeEnd - end) == 1)
+        {
+            int oldFirst = Math.Min(start, rangeEnd), oldLast = Math.Max(start, rangeEnd);
+            int changedFirst = Math.Min(rangeEnd, end), changedLast = Math.Max(rangeEnd, end);
+            for (int i = changedFirst; i <= changedLast; i++)
+            {
+                bool before = i >= oldFirst && i <= oldLast, after = i >= first && i <= last;
+                if (before == after || originalSelection?.Contains(visible[i].Id) == true) continue;
+                if (after) HistoryList.SelectedItems.Add(visible[i]); else HistoryList.SelectedItems.Remove(visible[i]);
+            }
+        }
+        else HistoryList.ReplaceSelection(originalSelection is null ? visible.GetRange(first, last - first + 1)
             : visible.Where((item, index) => (index >= first && index <= last) || originalSelection.Contains(item.Id)).ToArray());
         rangeStart = start; rangeEnd = end; cachedRangeBase = originalSelection;
         anchor = start; anchorId = visible[start].Id; focusedId = visible[end].Id;
@@ -389,7 +424,7 @@ public partial class MainWindow : Window
     private void EndDrag(bool applyPending = true)
     {
         bool wasDragging = dragging; pointerDown = dragging = false; dragBaseSelection = null; pendingDeselectId = null;
-        dragTimer.Stop(); if (HistoryBorder.IsMouseCaptured) HistoryBorder.ReleaseMouseCapture();
+        StopDragFrames(); if (HistoryBorder.IsMouseCaptured) HistoryBorder.ReleaseMouseCapture();
         if (wasDragging)
         {
             // Only the release event of this gesture is guarded. The next intentional click is immediate.
@@ -450,6 +485,7 @@ public partial class MainWindow : Window
     public async void Quit()
     {
         if (quitting) return;
+        if (!UpdateInstalling) updateCancellation?.Cancel();
         quitting = true; IsEnabled = false;
         CloseTrayContextMenu();
         searchCancellation?.Cancel(); searchCancellation?.Dispose(); searchCancellation = null;
@@ -459,12 +495,19 @@ public partial class MainWindow : Window
         if (saved) saved = Store.Flush();
         if (!saved)
         {
+            UpdateExitFailed("历史尚未保存，已暂缓安装。请检查磁盘空间后重试。");
             // Keep unsaved snapshots and the app available for retry instead of silently losing data.
             quitting = false; IsEnabled = true; if (!demo) ConnectIntegration(); Refresh();
             ShowShelf(); ShowStatus("历史记录尚未保存，已暂缓退出。请检查磁盘空间后重试。"); return;
         }
+        if (pendingUpdateStage is { } stage)
+        {
+            try { await WindowsUpdateService.LaunchInstallerAsync(stage); }
+            catch { quitting = false; IsEnabled = true; if (!demo) ConnectIntegration(); UpdateExitFailed("安装助手未能启动，已保留当前版本。请重试。"); return; }
+        }
+        updateCancellation?.Cancel(); updates.Dispose();
         Store.Changed -= StoreChanged; SystemEvents.UserPreferenceChanged -= SystemAppearanceChanged;
-        toastTimer.Stop(); dragTimer.Stop(); DisposeTray();
+        toastTimer.Stop(); StopDragFrames(); DisposeTray();
         if (preview is { } activePreview) await activePreview.CloseAndReleaseAsync();
         previewCache.Dispose(); Close(); Application.Current.Shutdown();
     }

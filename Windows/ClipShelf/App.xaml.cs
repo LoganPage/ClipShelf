@@ -13,6 +13,8 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Length == 2 && e.Args[0] == "--tooltip-test") { await ToolTipPresentationTests.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--update-test") { await WindowsUpdateTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--native-preview-test") { await NativePreviewTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--native-preview-benchmark") { await NativePreviewBenchmark.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--theme-transition-test") { await ThemeTransitionTests.Run(e.Args[1]); return; }
@@ -39,6 +41,8 @@ public partial class App : Application
         if (e.Args.Length >= 2 && e.Args[0] == "--focus-demo") { FocusCueTests.RunDemo(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--tray-demo") { TrayInteractionTests.RunDemo(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--scroll-render-test") { await ScrollRenderingProbe.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--multi-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], multiSelection: true); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--fine-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], fineWheel: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--preview-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], previewStress: true); return; }
         DispatcherUnhandledException += (_, args) =>
         {

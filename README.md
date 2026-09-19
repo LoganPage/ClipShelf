@@ -6,12 +6,12 @@
 
 | 系统 | 直接下载 | 使用说明 |
 |---|---|---|
-| **Windows 10 / 11（x64）** | **[Windows 1.1.1 体验版 ZIP](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.1.1/ClipShelf-Windows-v1.1.1-public-x64.zip)** | [Windows 安装、使用与常见问题](Windows/README.md) |
+| **Windows 10 / 11（x64）** | **[Windows 1.2.4 体验版 ZIP](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.2.4/ClipShelf-Windows-v1.2.4-public-x64.zip)** | [Windows 安装、使用与常见问题](Windows/README.md) |
 | **macOS 13+** | **[macOS 1.2.0 ZIP](https://github.com/LoganPage/ClipShelf/releases/download/v1.2.0/ClipShelf.zip)** | [下方 Mac 说明](#macos-中文说明) |
 
 > **普通用户不要下载 Source code**，它是给开发者的源码。两端独立编号：`windows-v…` 是 Windows，现有 `v…` 发布是 Mac；发布列表第一项或“Latest”不一定是 Windows 新版。
 
-[Windows 版本详情](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.1.1) · [Mac 版本详情](https://github.com/LoganPage/ClipShelf/releases/tag/v1.2.0) · [全部历史版本](https://github.com/LoganPage/ClipShelf/releases) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
+[Windows 版本详情](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.2.4) · [Mac 版本详情](https://github.com/LoganPage/ClipShelf/releases/tag/v1.2.0) · [全部历史版本](https://github.com/LoganPage/ClipShelf/releases) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
 
 ## Windows：三步开始
 
@@ -19,7 +19,7 @@
 2. 打开其中的 `ClipShelf` 文件夹，运行 `ClipShelf.exe`。无需另装 .NET，也不需要编译。
 3. 正常复制内容后，按 **Ctrl+Shift+V** 呼出历史；选中记录按 **Ctrl+C**，再到目标应用手动 **Ctrl+V**。
 
-按 **Space** 预览文字、图片、PDF、DOCX 或 PPTX。Excel 等其他格式显示说明和文件位置，可用默认应用打开。Word/PPT 为近似排版；Windows 当前是未签名体验版，没有内置自动更新。
+按 **Space** 预览文字、图片、PDF、DOCX 或 PPTX。Excel 等其他格式显示说明和文件位置，可用默认应用打开。Word/PPT 为近似排版；Windows 当前是未签名体验版；可在“设置 → 版本与更新”中检查并安装新版，安装前备份历史与设置。
 
 **[查看完整 Windows 指南：安装快捷方式、快捷键、预览格式、升级和备份 →](Windows/README.md)**
 

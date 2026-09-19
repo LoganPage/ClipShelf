@@ -16,9 +16,10 @@ public sealed class HistoryListBox : ListBox
     private readonly WheelScrollMotion wheelMotion = new();
     private ScrollViewer? wheelViewer;
     private VirtualizingStackPanel? wheelPanel;
-    private bool rendering, hasRequestedOffset, precisionGesture;
+    private bool rendering, hasRequestedOffset;
     private double requestedOffset;
-    private long lastFrameTimestamp, precisionGestureUntil;
+    private double? dragScrollOffset;
+    private long lastFrameTimestamp;
     private TimeSpan lastRenderingTime = TimeSpan.MinValue;
 
     public HistoryListBox()
@@ -51,13 +52,13 @@ public sealed class HistoryListBox : ListBox
     /// <summary>Stop at the current scroll position before a new selection/navigation intent.</summary>
     public void CancelWheelMotion()
     {
+        dragScrollOffset = null;
         StopRendering();
         double current = wheelPanel?.VerticalOffset ?? 0;
         // InvalidateMeasure may not have presented the last request yet. Stop at the
         // last laid-out position instead of letting that old request move a clicked row.
         if (hasRequestedOffset && wheelPanel is not null) ((IScrollInfo)wheelPanel).SetVerticalOffset(current);
         hasRequestedOffset = false;
-        precisionGestureUntil = 0; precisionGesture = false;
         wheelMotion.Reset(current, MaximumOffset);
     }
 
@@ -75,31 +76,33 @@ public sealed class HistoryListBox : ListBox
     {
         base.OnPreviewMouseWheel(e);
         if (e.Handled || e.Delta == 0) return;
-        if (Keyboard.Modifiers != ModifierKeys.None || e.StylusDevice is not null)
+        if (UsesNativeWheel(Keyboard.Modifiers, e.StylusDevice is not null))
         { CancelWheelMotion(); return; }
         if (!FindScrollParts() || wheelViewer is null) return;
         // A future nested editor/scroll viewer keeps its own wheel behavior.
         var nearest = Ancestor<ScrollViewer>(e.OriginalSource as DependencyObject);
         if (nearest is not null && !ReferenceEquals(nearest, wheelViewer)) return;
-        if (HandleWheelDelta(e.Delta, IsMouseCaptureWithin || Mouse.LeftButton == MouseButtonState.Pressed)) e.Handled = true;
+        if (HandleWheelDelta(e.Delta, IsMouseCaptureWithin)) e.Handled = true;
     }
+
+    // Ctrl/Shift belong to selection; holding them must not switch wheel physics.
+    internal static bool UsesNativeWheel(ModifierKeys modifiers, bool stylus) => stylus || (modifiers & (ModifierKeys.Alt | ModifierKeys.Windows)) != 0;
 
     // Also used by the isolated rendering probe; never synthesizes a system input event.
     internal bool HandleWheelDelta(int delta, bool directInput = false)
     {
+        dragScrollOffset = null;
         if (delta == 0 || !FindScrollParts() || wheelPanel is null || wheelViewer is null
             || !wheelViewer.CanContentScroll || VirtualizingPanel.GetScrollUnit(this) != ScrollUnit.Pixel) return false;
         double distance = WheelScrollMotion.WheelDistance(delta, SystemParameters.WheelScrollLines, wheelPanel.ViewportHeight);
         if (distance == 0) { CancelWheelMotion(); return true; }
         double maximum = MaximumOffset;
         long now = Stopwatch.GetTimestamp();
-        bool fractional = WheelScrollMotion.IsFractionalWheelDelta(delta);
-        if (now > precisionGestureUntil) precisionGesture = fractional;
-        else if (fractional && !wheelMotion.IsActive) precisionGesture = true;
-        // Keep one gesture's mode stable: switching an unfinished notch to direct input
-        // would discard its remaining distance or visibly jump to the old target.
-        precisionGestureUntil = now + (long)(Stopwatch.Frequency * 0.15);
-        bool immediate = precisionGesture || !SystemParameters.ClientAreaAnimation || directInput;
+        // A small delta does not identify a touchpad: high-resolution mouse wheels
+        // produce them too. All ordinary wheel packets share the same frame driver.
+        // A quicker response keeps small packets responsive without per-packet jumps.
+        wheelMotion.ResponseFrequency = WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28;
+        bool immediate = !SystemParameters.ClientAreaAnimation || directInput;
         double current = hasRequestedOffset ? requestedOffset : wheelPanel.VerticalOffset;
         if (immediate)
         {
@@ -122,6 +125,7 @@ public sealed class HistoryListBox : ListBox
     }
 
     private double MaximumOffset => wheelPanel is null ? 0 : Math.Max(0, wheelPanel.ExtentHeight - wheelPanel.ViewportHeight);
+    internal bool IsWheelAnimating => rendering;
 
     private void RenderWheelFrame(object? sender, EventArgs e)
     {
@@ -131,7 +135,7 @@ public sealed class HistoryListBox : ListBox
             lastRenderingTime = frame.RenderingTime;
         }
         if (!IsVisible || !IsEnabled || !IsLoaded || wheelPanel is null || !SystemParameters.ClientAreaAnimation
-            || IsMouseCaptureWithin || Mouse.LeftButton == MouseButtonState.Pressed)
+            || IsMouseCaptureWithin)
         { CancelWheelMotion(); return; }
         long now = Stopwatch.GetTimestamp();
         double elapsed = (now - lastFrameTimestamp) / (double)Stopwatch.Frequency;
@@ -148,6 +152,19 @@ public sealed class HistoryListBox : ListBox
         // This avoids a per-frame ScrollViewer command queue while retaining recycling,
         // real content offsets and correct hit testing. No RenderTransform or UpdateLayout.
         ((IScrollInfo)wheelPanel).SetVerticalOffset(value);
+    }
+
+    internal double ScrollDragBy(double distance)
+    {
+        if (!FindScrollParts() || wheelPanel is null) return 0;
+        // Keep the fractional remainder: WPF rounds its laid-out offset to pixels.
+        // Re-reading that rounded value each frame slows motion on high-Hz screens.
+        double current = dragScrollOffset is double previous && Math.Abs(previous - wheelPanel.VerticalOffset) <= 1
+            ? previous : wheelPanel.VerticalOffset;
+        double target = Math.Clamp(current + distance, 0, MaximumOffset);
+        dragScrollOffset = target;
+        RequestOffset(target);
+        return target;
     }
 
     private void OnWheelScrollChanged(object sender, ScrollChangedEventArgs e)
