@@ -1,0 +1,162 @@
+[
+  {
+    "Count": 100,
+    "Query": "tailneedle",
+    "Pass": 0,
+    "Milliseconds": 23.84,
+    "AllocatedBytes": 1246128,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "tailneedle",
+    "Pass": 1,
+    "Milliseconds": 0.82,
+    "AllocatedBytes": 2336,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "bianjiqi",
+    "Pass": 0,
+    "Milliseconds": 1536.9,
+    "AllocatedBytes": 14925920,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "bianjiqi",
+    "Pass": 1,
+    "Milliseconds": 2.39,
+    "AllocatedBytes": 2320,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "jtbls",
+    "Pass": 0,
+    "Milliseconds": 2.17,
+    "AllocatedBytes": 2312,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "jtbls",
+    "Pass": 1,
+    "Milliseconds": 2.23,
+    "AllocatedBytes": 2312,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "accesibility",
+    "Pass": 0,
+    "Milliseconds": 0.05,
+    "AllocatedBytes": 3000,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "accesibility",
+    "Pass": 1,
+    "Milliseconds": 0.05,
+    "AllocatedBytes": 3000,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "zzzzzzz",
+    "Pass": 0,
+    "Milliseconds": 2.31,
+    "AllocatedBytes": 2016,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "zzzzzzz",
+    "Pass": 1,
+    "Milliseconds": 2.18,
+    "AllocatedBytes": 2016,
+    "Matches": 100
+  },
+  {
+    "Count": 1000,
+    "Query": "tailneedle",
+    "Pass": 0,
+    "Milliseconds": 31.47,
+    "AllocatedBytes": 12470184,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "tailneedle",
+    "Pass": 1,
+    "Milliseconds": 0.8,
+    "AllocatedBytes": 16968,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "bianjiqi",
+    "Pass": 0,
+    "Milliseconds": 13460.97,
+    "AllocatedBytes": 149162624,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "bianjiqi",
+    "Pass": 1,
+    "Milliseconds": 23.12,
+    "AllocatedBytes": 16952,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "jtbls",
+    "Pass": 0,
+    "Milliseconds": 21.95,
+    "AllocatedBytes": 16944,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "jtbls",
+    "Pass": 1,
+    "Milliseconds": 22.7,
+    "AllocatedBytes": 16944,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "accesibility",
+    "Pass": 0,
+    "Milliseconds": 0.56,
+    "AllocatedBytes": 17632,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "accesibility",
+    "Pass": 1,
+    "Milliseconds": 0.51,
+    "AllocatedBytes": 17632,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "zzzzzzz",
+    "Pass": 0,
+    "Milliseconds": 22.75,
+    "AllocatedBytes": 16648,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "zzzzzzz",
+    "Pass": 1,
+    "Milliseconds": 24.27,
+    "AllocatedBytes": 16648,
+    "Matches": 1000
+  }
+]

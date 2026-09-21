@@ -1,0 +1,13 @@
+ClipShelf/bin/
+ClipShelf/obj/
+**/bin/
+**/obj/
+.vs/
+TestResults/
+artifacts/
+dist/
+dist-*/
+*.zip
+*.user
+*.suo
+*.log

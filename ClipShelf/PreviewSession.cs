@@ -1,0 +1,173 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Linq;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Input;
+
+namespace ClipShelf;
+
+internal readonly record struct PreviewRequest(string DocumentId, int Page, long Version);
+internal sealed class PreviewSession : IAsyncDisposable
+{
+    private readonly IReadOnlyList<ClipItem> items;
+    private readonly IPreviewPageRenderer renderer;
+    private readonly TextImagePreviewService textImages;
+    private readonly PreviewCacheService cache;
+    private readonly bool customRenderer;
+    private readonly Dictionary<string, int> rememberedPages = new();
+    private readonly CancellationTokenSource lifetime = new();
+    private CancellationTokenSource? request;
+    private DocumentIdentity? identity;
+    private bool closed;
+    private FileSystemWatcher? watcher;
+    private long version;
+    private Task prefetch = Task.CompletedTask;
+    private readonly ConcurrentDictionary<Task, byte> work = new();
+    internal event Action? Changed;
+    internal int Index { get; private set; }
+    internal int Page { get; private set; }
+    internal int Count { get; private set; }
+    internal bool CountFinal { get; private set; } = true;
+    internal int PixelWidth { get; set; } = 1000;
+    internal double PixelDpi { get; set; } = 96;
+    internal bool Loading { get; private set; }
+    internal PreviewException? Error { get; private set; }
+    internal RenderedPage? Presented { get; private set; }
+    internal TextPreviewResult? PresentedText { get; private set; }
+    internal Task Pending { get; private set; } = Task.CompletedTask;
+    internal ClipItem Current => items[Index];
+    internal string? Path => PreviewFormatRegistry.PathOf(Current);
+    internal PreviewRequest CurrentRequest => new(identity?.Id ?? Path ?? Current.Id.ToString(), Page, version);
+    internal PreviewSession(IReadOnlyList<ClipItem> items, int index, PreviewCacheService cache, IPreviewPageRenderer? renderer = null)
+    {
+        this.items = items.ToArray(); Index = Math.Clamp(index, 0, items.Count - 1); this.renderer = renderer ?? new PdfPageRenderService(cache);
+        textImages = new(cache);
+        this.cache = cache;
+        customRenderer = renderer is not null;
+    }
+    internal static int BoundPage(int page, int count) => Math.Clamp(page, 0, Math.Max(0, count - 1));
+    internal bool Accepts(PreviewRequest stamp) => !closed && stamp == CurrentRequest;
+    internal void Start() => Load(reidentify: true);
+    internal void Retry() { StopWatching(); identity = null; Load(reidentify: true); }
+    internal void Resize(int pixelWidth)
+    {
+        int width = Math.Clamp(pixelWidth, 480, 1800);
+        if (Math.Abs(PixelWidth - width) < 64) return;
+        PixelWidth = width;
+        if (Count > 0 && !closed && PreviewFormatRegistry.FormatOf(Current) != PreviewFormat.Text) Load(reidentify: false);
+    }
+    internal void NavigateRecord(int direction)
+    {
+        if (closed || direction == 0) return;
+        int next = Index + Math.Sign(direction);
+        while (next >= 0 && next < items.Count && !PreviewFormatRegistry.Supports(items[next])) next += Math.Sign(direction);
+        if (next < 0 || next >= items.Count || next == Index) return;
+        if (identity is not null) rememberedPages[identity.Id] = Page;
+        StopWatching(); Index = next; identity = null; Count = Page = 0; CountFinal = true; Load(reidentify: true);
+    }
+    internal void NavigatePage(int delta) => SetPage(CountFinal ? BoundPage(Page + delta, Count) : Math.Clamp(Page + delta, 0, 999));
+    internal void SetPage(int page)
+    {
+        if (closed || Count == 0) return;
+        int target = CountFinal ? BoundPage(page, Count) : Math.Clamp(page, 0, 999); if (target == Page) return;
+        Page = target; Load(reidentify: false);
+    }
+    internal bool HandleKey(Key key)
+    {
+        switch (key) {
+            case Key.Up: NavigateRecord(-1); return true; case Key.Down: NavigateRecord(1); return true;
+            case Key.Left: NavigatePage(-1); return true; case Key.Right: NavigatePage(1); return true;
+            case Key.Home: SetPage(0); return true; case Key.End: SetPage(CountFinal ? Count - 1 : 999); return true;
+            default: return false;
+        }
+    }
+    private void Load(bool reidentify)
+    {
+        if (closed) return;
+        request?.Cancel(); request?.Dispose(); request = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        long revision = ++version; Loading = true; Error = null; Changed?.Invoke();
+        Pending = Track(LoadAsync(reidentify, revision, request.Token));
+    }
+    private Task Track(Task task)
+    {
+        work.TryAdd(task, 0);
+        _ = task.ContinueWith(completed => work.TryRemove(completed, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return task;
+    }
+    private async Task LoadAsync(bool reidentify, long revision, CancellationToken token)
+    {
+        try {
+            var format = PreviewFormatRegistry.FormatOf(Current);
+            if (format == PreviewFormat.Text) {
+                var textStamp = CurrentRequest;
+                var text = await TextImagePreviewService.ReadTextAsync(Current, token);
+                if (!Accepts(textStamp)) return;
+                PresentedText = text; Presented = null; Page = 0; Count = 1; CountFinal = true; Loading = false; Changed?.Invoke(); return;
+            }
+            string? path = Path;
+            if (!PreviewFormatRegistry.Supports(Current)) throw new PreviewException("Unsupported", "当前格式暂不支持快速预览，可使用默认应用打开。");
+            if (path is null) throw new PreviewException("MissingFile", "图片或文档文件已移动或删除。");
+            if (reidentify) {
+                var found = await Task.Run(() => DocumentIdentity.Read(path), token);
+                if (closed || revision != version) return;
+                identity = found; Page = rememberedPages.GetValueOrDefault(found.Id); Watch(found);
+            }
+            var stamp = CurrentRequest;
+            var cached = !customRenderer && format != PreviewFormat.Image ? await Task.Run(() => cache.ReadPage(PreviewCacheService.RenderKey(identity!, stamp.Page, PixelWidth, PixelDpi), token), token) : null;
+            if (cached is not null && (cached.DocumentId != stamp.DocumentId || cached.Page != stamp.Page)) cached = null;
+            if (cached is null && reidentify && stamp.Page == 0 && format == PreviewFormat.PowerPoint) {
+                var thumbnail = await renderer.ThumbnailAsync(identity!, token);
+                if (!Accepts(stamp)) return;
+                if (thumbnail is not null && thumbnail.DocumentId == stamp.DocumentId) { Presented = thumbnail with { RequestVersion = stamp.Version }; PresentedText = null; Count = thumbnail.Count; CountFinal = thumbnail.CountFinal; Changed?.Invoke(); }
+            }
+            var result = cached ?? (format == PreviewFormat.Image
+                ? await textImages.RenderImageAsync(identity!, PixelWidth, token)
+                : await renderer.RenderViewportAsync(identity!, stamp.Page, PixelWidth, PixelDpi, stamp.Version, token));
+            if (!Accepts(stamp)) return;
+            if (result.DocumentId != stamp.DocumentId) throw new PreviewException("InvalidDocument", "预览结果与当前文档不匹配，请重试。");
+            Page = result.Page; Count = result.Count; CountFinal = result.CountFinal; Presented = result with { RequestVersion = stamp.Version }; PresentedText = null; rememberedPages[result.DocumentId] = Page; Loading = false;
+            Changed?.Invoke();
+            if (format != PreviewFormat.Image) prefetch = Track(PrefetchAsync(identity!, Page, Count, PixelWidth, token));
+        } catch (OperationCanceledException) { }
+        catch (Exception error) { if (!closed && revision == version) { Error = PreviewException.From(error); Loading = false; Changed?.Invoke(); } }
+    }
+    private async Task PrefetchAsync(DocumentIdentity document, int page, int count, int width, CancellationToken token)
+    {
+        try {
+            PreviewRenderScheduler.Priority.Value = 1;
+            await Task.Delay(80, token);
+            foreach (int neighbor in new[] { page + 1, page - 1 }) if (neighbor >= 0 && (neighbor < count || !CountFinal)) await renderer.RenderViewportAsync(document, neighbor, width, PixelDpi, version, token);
+            var stamp = CurrentRequest;
+            int? completeCount = !CountFinal ? await renderer.CompletePaginationAsync(document, token) : null;
+            if (completeCount is int total && identity?.Id == document.Id && Accepts(stamp)) { Count = total; CountFinal = true; Changed?.Invoke(); }
+        } catch (OperationCanceledException) { } catch (Exception) { /* Speculative failures never replace the visible page. */ }
+        finally { PreviewRenderScheduler.Priority.Value = 0; }
+    }
+    internal void Cancel()
+    {
+        if (closed) return; closed = true; version++; request?.Cancel(); lifetime.Cancel(); StopWatching(); Changed = null;
+    }
+    private void StopWatching() { watcher?.Dispose(); watcher = null; }
+    private void Watch(DocumentIdentity document) {
+        StopWatching();
+        try {
+            watcher = new FileSystemWatcher(System.IO.Path.GetDirectoryName(document.Path)!, System.IO.Path.GetFileName(document.Path)) { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName };
+            void ChangedFile(object sender, FileSystemEventArgs e) {
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+                dispatcher.BeginInvoke(new Action(() => {
+                    if (closed || identity?.Id != document.Id) return;
+                    version++; request?.Cancel(); Loading = false; Error = new PreviewException("Changed", "文件已发生修改、移动或删除，请重试以重新加载。"); StopWatching(); Changed?.Invoke();
+                }));
+            }
+            watcher.Changed += ChangedFile; watcher.Deleted += ChangedFile; watcher.Renamed += ChangedFile; watcher.EnableRaisingEvents = true;
+        } catch (IOException) { StopWatching(); } catch (UnauthorizedAccessException) { StopWatching(); }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        Cancel(); await Task.WhenAll(work.Keys); await Pending; await prefetch; await renderer.DisposeAsync(); request?.Dispose(); lifetime.Dispose(); Presented = null; PresentedText = null;
+    }
+}
