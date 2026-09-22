@@ -1,0 +1,162 @@
+[
+  {
+    "Count": 100,
+    "Query": "tailneedle",
+    "Pass": 0,
+    "Milliseconds": 1623.62,
+    "AllocatedBytes": 16049688,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "tailneedle",
+    "Pass": 1,
+    "Milliseconds": 0.46,
+    "AllocatedBytes": 167264,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "bianjiqi",
+    "Pass": 0,
+    "Milliseconds": 3.56,
+    "AllocatedBytes": 177728,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "bianjiqi",
+    "Pass": 1,
+    "Milliseconds": 4.12,
+    "AllocatedBytes": 177664,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "jtbls",
+    "Pass": 0,
+    "Milliseconds": 0.16,
+    "AllocatedBytes": 120128,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "jtbls",
+    "Pass": 1,
+    "Milliseconds": 0.16,
+    "AllocatedBytes": 120064,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "accesibility",
+    "Pass": 0,
+    "Milliseconds": 0.31,
+    "AllocatedBytes": 152128,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "accesibility",
+    "Pass": 1,
+    "Milliseconds": 0.31,
+    "AllocatedBytes": 152064,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "zzzzzzz",
+    "Pass": 0,
+    "Milliseconds": 4.14,
+    "AllocatedBytes": 171328,
+    "Matches": 100
+  },
+  {
+    "Count": 100,
+    "Query": "zzzzzzz",
+    "Pass": 1,
+    "Milliseconds": 3.81,
+    "AllocatedBytes": 171264,
+    "Matches": 100
+  },
+  {
+    "Count": 1000,
+    "Query": "tailneedle",
+    "Pass": 0,
+    "Milliseconds": 12836.6,
+    "AllocatedBytes": 144249056,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "tailneedle",
+    "Pass": 1,
+    "Milliseconds": 14251.09,
+    "AllocatedBytes": 160092480,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "bianjiqi",
+    "Pass": 0,
+    "Milliseconds": 14650.32,
+    "AllocatedBytes": 160196496,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "bianjiqi",
+    "Pass": 1,
+    "Milliseconds": 14158.43,
+    "AllocatedBytes": 160196432,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "jtbls",
+    "Pass": 0,
+    "Milliseconds": 14282.83,
+    "AllocatedBytes": 159620496,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "jtbls",
+    "Pass": 1,
+    "Milliseconds": 14783.29,
+    "AllocatedBytes": 159620432,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "accesibility",
+    "Pass": 0,
+    "Milliseconds": 14355.64,
+    "AllocatedBytes": 159940496,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "accesibility",
+    "Pass": 1,
+    "Milliseconds": 14798.24,
+    "AllocatedBytes": 159940432,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "zzzzzzz",
+    "Pass": 0,
+    "Milliseconds": 14153.06,
+    "AllocatedBytes": 160132496,
+    "Matches": 1000
+  },
+  {
+    "Count": 1000,
+    "Query": "zzzzzzz",
+    "Pass": 1,
+    "Milliseconds": 14324.33,
+    "AllocatedBytes": 160132432,
+    "Matches": 1000
+  }
+]

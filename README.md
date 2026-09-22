@@ -159,4 +159,6 @@ DOCX 首版支持段落、标题和样式继承、基本字体属性、段落对
 
 `ClipShelf.exe --presentation-test <报告目录>` 检查选中标签和浅深色菜单布局并输出图片。`ClipShelf.exe --scroll-render-test <报告路径>` 会短暂显示1000条合成记录的自动滚动窗口，检查时间步、输入比例、取消、真实列表偏移及回调间隔；不注入系统输入、不访问真实剪贴板，也不将回调率称为实显FPS。
 
+经过筛选的历史发布校验、性能基线和通用安装验证脚本见 [`docs/README.md`](docs/README.md)。这些资料不包含用户历史、设置、缓存或本机安装结果；临时测试输出继续写入被 Git 忽略的 `artifacts/`。
+
 MIT License。Mac 图标与原项目代码版权遵循仓库中的 LICENSE；Windows 实现保留该许可。

@@ -1,0 +1,76 @@
+{
+  "mode": "deferred",
+  "scenario": "100 records, 2048-character text repeated in title; 120 unique adds then 120 pin toggles; 3 trials; includes full disk flush before final-state validation",
+  "startedAt": "2026-09-08T19:52:12.4082543+08:00",
+  "trials": [
+    {
+      "trial": 0,
+      "add": {
+        "operations": 120,
+        "totalMilliseconds": 7.4786,
+        "meanMilliseconds": 0.06232166666666667,
+        "p50Milliseconds": 0.0596,
+        "p95Milliseconds": 0.0865,
+        "maxMilliseconds": 0.1791
+      },
+      "togglePinned": {
+        "operations": 120,
+        "totalMilliseconds": 7.981899999999996,
+        "meanMilliseconds": 0.0665158333333333,
+        "p50Milliseconds": 0.0484,
+        "p95Milliseconds": 0.0729,
+        "maxMilliseconds": 1.9727
+      },
+      "callerMilliseconds": 15.8166,
+      "flushMilliseconds": 75.7398,
+      "historyBytes": 440892,
+      "itemCount": 100
+    },
+    {
+      "trial": 1,
+      "add": {
+        "operations": 120,
+        "totalMilliseconds": 9.034399999999998,
+        "meanMilliseconds": 0.07528666666666665,
+        "p50Milliseconds": 0.0492,
+        "p95Milliseconds": 0.0655,
+        "maxMilliseconds": 2.8191
+      },
+      "togglePinned": {
+        "operations": 120,
+        "totalMilliseconds": 5.215299999999999,
+        "meanMilliseconds": 0.043460833333333324,
+        "p50Milliseconds": 0.0422,
+        "p95Milliseconds": 0.0532,
+        "maxMilliseconds": 0.065
+      },
+      "callerMilliseconds": 14.2794,
+      "flushMilliseconds": 60.46,
+      "historyBytes": 440891,
+      "itemCount": 100
+    },
+    {
+      "trial": 2,
+      "add": {
+        "operations": 120,
+        "totalMilliseconds": 6.935500000000001,
+        "meanMilliseconds": 0.057795833333333345,
+        "p50Milliseconds": 0.0563,
+        "p95Milliseconds": 0.067,
+        "maxMilliseconds": 0.139
+      },
+      "togglePinned": {
+        "operations": 120,
+        "totalMilliseconds": 5.749899999999998,
+        "meanMilliseconds": 0.04791583333333331,
+        "p50Milliseconds": 0.0455,
+        "p95Milliseconds": 0.063,
+        "maxMilliseconds": 0.0789
+      },
+      "callerMilliseconds": 12.7115,
+      "flushMilliseconds": 63.3309,
+      "historyBytes": 440893,
+      "itemCount": 100
+    }
+  ]
+}
