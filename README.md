@@ -8,7 +8,7 @@ Windows 原生版本，基于 [LoganPage/ClipShelf](https://github.com/LoganPage
 
 - `Ctrl+Shift+V`：全局显示 ClipShelf，可在设置中修改，冲突时会提示。
 - `↑/↓`：选择记录；记录上的 `Enter` 不执行命令。
-- `Space`：快速预览文字记录、图片或 PDF、DOCX、PPTX 文档；DOC/PPT、Excel、音视频、ZIP、文件夹等打开同一预览窗口，在中央显示不支持提示、文件位置及默认应用/资源管理器操作，不读取或渲染文件内容。预览内 `↑/↓` 跳过不支持的记录，`←/→` 翻文档页，`Home/End` 首末页，滚轮只滚动内容，`Space/Esc` 关闭。预览不会自动复制或粘贴。
+- `Space`：快速预览文字记录、常见文本文件、图片或 PDF、DOCX、PPTX 文档；文本文件支持 TXT、Markdown、日志、JSON、XML、CSV、INI、YAML 与常见代码/脚本格式，采用本地编码检测和分段读取。DOC/PPT、Excel、音视频、ZIP、文件夹等打开同一预览窗口，在中央显示不支持提示、文件位置及默认应用/资源管理器操作。预览内 `↑/↓` 按列表顺序逐条切换记录（不支持的格式也会停留并显示说明），文字可用 `Ctrl+F`、`F3`、换行及行号，文档用 `←/→` 翻页，`Space/Esc` 关闭。预览不会自动复制或粘贴。
 - `Ctrl+A/C`：全选、复制记录；到目标输入位置手动 `Ctrl+V` 粘贴，搜索框中保持普通文字编辑行为。
 - `Ctrl+F`：搜索；`Ctrl+Shift+A`：取消选择；`Ctrl+Shift+P`：置顶/取消置顶。
 - 单击直接改选；`Ctrl+点击`：增减选择；`Shift+点击`：范围选择；`Ctrl+Shift+点击`：追加范围；鼠标按住拖移：连续多选。

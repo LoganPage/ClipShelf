@@ -15,9 +15,11 @@ internal sealed class PreviewSession : IAsyncDisposable
     private readonly IReadOnlyList<ClipItem> items;
     private readonly IPreviewPageRenderer renderer;
     private readonly TextImagePreviewService textImages;
+    private readonly TextFilePreviewProvider textFiles;
     private readonly PreviewCacheService cache;
     private readonly bool customRenderer;
     private readonly Dictionary<string, int> rememberedPages = new();
+    private readonly Dictionary<string, TextPreviewViewModel> rememberedText = new();
     private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? request;
     private DocumentIdentity? identity;
@@ -37,6 +39,8 @@ internal sealed class PreviewSession : IAsyncDisposable
     internal PreviewException? Error { get; private set; }
     internal RenderedPage? Presented { get; private set; }
     internal TextPreviewResult? PresentedText { get; private set; }
+    internal TextPreviewViewModel? PresentedTextViewModel { get; private set; }
+    internal string LoadingStatus { get; private set; } = "正在准备预览…";
     internal Task Pending { get; private set; } = Task.CompletedTask;
     internal ClipItem Current => items[Index];
     internal string? Path => PreviewFormatRegistry.PathOf(Current);
@@ -44,7 +48,7 @@ internal sealed class PreviewSession : IAsyncDisposable
     internal PreviewSession(IReadOnlyList<ClipItem> items, int index, PreviewCacheService cache, IPreviewPageRenderer? renderer = null)
     {
         this.items = items.ToArray(); Index = Math.Clamp(index, 0, items.Count - 1); this.renderer = renderer ?? new PdfPageRenderService(cache);
-        textImages = new(cache);
+        textImages = new(cache); textFiles = new(cache);
         this.cache = cache;
         customRenderer = renderer is not null;
     }
@@ -63,7 +67,6 @@ internal sealed class PreviewSession : IAsyncDisposable
     {
         if (closed || direction == 0) return;
         int next = Index + Math.Sign(direction);
-        while (next >= 0 && next < items.Count && !PreviewFormatRegistry.Supports(items[next])) next += Math.Sign(direction);
         if (next < 0 || next >= items.Count || next == Index) return;
         if (identity is not null) rememberedPages[identity.Id] = Page;
         StopWatching(); Index = next; identity = null; Count = Page = 0; CountFinal = true; Load(reidentify: true);
@@ -74,6 +77,14 @@ internal sealed class PreviewSession : IAsyncDisposable
         if (closed || Count == 0) return;
         int target = CountFinal ? BoundPage(page, Count) : Math.Clamp(page, 0, 999); if (target == Page) return;
         Page = target; Load(reidentify: false);
+    }
+    internal void NavigateTextSegment(int direction)
+    {
+        if (closed || direction == 0 || PresentedTextViewModel?.Document is not { } document) return;
+        if ((direction < 0 && document.SegmentIndex == 0) || (direction > 0 && document.Current.EndOfFile)) return;
+        request?.Cancel(); request?.Dispose(); request = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        long revision = ++version; Loading = true; LoadingStatus = "文件过大，正在分段加载…"; Error = null; Changed?.Invoke();
+        Pending = Track(LoadTextSegmentAsync(PresentedTextViewModel, direction, revision, request.Token));
     }
     internal bool HandleKey(Key key)
     {
@@ -88,7 +99,9 @@ internal sealed class PreviewSession : IAsyncDisposable
     {
         if (closed) return;
         request?.Cancel(); request?.Dispose(); request = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        long revision = ++version; Loading = true; Error = null; Changed?.Invoke();
+        long revision = ++version; Loading = true; Error = null;
+        LoadingStatus = PreviewFormatRegistry.FormatOf(Current) == PreviewFormat.Text && Current.Kind == ClipKind.File ? "正在检测文本编码…" : "正在准备预览…";
+        Changed?.Invoke();
         Pending = Track(LoadAsync(reidentify, revision, request.Token));
     }
     private Task Track(Task task)
@@ -101,11 +114,14 @@ internal sealed class PreviewSession : IAsyncDisposable
     {
         try {
             var format = PreviewFormatRegistry.FormatOf(Current);
-            if (format == PreviewFormat.Text) {
+            if (format == PreviewFormat.Text && Current.Kind == ClipKind.Text) {
                 var textStamp = CurrentRequest;
                 var text = await TextImagePreviewService.ReadTextAsync(Current, token);
                 if (!Accepts(textStamp)) return;
-                PresentedText = text; Presented = null; Page = 0; Count = 1; CountFinal = true; Loading = false; Changed?.Invoke(); return;
+                string key = "record:" + Current.Id;
+                if (!rememberedText.TryGetValue(key, out var textView)) rememberedText[key] = textView = new TextPreviewViewModel(text);
+                else textView.Apply(text);
+                PresentText(textView); return;
             }
             string? path = Path;
             if (!PreviewFormatRegistry.Supports(Current)) throw new PreviewException("Unsupported", "当前格式暂不支持快速预览，可使用默认应用打开。");
@@ -115,24 +131,56 @@ internal sealed class PreviewSession : IAsyncDisposable
                 if (closed || revision != version) return;
                 identity = found; Page = rememberedPages.GetValueOrDefault(found.Id); Watch(found);
             }
+            if (format == PreviewFormat.Text) {
+                var textStamp = CurrentRequest;
+                if (!rememberedText.TryGetValue(identity!.Id, out var textView)) {
+                    LoadingStatus = "正在读取文本…"; Changed?.Invoke();
+                    var document = await textFiles.OpenAsync(identity, token);
+                    if (!Accepts(textStamp)) return;
+                    textView = new TextPreviewViewModel(Result(document), document); rememberedText[identity.Id] = textView;
+                }
+                if (!Accepts(textStamp)) return;
+                PresentText(textView); return;
+            }
             var stamp = CurrentRequest;
             var cached = !customRenderer && format != PreviewFormat.Image ? await Task.Run(() => cache.ReadPage(PreviewCacheService.RenderKey(identity!, stamp.Page, PixelWidth, PixelDpi), token), token) : null;
             if (cached is not null && (cached.DocumentId != stamp.DocumentId || cached.Page != stamp.Page)) cached = null;
             if (cached is null && reidentify && stamp.Page == 0 && format == PreviewFormat.PowerPoint) {
                 var thumbnail = await renderer.ThumbnailAsync(identity!, token);
                 if (!Accepts(stamp)) return;
-                if (thumbnail is not null && thumbnail.DocumentId == stamp.DocumentId) { Presented = thumbnail with { RequestVersion = stamp.Version }; PresentedText = null; Count = thumbnail.Count; CountFinal = thumbnail.CountFinal; Changed?.Invoke(); }
+                if (thumbnail is not null && thumbnail.DocumentId == stamp.DocumentId) { Presented = thumbnail with { RequestVersion = stamp.Version }; PresentedText = null; PresentedTextViewModel = null; Count = thumbnail.Count; CountFinal = thumbnail.CountFinal; Changed?.Invoke(); }
             }
             var result = cached ?? (format == PreviewFormat.Image
                 ? await textImages.RenderImageAsync(identity!, PixelWidth, token)
                 : await renderer.RenderViewportAsync(identity!, stamp.Page, PixelWidth, PixelDpi, stamp.Version, token));
             if (!Accepts(stamp)) return;
             if (result.DocumentId != stamp.DocumentId) throw new PreviewException("InvalidDocument", "预览结果与当前文档不匹配，请重试。");
-            Page = result.Page; Count = result.Count; CountFinal = result.CountFinal; Presented = result with { RequestVersion = stamp.Version }; PresentedText = null; rememberedPages[result.DocumentId] = Page; Loading = false;
+            Page = result.Page; Count = result.Count; CountFinal = result.CountFinal; Presented = result with { RequestVersion = stamp.Version }; PresentedText = null; PresentedTextViewModel = null; rememberedPages[result.DocumentId] = Page; Loading = false;
             Changed?.Invoke();
             if (format != PreviewFormat.Image) prefetch = Track(PrefetchAsync(identity!, Page, Count, PixelWidth, token));
         } catch (OperationCanceledException) { }
         catch (Exception error) { if (!closed && revision == version) { Error = PreviewException.From(error); Loading = false; Changed?.Invoke(); } }
+    }
+    private async Task LoadTextSegmentAsync(TextPreviewViewModel view, int direction, long revision, CancellationToken token)
+    {
+        try {
+            var stamp = CurrentRequest;
+            await textFiles.MoveAsync(view.Document!, direction, token);
+            if (!Accepts(stamp) || revision != version) return;
+            view.Apply(Result(view.Document!)); PresentText(view);
+        } catch (OperationCanceledException) { }
+        catch (Exception error) { if (!closed && revision == version) { Error = PreviewException.From(error); Loading = false; Changed?.Invoke(); } }
+    }
+    private static TextPreviewResult Result(TextPreviewDocument document)
+    {
+        var chunk = document.Current;
+        string notice = document.IsLarge ? "文件较大，快速预览采用分段读取，原文件内容未被修改。" : chunk.Text.Length == 0 ? "文件为空。" : "";
+        return new(document.Identity.Id, chunk.Text, false, true, document.IsLarge, document.SegmentIndex > 0,
+            !chunk.EndOfFile, document.SegmentIndex, chunk.FirstLineNumber, document.Encoding.DisplayName, true, notice);
+    }
+    private void PresentText(TextPreviewViewModel view)
+    {
+        PresentedTextViewModel = view; PresentedText = view.Result; Presented = null; Page = 0; Count = 1; CountFinal = true; Loading = false; Error = null; Changed?.Invoke();
     }
     private async Task PrefetchAsync(DocumentIdentity document, int page, int count, int width, CancellationToken token)
     {
@@ -168,6 +216,6 @@ internal sealed class PreviewSession : IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
-        Cancel(); await Task.WhenAll(work.Keys); await Pending; await prefetch; await renderer.DisposeAsync(); request?.Dispose(); lifetime.Dispose(); Presented = null; PresentedText = null;
+        Cancel(); await Task.WhenAll(work.Keys); await Pending; await prefetch; await renderer.DisposeAsync(); request?.Dispose(); lifetime.Dispose(); Presented = null; PresentedText = null; PresentedTextViewModel = null; rememberedText.Clear();
     }
 }

@@ -64,6 +64,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 | 内容 | 预览效果 |
 |---|---|
 | 文字记录 | 显示文字，可选择复制 |
+| 文本文件 | TXT、MD、LOG、JSON、XML、CSV、INI、YAML，以及常见代码/脚本；自动识别 UTF-8、UTF-16、GB18030，大文件分段读取 |
 | 图片 | 显示剪贴板图片及 PNG、JPEG、BMP、GIF、TIFF、ICO；多帧图片显示首帧 |
 | PDF | 按页查看 |
 | Word：.docx | 本地近似排版预览，无需安装 Office |
@@ -77,10 +78,11 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 | 操作 | 快捷键 |
 |---|---|
 | 关闭预览 | Space / Esc |
-| 切换上一条 / 下一条可预览记录 | ↑ / ↓（跳过不支持的记录） |
+| 切换上一条 / 下一条记录 | ↑ / ↓（不支持的格式也会停留并显示说明） |
 | 上一页 / 下一页 | ← / → |
 | 第一页 / 最后一页 | Home / End |
 | 滚动当前内容 | 鼠标滚轮 |
+| 查找预览文字 / 下一处 / 上一处 | Ctrl+F / F3 / Shift+F3 |
 
 Word/PPT 不是 Office 的完整替代品：复杂图表、SmartArt、浮动对象、合并表格等可能简化或显示占位，页数和排版也可能不同。需要精确排版时，请用默认应用打开原文件。
 
@@ -152,7 +154,7 @@ PDF 引擎冷启动、大文件及复杂排版仍有限制；Word/PPT 使用近�
 
 ## 原生文档预览与限制
 
-PDF 使用 Windows 本地 PDF 引擎。DOCX 支持常见段落/标题/样式、字体、列表、图片块、基础表格和普通页眉页脚，采用增量分页检查点。PPTX 支持主题/母版/版式基本继承、文字框、图片、基础形状/旋转/透明度和表格；有内嵌缩略图时先显示缩略图。
+文本文件以只读方式在本地检测 BOM、UTF-8、UTF-16 LE/BE 与 GB18030；二进制伪装和无法可靠识别的编码会显示错误页。每段最多约 128K 字符，可前后继续浏览，不会一次性把大文件载入 UI。PDF 使用 Windows 本地 PDF 引擎。DOCX 支持常见段落/标题/样式、字体、列表、图片块、基础表格和普通页眉页脚，采用增量分页检查点。PPTX 支持主题/母版/版式基本继承、文字框、图片、基础形状/旋转/透明度和表格；有内嵌缩略图时先显示缩略图。
 
 Word/PPT 明确标记“近似预览”，不是完整 Office 排版。复杂浮动对象、合并表格、多节页设置、图表、SmartArt、公式、组合形状等简化或显示占位。动画、宏、外部关系和嵌入程序不执行。DOCX 正文 XML 会先安全读取，后续解释与分页按需执行，并非完全流式引擎。
 
@@ -164,7 +166,7 @@ Word/PPT 明确标记“近似预览”，不是完整 Office 排版。复杂浮
 
 使用 .NET 8 SDK：`dotnet publish ClipShelf/ClipShelf.csproj -c Release -r win-x64 --self-contained true`。
 
-`--native-preview-test <输出目录>` 生成合成 PDF/DOCX/PPTX，检查格式、布局、样式、安全、取消、缓存和键盘。`--file-preview-test <输出目录>` 检查文字图片和文档预览回归。`--scroll-render-test <报告.json>` 与 `--preview-scroll-test <报告.json>` 检查列表滚动及后台分页时的滚动。合成截图/DPI 和渲染回调不等于物理多屏/高刷验收。
+`--native-preview-test <输出目录>` 生成合成 PDF/DOCX/PPTX，检查格式、布局、样式、安全、取消、缓存和键盘。`--text-preview-test <输出目录>` 检查文本编码、分段、搜索、状态恢复和真实窗口交互。`--file-preview-test <输出目录>` 检查文字图片和文档预览回归。`--scroll-render-test <报告.json>` 与 `--preview-scroll-test <报告.json>` 检查列表滚动及后台预览时的滚动。合成截图/DPI 和渲染回调不等于物理多屏/高刷验收。
 
 当前部分旧测试仍期待四套图标、旧圆角/滚动条尺寸或即时主题切换，已在旧版复现失败，不应视作全量测试已通过。预览专项和本次修改单独验证。
 

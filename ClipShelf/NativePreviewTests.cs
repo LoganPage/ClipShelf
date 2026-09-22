@@ -70,7 +70,7 @@ internal static class NativePreviewTests
             scrollFixture.ApplyTemplate(); scrollFixture.Measure(new Size(300, 120)); scrollFixture.Arrange(new Rect(0, 0, 300, 120)); scrollFixture.UpdateLayout();
             var fixtureBar = (System.Windows.Controls.Primitives.ScrollBar)scrollFixture.Template.FindName("PART_VerticalScrollBar", scrollFixture);
             Check(fixtureBar.Width == 13 && fixtureBar.Margin.Left == 2 && fixtureBar.Margin.Right == 0, "Shared scrollbar moves right without reducing its drag target");
-            foreach (string ext in new[] { "pdf", "docx", "pptx" }) Check(PreviewFormatRegistry.Get("x." + ext) != PreviewFormat.Unsupported, "Supported " + ext);
+            foreach (string ext in new[] { "pdf", "docx", "pptx", "txt", "md", "json", "cs" }) Check(PreviewFormatRegistry.Get("x." + ext) != PreviewFormat.Unsupported, "Supported " + ext);
             foreach (string ext in new[] { "doc", "ppt", "xlsx", "zip", "mp3", "mp4" }) Check(PreviewFormatRegistry.Get("x." + ext) == PreviewFormat.Unsupported, "Excluded " + ext);
             Check(PreviewFormatRegistry.Supports(new ClipItem { Kind = ClipKind.Text }) && PreviewFormatRegistry.Supports(new ClipItem { Kind = ClipKind.Image }), "Latest user override retains text and images");
             foreach (int count in new[] { 1, 20, 200 }) {
@@ -123,8 +123,10 @@ internal static class NativePreviewTests
             var records = new[] { FilePreviewTests.Item(doc), FilePreviewTests.Item(Path.Combine(root, "unsupported.xlsx")), FilePreviewTests.Item(Path.Combine(root, "slides-10.pptx")), FilePreviewTests.Item(Path.Combine(root, "pdf-20.pdf")) };
             await using (var session = new PreviewSession(records, 0, cache)) {
                 session.Start(); await session.Pending; Check(session.Error is null, "Unified session opens DOCX directly"); var stale = session.CurrentRequest;
+                session.NavigateRecord(1); await session.Pending; Check(session.Index == 1 && session.Error?.Code == "Unsupported", "Unified session exposes unsupported adjacent records");
+                session.NavigateRecord(-1); await session.Pending; Check(session.Index == 0 && session.Error is null, "Unified session returns from unsupported to DOCX");
                 for (int i = 0; i < 20; i++) { session.NavigateRecord(1); session.NavigateRecord(1); session.NavigateRecord(-1); session.NavigateRecord(-1); }
-                session.NavigateRecord(1); await session.Pending; Check(session.Index == 2 && session.Presented?.DocumentId == DocumentIdentity.Read(records[2].FilePaths[0]).Id && !session.Accepts(stale), "Rapid mixed navigation rejects stale file results");
+                session.NavigateRecord(1); session.NavigateRecord(1); await session.Pending; Check(session.Index == 2 && session.Presented?.DocumentId == DocumentIdentity.Read(records[2].FilePaths[0]).Id && !session.Accepts(stale), "Rapid mixed navigation rejects stale file results");
                 for (int i = 0; i < 15; i++) session.NavigatePage(1); await session.Pending; Check(session.Page == 9, "Rapid PPTX arrows clamp at final slide");
                 session.NavigateRecord(1); session.Cancel(); await session.Pending; Check(!session.Accepts(session.CurrentRequest), "Closing rejects all late results");
             }
@@ -146,15 +148,22 @@ internal static class NativePreviewTests
             async Task Error(string path, string code) { await using var session = new PreviewSession(new[] { FilePreviewTests.Item(path) }, 0, cache); session.Start(); await session.Pending; Check(session.Error?.Code == code, "Safe failure " + code); }
             Check(!typeof(PreviewProviderRegistry).Assembly.GetTypes().Any(t => t.Name is "WindowsPreviewHandler" or "OfficeConversionWorker" or "DocumentConversionService"), "No Preview Handler or Office conversion implementation remains");
             var store = new HistoryStore(Path.Combine(root, "unsupported-main-fixture")); store.Settings.HistoryEnabled = store.Settings.WatchScreenshots = false;
-            string unsupportedPath = Path.Combine(root, "excluded.xlsx");
-            store.Add(FilePreviewTests.Item(unsupportedPath));
+            string[] unsupportedPaths = [Path.Combine(root, "excluded.xlsx"), Path.Combine(root, "excluded.zip"), Path.Combine(root, "excluded.mp3")];
+            DateTimeOffset unsupportedTime = DateTimeOffset.UtcNow;
+            for (int i = 0; i < unsupportedPaths.Length; i++) {
+                var item = FilePreviewTests.Item(unsupportedPaths[i]); item.CreatedAt = unsupportedTime.AddSeconds(i); store.Add(item);
+            }
             var main = new MainWindow(store, demo: true) { ShowActivated = false, ShowInTaskbar = false, Left = -12000, Top = -12000, WindowStartupLocation = WindowStartupLocation.Manual };
-            try { main.Show(); await main.PendingSearch; await FilePreviewTests.Idle(); main.ApplyRowSelection(0, ModifierKeys.None);
+            try { main.Show(); await main.PendingSearch; await FilePreviewTests.Idle(); main.ApplyRowSelection(1, ModifierKeys.None);
                 var list = (HistoryListBox)main.FindName("HistoryList"); await main.HandleHistoryKeyAsync(Key.Space, ModifierKeys.None, list); await FilePreviewTests.Idle();
                 var unsupportedWindow = main.OwnedWindows.OfType<PreviewWindow>().Single(); await unsupportedWindow.PendingRender; await Task.Delay(220);
                 Check(unsupportedWindow.Session.Error?.Code == "Unsupported" && unsupportedWindow.IsVisible, "Unsupported Space opens a fixed preview window without loading the file");
-                Check(unsupportedWindow.DisplayedLocation.Contains(unsupportedPath), "Unsupported preview displays the full file location");
+                Check(unsupportedWindow.DisplayedLocation.Contains(((ClipItem)list.Items[1]).FilePaths[0]), "Unsupported preview displays the full file location");
                 Check(list.SelectedItems.Count == 1 && main.IsVisible, "Unsupported preview leaves main selection/window intact");
+                Send(unsupportedWindow, Key.Down); await unsupportedWindow.PendingRender; await FilePreviewTests.Idle();
+                Check(unsupportedWindow.RecordIndex == 2 && list.SelectedItems.Count == 1 && ReferenceEquals(list.SelectedItems[0], list.Items[2]), "Preview Down synchronizes the main-list selection without skipping unsupported records");
+                Send(unsupportedWindow, Key.Up); await unsupportedWindow.PendingRender; await FilePreviewTests.Idle();
+                Check(unsupportedWindow.RecordIndex == 1 && list.SelectedItems.Count == 1 && ReferenceEquals(list.SelectedItems[0], list.Items[1]) && unsupportedWindow.IsVisible, "Preview Up restores the matching main-list selection while preview stays open");
                 SaveWindow(unsupportedWindow, Path.Combine(root, "unsupported-preview.png"));
                 await unsupportedWindow.CloseAndReleaseAsync();
             } finally { main.Close(); }

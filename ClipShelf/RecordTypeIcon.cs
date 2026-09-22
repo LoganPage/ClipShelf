@@ -27,7 +27,8 @@ public sealed class RecordTypeIcon : FrameworkElement
             ".ppt" or ".pptx" or ".pptm" or ".odp" => "PowerPoint",
             ".zip" or ".7z" or ".rar" or ".gz" or ".tar" => "Archive",
             ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".tif" or ".tiff" or ".webp" or ".heic" => "Image",
-            ".txt" or ".md" or ".log" or ".json" or ".xml" or ".cs" or ".py" or ".js" or ".html" or ".css" => "Document",
+            ".txt" or ".md" or ".log" or ".json" or ".xml" or ".csv" or ".ini" or ".yaml" or ".yml" or
+            ".cs" or ".cpp" or ".h" or ".py" or ".js" or ".ts" or ".html" or ".css" or ".sql" or ".ps1" or ".bat" or ".cmd" => "Document",
             _ => "File"
         };
     }

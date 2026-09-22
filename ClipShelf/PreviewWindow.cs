@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -28,8 +29,13 @@ public sealed class PreviewWindow : Window
         BorderThickness = new(0), Background = Brushes.Transparent, Padding = new(14), VerticalAlignment = VerticalAlignment.Top,
         VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         Visibility = Visibility.Collapsed };
+    private readonly TextBlock lineNumbers = new() { FontSize = 16, TextAlignment = TextAlignment.Right, Padding = new(10, 14, 8, 14), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
     private readonly TextBlock textNotice = new() { Margin = new(14, 8, 14, 12), TextWrapping = TextWrapping.Wrap };
-    private readonly StackPanel textPanel = new() { Visibility = Visibility.Collapsed };
+    private readonly Grid textPanel = new() { Visibility = Visibility.Collapsed };
+    private readonly StackPanel segmentControls = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new(0, 4, 0, 12) };
+    private readonly Border searchPanel = new() { Padding = new(8), CornerRadius = new(8), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new(18), Visibility = Visibility.Collapsed };
+    private readonly TextBox previewSearch = new() { Width = 280, Height = 34, Padding = new(10, 5, 10, 5), VerticalContentAlignment = VerticalAlignment.Center };
+    private readonly TextBlock searchStatus = new() { Width = 74, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly SmoothScrollViewer scroll = new();
     private readonly Border loading = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(16), Padding = new(14, 8, 14, 8), CornerRadius = new(8), IsHitTestVisible = false };
     private readonly TextBlock loadingText = new() { Text = "正在准备文档…" };
@@ -40,9 +46,12 @@ public sealed class PreviewWindow : Window
         MaxWidth = 480, MaxHeight = 120, Margin = new(0, 14, 0, 0), BorderThickness = new(0), Background = Brushes.Transparent,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Visibility = Visibility.Collapsed };
     private readonly TextBlock warnings = new() { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(16), MaxWidth = 400, TextTrimming = TextTrimming.CharacterEllipsis, IsHitTestVisible = false };
-    private readonly Button back, next, retry;
+    private readonly Button back, next, retry, searchToggle, wrapToggle, linesToggle, previousSegment, nextSegment;
     private RenderedPage? displayed;
     private TextPreviewResult? displayedText;
+    private TextPreviewViewModel? displayedTextViewModel;
+    private bool updatingSearch;
+    private int lastRecordIndex;
     private bool closing, finishedClose;
     private readonly DispatcherTimer resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     internal Task Cleanup { get; private set; } = Task.CompletedTask;
@@ -53,13 +62,16 @@ public sealed class PreviewWindow : Window
     internal int RecordIndex => session.Index;
     internal PreviewSession Session => session;
     internal string DisplayedLocation => fileLocation.Text;
+    internal TextBox TextContent => textContent;
+    internal TextBox PreviewSearch => previewSearch;
+    internal event Action<ClipItem>? RecordChanged;
     private string? ActionPath => session.Path ?? session.Current.SourcePath ?? (session.Current.FilePaths.Count > 0 ? session.Current.FilePaths[0] : null);
     internal void SetAnimationOrigin(double rowFraction) => card.RenderTransformOrigin = new Point(.5, Math.Clamp(rowFraction, .1, .9));
     public PreviewWindow(IReadOnlyList<ClipItem> items, int index) : this(items, index, null) { }
     internal PreviewWindow(IReadOnlyList<ClipItem> items, int index, PreviewCacheService? sharedCache)
     {
         if (items.Count == 0) throw new ArgumentException("No preview items", nameof(items));
-        cache = sharedCache ?? new(); ownsCache = sharedCache is null; session = new(items, index, cache);
+        cache = sharedCache ?? new(); ownsCache = sharedCache is null; session = new(items, index, cache); lastRecordIndex = session.Index;
         Width = 900; Height = 720; MinWidth = 620; MinHeight = 420; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Title = "快速预览 · ClipShelf";
         SetResourceReference(BackgroundProperty, "BackgroundBrush"); SetResourceReference(ForegroundProperty, "TextBrush");
@@ -70,6 +82,10 @@ public sealed class PreviewWindow : Window
         var toolbar = new DockPanel { Margin = new(14, 8, 14, 8) };
         var controls = new StackPanel { Orientation = Orientation.Horizontal };
         controls.Children.Add(pages);
+        searchToggle = Button("\uE721", "在预览文本中查找（Ctrl+F）", ShowTextSearch);
+        wrapToggle = Button("\uE8E9", "切换自动换行", ToggleTextWrap);
+        linesToggle = Button("\uE8FD", "切换行号", ToggleLineNumbers);
+        controls.Children.Add(searchToggle); controls.Children.Add(wrapToggle); controls.Children.Add(linesToggle);
         back = Button("\uE76B", "上一页（←）", () => NavigatePage(-1)); next = Button("\uE76C", "下一页（→）", () => NavigatePage(1));
         controls.Children.Add(back); controls.Children.Add(next); controls.Children.Add(Button("\uE838", "在资源管理器中显示", Reveal)); controls.Children.Add(Button("\uE8BB", "关闭（Space / Esc）", Close));
         DockPanel.SetDock(controls, Dock.Right); toolbar.Children.Add(controls); toolbar.Children.Add(icon); toolbar.Children.Add(title); layout.Children.Add(toolbar);
@@ -79,7 +95,14 @@ public sealed class PreviewWindow : Window
         previous.SetBinding(WidthProperty, new System.Windows.Data.Binding(nameof(ActualWidth)) { Source = pageLayers });
         retained.Children.Add(previous); pageLayers.Children.Add(retained); pageLayers.Children.Add(image);
         textContent.SetResourceReference(ForegroundProperty, "TextBrush"); textNotice.SetResourceReference(ForegroundProperty, "MutedBrush");
-        textPanel.Children.Add(textContent); textPanel.Children.Add(textNotice); pageLayers.Children.Add(textPanel);
+        lineNumbers.SetResourceReference(ForegroundProperty, "MutedBrush");
+        textPanel.RowDefinitions.Add(new() { Height = GridLength.Auto }); textPanel.RowDefinitions.Add(new() { Height = GridLength.Auto }); textPanel.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        var textGrid = new Grid(); textGrid.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); textGrid.ColumnDefinitions.Add(new());
+        textGrid.Children.Add(lineNumbers); Grid.SetColumn(textContent, 1); textGrid.Children.Add(textContent); textPanel.Children.Add(textGrid);
+        Grid.SetRow(textNotice, 1); textPanel.Children.Add(textNotice);
+        previousSegment = TextButton("上一段", () => NavigateTextSegment(-1)); nextSegment = TextButton("下一段", () => NavigateTextSegment(1));
+        segmentControls.Children.Add(previousSegment); segmentControls.Children.Add(nextSegment); Grid.SetRow(segmentControls, 2); textPanel.Children.Add(segmentControls);
+        pageLayers.Children.Add(textPanel);
         scroll.Content = pageLayers; content.Children.Add(scroll);
         skeleton.SetResourceReference(Border.BackgroundProperty, "ActionBrush"); content.Children.Add(skeleton);
         loading.SetResourceReference(Border.BackgroundProperty, "ActionBrush"); loading.Child = loadingText; content.Children.Add(loading);
@@ -91,6 +114,12 @@ public sealed class PreviewWindow : Window
         var errorButtons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new(0, 18, 0, 0) };
         retry = TextButton("重试", () => session.Retry()); errorButtons.Children.Add(retry); errorButtons.Children.Add(TextButton("默认应用打开", OpenDefault)); errorButtons.Children.Add(TextButton("在资源管理器中显示", Reveal)); errorStack.Children.Add(errorButtons);
         errorLayer.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush"); errorLayer.Child = errorStack; content.Children.Add(errorLayer);
+        var searchLayout = new StackPanel { Orientation = Orientation.Horizontal };
+        searchLayout.Children.Add(previewSearch); searchLayout.Children.Add(searchStatus);
+        searchLayout.Children.Add(Button("\uE72C", "上一处（Shift+F3）", () => FindText(true)));
+        searchLayout.Children.Add(Button("\uE72D", "下一处（F3）", () => FindText(false)));
+        searchLayout.Children.Add(Button("\uE8BB", "关闭查找（Esc）", HideTextSearch));
+        searchPanel.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush"); searchPanel.Child = searchLayout; Panel.SetZIndex(searchPanel, 20); content.Children.Add(searchPanel);
         card.Child = layout; Content = card;
         session.Changed += Update;
         PreviewKeyDown += OnPreviewKey;
@@ -99,6 +128,9 @@ public sealed class PreviewWindow : Window
         resizeTimer.Tick += (_, _) => { resizeTimer.Stop(); if (!closing) { session.PixelDpi = VisualTreeHelper.GetDpi(this).PixelsPerInchX; session.Resize((int)((ActualWidth - 70) * VisualTreeHelper.GetDpi(this).DpiScaleX)); } };
         SizeChanged += (_, _) => { if (IsLoaded && !closing) { resizeTimer.Stop(); resizeTimer.Start(); } };
         DpiChanged += (_, _) => { if (!closing) { resizeTimer.Stop(); resizeTimer.Start(); } };
+        previewSearch.TextChanged += (_, _) => { if (!updatingSearch && displayedTextViewModel is { } view) { view.SearchText = previewSearch.Text; FindText(false, true); } };
+        previewSearch.KeyDown += (_, e) => { if (e.Key == Key.Enter) { FindText(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)); e.Handled = true; } };
+        scroll.ScrollChanged += (_, _) => { if (displayedTextViewModel is { } view && textPanel.IsVisible) view.ScrollOffset = scroll.VerticalOffset; };
         Closing += OnClosing;
         Closed += (_, _) => { resizeTimer.Stop(); scroll.CancelWheelMotion(); session.Changed -= Update; PreviewKeyDown -= OnPreviewKey; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); Cleanup = ReleaseAsync(); };
     }
@@ -114,26 +146,63 @@ public sealed class PreviewWindow : Window
     private void OnPreviewKey(object sender, KeyEventArgs e)
     {
         scroll.CancelWheelMotion();
+        if (e.Key == Key.Escape && searchPanel.IsVisible) { HideTextSearch(); e.Handled = true; return; }
         if (e.Key is Key.Space or Key.Escape) { if (!e.IsRepeat) Close(); e.Handled = true; return; }
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F && session.PresentedTextViewModel is not null) { ShowTextSearch(); e.Handled = true; return; }
+        if (e.Key == Key.F3 && session.PresentedTextViewModel is not null) { FindText(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)); e.Handled = true; return; }
+        if (Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.Up or Key.Down) { RememberTextViewState(); session.HandleKey(e.Key); e.Handled = true; return; }
         if (Keyboard.Modifiers == ModifierKeys.None && session.HandleKey(e.Key)) { e.Handled = true; return; }
         // Selection/copy stay local to the read-only text control; never dispatch the shelf's copy command.
-        if ((textContent.IsKeyboardFocusWithin || fileLocation.IsKeyboardFocusWithin) && Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.C or Key.A) return;
+        if ((textContent.IsKeyboardFocusWithin || fileLocation.IsKeyboardFocusWithin || previewSearch.IsKeyboardFocusWithin) && Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.C or Key.A) return;
         // A separate top-level window plus this boundary prevents owner shortcuts firing.
         if (e.Key is not (Key.Tab or Key.Enter or Key.LeftAlt or Key.RightAlt or Key.System)) e.Handled = true;
     }
     internal void NavigatePage(int delta) => session.NavigatePage(delta);
     internal void NavigateFile(int delta) => session.NavigateRecord(delta);
+    internal void NavigateTextSegment(int delta) { RememberTextViewState(); session.NavigateTextSegment(delta); }
+    internal void ToggleTextWrap()
+    {
+        if (session.PresentedTextViewModel is not { } view) return;
+        view.WordWrap = !view.WordWrap; ApplyTextOptions(view); UpdateTextButtonState(view);
+    }
+    internal void ToggleLineNumbers()
+    {
+        if (session.PresentedTextViewModel is not { } view) return;
+        view.ShowLineNumbers = !view.ShowLineNumbers; ApplyTextOptions(view); UpdateTextButtonState(view);
+    }
+    internal void ShowTextSearch()
+    {
+        if (session.PresentedTextViewModel is not { } view) return;
+        searchPanel.Visibility = Visibility.Visible; updatingSearch = true; previewSearch.Text = view.SearchText; updatingSearch = false;
+        previewSearch.Focus(); previewSearch.SelectAll();
+    }
+    internal void HideTextSearch() { searchPanel.Visibility = Visibility.Collapsed; textContent.Focus(); }
+    internal bool FindText(bool backwards, bool restart = false)
+    {
+        if (session.PresentedTextViewModel is not { } view) return false;
+        if (!ReferenceEquals(view, displayedTextViewModel)) displayedTextViewModel = view;
+        bool found = view.Find(backwards, restart); searchStatus.Text = string.IsNullOrEmpty(view.SearchText) ? "" : found ? "已找到" : "无结果";
+        if (found) { textContent.Focus(); textContent.Select(view.MatchStart, view.MatchLength); textContent.ScrollToLine(Math.Max(0, view.Lines.Starts.TakeWhile(start => start <= view.MatchStart).Count() - 1)); }
+        return found;
+    }
+    private void RememberTextViewState() { if (displayedTextViewModel is { } view && textPanel.IsVisible) view.ScrollOffset = scroll.VerticalOffset; }
     private void Update()
     {
         using var timing = PreviewMetrics.Measure("bitmap-submit");
         if (closing) return;
+        if (lastRecordIndex != session.Index) { lastRecordIndex = session.Index; RecordChanged?.Invoke(session.Current); }
         title.Text = session.Current.Kind == ClipKind.File && session.Path is { } path ? Path.GetFileName(path) : session.Current.DisplayTitle;
         icon.Item = session.Current; icon.SetResourceReference(RecordTypeIcon.PaletteProperty, "TextBrush");
         back.IsEnabled = session.Count > 0 && session.Page > 0; next.IsEnabled = session.Count > 0 && (!session.CountFinal || session.Page < session.Count - 1);
-        if (!session.Loading) pages.Text = session.Error is not null ? "— / —" : session.PresentedText is not null ? "文字" :
+        bool textMode = session.Error is null && PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Text;
+        searchToggle.Visibility = wrapToggle.Visibility = linesToggle.Visibility = textMode ? Visibility.Visible : Visibility.Hidden;
+        back.Visibility = next.Visibility = textMode ? Visibility.Hidden : Visibility.Visible;
+        if (!textMode) searchPanel.Visibility = Visibility.Collapsed;
+        if (!session.Loading) pages.Text = session.Error is not null ? "— / —" : session.PresentedText is { } textResult ? textResult.IsFile && textResult.IsLarge ? $"第 {textResult.SegmentIndex + 1} 段" : textResult.IsFile ? "文本" : "文字" :
             session.Presented is { } shown ? PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Image ? "图片" : session.CountFinal ? $"第 {shown.Page + 1} / {session.Count} 页" : $"第 {shown.Page + 1} 页" : "— / —";
         loading.Visibility = session.Loading ? Visibility.Visible : Visibility.Collapsed;
-        loadingText.Text = displayed is null && displayedText is null ? "正在准备预览…" : "正在载入…";
+        loadingText.Text = session.LoadingStatus;
+        if (session.Loading) { previousSegment.IsEnabled = false; nextSegment.IsEnabled = false; }
         skeleton.Visibility = displayed is null && displayedText is null && session.Loading ? Visibility.Visible : Visibility.Collapsed;
         errorLayer.Visibility = session.Error is null ? Visibility.Collapsed : Visibility.Visible;
         errorText.Text = session.Error?.Message ?? ""; retry.Visibility = session.Error?.Code == "Unsupported" ? Visibility.Collapsed : Visibility.Visible;
@@ -143,21 +212,39 @@ public sealed class PreviewWindow : Window
         warnings.Visibility = session.Error is null && !session.Loading && warnings.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (session.Error is not null || (session.Loading && session.Presented?.Quality != PreviewQuality.Thumbnail)) return;
         if (session.PresentedText is { } text) {
-            if (ReferenceEquals(displayedText, text)) return;
+            if (ReferenceEquals(displayedText, text) && ReferenceEquals(displayedTextViewModel, session.PresentedTextViewModel)) return;
             scroll.CancelWheelMotion(); image.Visibility = Visibility.Collapsed; image.Source = previous.Source = null; displayed = null;
-            textContent.Text = text.Text; textContent.Visibility = textPanel.Visibility = Visibility.Visible; displayedText = text;
-            textNotice.Text = text.Truncated ? "文字较长，快速预览仅显示前 100,000 个字符；原记录内容完整保留。" : text.Text.Length == 0 ? "这条文字记录没有内容。" : "";
+            displayedTextViewModel = session.PresentedTextViewModel; textContent.Text = text.Text; textContent.Visibility = textPanel.Visibility = Visibility.Visible; displayedText = text;
+            textNotice.Text = text.Notice.Length > 0 ? text.Notice : text.Truncated ? "文字较长，快速预览仅显示当前安全范围；原记录内容完整保留。" : text.Text.Length == 0 ? (text.IsFile ? "文件为空。" : "这条文字记录没有内容。") : "";
             textNotice.Visibility = textNotice.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-            scroll.ScrollToTop(); textPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1)));
+            previousSegment.IsEnabled = text.HasPrevious; nextSegment.IsEnabled = text.HasNext;
+            segmentControls.Visibility = text.IsLarge ? Visibility.Visible : Visibility.Collapsed;
+            if (displayedTextViewModel is { } view) { ApplyTextOptions(view); UpdateTextButtonState(view); updatingSearch = true; previewSearch.Text = view.SearchText; updatingSearch = false; }
+            Dispatcher.BeginInvoke(new Action(() => scroll.ScrollToVerticalOffset(displayedTextViewModel?.ScrollOffset ?? 0)), DispatcherPriority.Loaded);
+            textPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1)));
             return;
         }
         if (session.Presented is not { } page || ReferenceEquals(displayed, page)) return;
         // Only the content changes. Hold the last decoded frame until a valid new page arrives.
         scroll.CancelWheelMotion(); previous.Source = image.Source; image.Source = page.Image; displayed = page; scroll.ScrollToTop();
-        displayedText = null; textPanel.Visibility = Visibility.Collapsed; textContent.Clear(); image.Visibility = Visibility.Visible;
+        displayedText = null; displayedTextViewModel = null; textPanel.Visibility = Visibility.Collapsed; textContent.Clear(); image.Visibility = Visibility.Visible;
         var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1));
         fade.Completed += (_, _) => { if (ReferenceEquals(displayed, page)) previous.Source = null; };
         image.BeginAnimation(OpacityProperty, fade, HandoffBehavior.SnapshotAndReplace);
+    }
+    private void ApplyTextOptions(TextPreviewViewModel view)
+    {
+        textContent.FontFamily = view.Result.Monospace ? new FontFamily("Cascadia Mono, Consolas") : new FontFamily("Segoe UI Variable Text, Segoe UI");
+        lineNumbers.FontFamily = textContent.FontFamily;
+        textContent.TextWrapping = view.WordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        scroll.HorizontalScrollBarVisibility = view.WordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        lineNumbers.Text = view.Lines.Numbers(view.Result.FirstLineNumber); lineNumbers.Visibility = view.ShowLineNumbers ? Visibility.Visible : Visibility.Collapsed;
+    }
+    private void UpdateTextButtonState(TextPreviewViewModel view)
+    {
+        wrapToggle.Opacity = view.WordWrap ? 1 : .55; linesToggle.Opacity = view.ShowLineNumbers ? 1 : .55;
+        wrapToggle.ToolTip = view.WordWrap ? "自动换行：已开启" : "自动换行：已关闭";
+        linesToggle.ToolTip = view.ShowLineNumbers ? "行号：已显示" : "行号：已隐藏";
     }
     private void Reveal()
     {

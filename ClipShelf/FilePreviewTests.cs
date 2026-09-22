@@ -48,10 +48,10 @@ internal static class FilePreviewTests
         void Check(bool value, string label) { if (!value) throw new Exception(label); checks.Add(label); }
         using var cache = new PreviewCacheService(Path.Combine(root, "cache"));
         try {
-            string small = Path.Combine(root, "small.pdf"), large = Path.Combine(root, "large.pdf"), unsupported = Path.Combine(root, "other.xlsx");
-            MakePdf(small, 4); MakePdf(large, 180, 65536); File.WriteAllText(unsupported, "Never parse this as a spreadsheet");
-            foreach (string ext in new[] { ".pdf", ".docx", ".PPTX", ".png", ".JPG", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".ico" }) Check(PreviewFormatRegistry.Get("file" + ext) != PreviewFormat.Unsupported, "Allow " + ext);
-            foreach (string ext in new[] { ".doc", ".ppt", ".xlsx", ".xls", ".mp3", ".mp4", ".zip", ".txt", ".docm", ".pptm", ".exe", "" }) Check(PreviewFormatRegistry.Get("file" + ext) == PreviewFormat.Unsupported, "Reject " + ext);
+            string small = Path.Combine(root, "small.pdf"), large = Path.Combine(root, "large.pdf"), unsupported = Path.Combine(root, "other.xlsx"), otherUnsupported = Path.Combine(root, "other.zip");
+            MakePdf(small, 4); MakePdf(large, 180, 65536); File.WriteAllText(unsupported, "Never parse this as a spreadsheet"); File.WriteAllText(otherUnsupported, "Never parse this as an archive");
+            foreach (string ext in new[] { ".pdf", ".docx", ".PPTX", ".png", ".JPG", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".ico", ".txt", ".md", ".json", ".cs", ".ps1" }) Check(PreviewFormatRegistry.Get("file" + ext) != PreviewFormat.Unsupported, "Allow " + ext);
+            foreach (string ext in new[] { ".doc", ".ppt", ".xlsx", ".xls", ".mp3", ".mp4", ".zip", ".docm", ".pptm", ".exe", "" }) Check(PreviewFormatRegistry.Get("file" + ext) == PreviewFormat.Unsupported, "Reject " + ext);
             await TextImagePreviewTests.RunAsync(root, cache, Check);
             var folder = Item(small); folder.IsDirectory = true; Check(!PreviewFormatRegistry.Supports(folder), "Directories cannot masquerade as PDFs");
             Check(PreviewSession.BoundPage(-10, 12) == 0 && PreviewSession.BoundPage(200, 12) == 11 && PreviewSession.BoundPage(1, 0) == 0, "Page boundaries");
@@ -79,18 +79,28 @@ internal static class FilePreviewTests
                 var stale = session.CurrentRequest;
                 session.NavigatePage(1); session.NavigatePage(1); session.NavigatePage(1); await session.Pending;
                 Check(session.Page == 3 && session.Presented?.Page == 3 && !session.Accepts(stale), "Rapid paging commits only latest document/page/version");
-                session.NavigateRecord(1); Check(session.Index == 2, "Down skips unsupported records"); await session.Pending;
+                session.NavigateRecord(1); await session.Pending; Check(session.Index == 1 && session.Error?.Code == "Unsupported", "Down stops on the adjacent unsupported record");
+                session.NavigateRecord(1); await session.Pending; Check(session.Index == 2 && session.Error is null, "Down continues from unsupported to the next previewable record");
                 session.SetPage(9999); await session.Pending; Check(session.Page == 179, "End clamps to last page");
-                session.NavigateRecord(-1); await session.Pending; Check(session.Page == 3, "Session restores visited page");
+                session.NavigateRecord(-1); await session.Pending; Check(session.Index == 1 && session.Error?.Code == "Unsupported", "Up stops on the adjacent unsupported record");
+                session.NavigateRecord(-1); await session.Pending; Check(session.Page == 3, "Session restores visited page after crossing an unsupported record");
                 session.HandleKey(Key.Home); await session.Pending; Check(session.Page == 0, "Home goes to first page");
-                session.NavigateRecord(1); session.NavigateRecord(1); await session.Pending; Check(session.Error?.Code == "MissingFile", "Missing document is an inline error");
+                session.NavigateRecord(1); session.NavigateRecord(1); session.NavigateRecord(1); await session.Pending; Check(session.Error?.Code == "MissingFile", "Missing document is an inline error");
                 session.Cancel(); var closedStamp = session.CurrentRequest; session.NavigateRecord(-1); Check(!session.Accepts(closedStamp), "Closed session rejects every result");
+            }
+            var adjacent = new[] { Item(unsupported), Item(small), Item(otherUnsupported) };
+            await using (var session = new PreviewSession(adjacent, 1, cache)) {
+                session.Start(); await session.Pending;
+                session.NavigateRecord(-1); await session.Pending; Check(session.Index == 0 && session.Error?.Code == "Unsupported", "Up reaches an unsupported record immediately before a previewable record");
+                session.NavigateRecord(1); await session.Pending; Check(session.Index == 1 && session.Presented?.Count == 4 && session.Error is null, "Down returns from unsupported to the supported record");
+                session.NavigateRecord(1); await session.Pending; Check(session.Index == 2 && session.Error?.Code == "Unsupported", "Down reaches an unsupported record immediately after a previewable record");
+                session.NavigateRecord(-1); await session.Pending; Check(session.Index == 1 && session.Presented?.Count == 4 && session.Error is null, "Up returns from the following unsupported record");
             }
             // A deliberately non-cooperative renderer verifies stale completion rejection independently of cancellation.
             var delayed = new DelayedRenderer();
             await using (var session = new PreviewSession(records, 0, cache, delayed)) {
                 session.Start(); await delayed.Started.Task; var obsolete = session.Pending;
-                session.NavigateRecord(1); await session.Pending;
+                session.NavigateRecord(1); session.NavigateRecord(1); await session.Pending;
                 delayed.Release.TrySetResult(); await obsolete;
                 Check(session.Presented?.DocumentId == DocumentIdentity.Read(large).Id, "Old file result cannot overwrite new file even when cancellation is ignored");
             }

@@ -11,6 +11,9 @@ internal static class PreviewFormatRegistry
     internal static PreviewFormat Get(string? path) => Path.GetExtension(path ?? "").ToLowerInvariant() switch {
         ".pdf" => PreviewFormat.Pdf, ".docx" => PreviewFormat.Word,
         ".pptx" => PreviewFormat.PowerPoint,
+        ".txt" or ".md" or ".log" or ".json" or ".xml" or ".csv" or ".ini" or ".yaml" or ".yml" or
+        ".cs" or ".cpp" or ".h" or ".py" or ".js" or ".ts" or ".html" or ".css" or ".sql" or
+        ".ps1" or ".bat" or ".cmd" => PreviewFormat.Text,
         ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff" or ".ico" => PreviewFormat.Image,
         _ => PreviewFormat.Unsupported };
     internal static string? PathOf(ClipItem item) => item.Kind == ClipKind.Image ? item.ImagePath ?? item.SourcePath :

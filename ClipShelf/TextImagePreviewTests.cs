@@ -49,13 +49,15 @@ internal static class TextImagePreviewTests
             session.NavigatePage(100); check(session.Page == 0 && session.Count == 1, "Text has no accidental document pagination");
             var stamp = session.CurrentRequest;
             session.NavigateRecord(1); await session.Pending;
-            check(session.Index == 2 && session.PresentedText is null && session.Presented?.Image.PixelWidth == 640 && !session.Accepts(stamp), "Navigation skips unsupported files and switches text to image");
+            check(session.Index == 1 && session.Error?.Code == "Unsupported" && !session.Accepts(stamp), "Navigation stops on an unsupported file after text");
+            session.NavigateRecord(1); await session.Pending;
+            check(session.Index == 2 && session.PresentedText is null && session.Presented?.Image.PixelWidth == 640 && session.Error is null, "Navigation continues from unsupported file to image");
             session.NavigateRecord(1); await session.Pending;
             check(session.Presented?.Count == 4, "Image to PDF navigation keeps document pagination");
-            for (int i = 0; i < 15; i++) { session.NavigateRecord(-1); session.NavigateRecord(-1); session.NavigateRecord(1); }
-            session.NavigateRecord(-1); await session.Pending;
+            for (int i = 0; i < 15; i++) { session.NavigateRecord(-1); session.NavigateRecord(-1); session.NavigateRecord(-1); session.NavigateRecord(1); session.NavigateRecord(-1); }
+            await session.Pending;
             check(session.Index == 0 && session.PresentedText?.Text == text.Text && session.Presented is null, "Rapid mixed navigation settles on latest text without stale image");
-            session.NavigateRecord(1); session.Cancel(); await session.Pending;
+            session.NavigateRecord(1); session.NavigateRecord(1); session.Cancel(); await session.Pending;
             check(session.PresentedText?.Text == text.Text, "Close during image loading cannot replace visible text");
         }
         string corrupt = Path.Combine(root, "corrupt.png"); File.WriteAllText(corrupt, "not an image");
@@ -76,11 +78,15 @@ internal static class TextImagePreviewTests
             Capture(window, Path.Combine(root, "restored-text-light.png"));
             void Key(Key key) => window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
             Key(System.Windows.Input.Key.Down); await window.PendingRender; await Task.Delay(160); window.UpdateLayout();
-            check(window.RecordIndex == 2 && window.PresentedContent is Image { Source: not null }, "Routed Down opens image after text");
+            check(window.RecordIndex == 1 && window.Session.Error?.Code == "Unsupported" && window.DisplayedLocation.Contains("unsupported.xlsx"), "Routed Down opens the adjacent unsupported preview page");
+            Key(System.Windows.Input.Key.Down); await window.PendingRender; await Task.Delay(160); window.UpdateLayout();
+            check(window.RecordIndex == 2 && window.PresentedContent is Image { Source: not null }, "A second routed Down continues from unsupported to image");
             Capture(window, Path.Combine(root, "restored-image-light.png"));
             var scroll = FilePreviewTests.All<ScrollViewer>(window).First();
             scroll.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -120) { RoutedEvent = Mouse.MouseWheelEvent });
             check(window.RecordIndex == 2 && window.PageIndex == 0, "Image wheel cannot switch records or pages");
+            Key(System.Windows.Input.Key.Up); await window.PendingRender;
+            check(window.RecordIndex == 1 && window.Session.Error?.Code == "Unsupported", "Routed Up returns to the adjacent unsupported preview page");
             Key(System.Windows.Input.Key.Up); await window.PendingRender;
             ThemeManager.Apply(new AppSettings { Theme = "Dark" }); await Task.Delay(220); window.UpdateLayout();
             Capture(window, Path.Combine(root, "restored-text-dark.png"));

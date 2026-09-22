@@ -408,6 +408,13 @@ public partial class MainWindow
         var window = new PreviewWindow(visible.ToArray(), index, previewCache) { Owner = this };
         if (HistoryList.ItemContainerGenerator.ContainerFromIndex(index) is FrameworkElement row)
             window.SetAnimationOrigin(row.TranslatePoint(new Point(0, row.ActualHeight / 2), this).Y / Math.Max(1, ActualHeight));
+        window.RecordChanged += item => {
+            int current = visible.FindIndex(candidate => candidate.Id == item.Id);
+            if (current < 0) return;
+            // Preview owns keyboard focus. Update only the shelf's logical/visual
+            // selection and viewport; focusing the row would steal arrow keys back.
+            CollapseSelection(current); HistoryList.ScrollIntoView(visible[current]);
+        };
         preview = window;
         window.Closed += (_, _) => {
             if (ReferenceEquals(preview, window)) preview = null;

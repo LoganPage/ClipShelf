@@ -17,6 +17,7 @@ public partial class App : Application
         if (e.Args.Length == 2 && e.Args[0] == "--tooltip-test") { await ToolTipPresentationTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--update-test") { await WindowsUpdateTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--native-preview-test") { await NativePreviewTests.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--text-preview-test") { await TextFilePreviewTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--native-preview-benchmark") { await NativePreviewBenchmark.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--theme-transition-test") { await ThemeTransitionTests.Run(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--preview-interaction-test") { await PreviewInteractionTests.Run(e.Args[1]); return; }

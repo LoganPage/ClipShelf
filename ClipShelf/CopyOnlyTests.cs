@@ -56,6 +56,8 @@ public static class CopyOnlyTests
         {
             var assembly = typeof(MainWindow).Assembly;
             Check(!assembly.GetTypes().Any(type => type.Name.Contains("Paste", StringComparison.Ordinal)), "No automatic-paste implementation or legacy paste fixture remains in the assembly");
+            Check(NativeClipboard.Files(new[] { @"C:\fixture.txt" }).Count == 1,
+                "Historical file records emit only a file-copy payload and never replay a cut marker");
             Check(!typeof(NativeMethods).GetMethods(BindingFlags.Static | BindingFlags.NonPublic).Any(method => method.Name is "SendInput" or "SetWinEventHook" or "GetAsyncKeyState"), "No native input injection, target tracking hook, or modifier polling API remains");
             Check(!typeof(WindowsIntegration).GetMembers(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).Any(member => member.Name.Contains("Foreground", StringComparison.Ordinal) || member.Name.Contains("Paste", StringComparison.Ordinal)), "Clipboard integration has no external foreground state or paste entry point");
             window = Fixture(directory); window.Left = window.Top = -12000;

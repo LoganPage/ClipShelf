@@ -6,7 +6,9 @@ using System.Windows.Media.Imaging;
 
 namespace ClipShelf;
 
-internal sealed record TextPreviewResult(string RecordId, string Text, bool Truncated);
+internal sealed record TextPreviewResult(string RecordId, string Text, bool Truncated, bool IsFile = false,
+    bool IsLarge = false, bool HasPrevious = false, bool HasNext = false, int SegmentIndex = 0,
+    int FirstLineNumber = 1, string EncodingName = "", bool Monospace = false, string Notice = "");
 
 // Text and raster images share the session's cancellation/version boundary, not the Office pipeline.
 internal sealed class TextImagePreviewService(PreviewCacheService cache)
