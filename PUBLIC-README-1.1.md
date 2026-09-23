@@ -1,18 +1,18 @@
 # ClipShelf Windows 使用说明
 
-[← 返回仓库首页](../README.md) · [下载页面](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.2.10) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
+[← 返回仓库首页](../README.md) · [下载页面](https://github.com/LoganPage/ClipShelf/releases/tag/windows-v1.3.4) · [反馈问题](https://github.com/LoganPage/ClipShelf/issues)
 
 把复制过的文字、图片和文件保存在本机，随时搜索、预览和再次复制。
 
 ## 1. 下载 Windows 版
 
-**[下载 ClipShelf Windows 1.2.10（x64 ZIP）](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.2.10/ClipShelf-Windows-v1.2.10-public-x64.zip)**
+**[下载 ClipShelf Windows 1.3.4（x64 ZIP）](https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.3.4/ClipShelf-Windows-v1.3.4-public-x64.zip)**
 
 - 系统：Windows 10 2004 或更新版本，推荐 Windows 11。
 - 架构：x64；当前没有单独的 ARM64 安装包。
 - 状态：体验版，尚未签名；已包含 .NET 运行时，无需另外安装。
 
-> 只想使用软件，请下载上面的 **ClipShelf-Windows-v1.2.10-public-x64.zip**。不要下载 GitHub 自动生成的 **Source code**，那是源码，不是可直接运行的软件。名称只有 **ClipShelf.zip** 的现有发布包属于 Mac 版。
+> 只想使用软件，请下载上面的 **ClipShelf-Windows-v1.3.4-public-x64.zip**。不要下载 GitHub 自动生成的 **Source code**，那是源码，不是可直接运行的软件。名称只有 **ClipShelf.zip** 的现有发布包属于 Mac 版。
 >
 > Mac 和 Windows 使用不同的版本号。发布列表的第一项或“Latest”不一定是 Windows 新版；Windows 用户以本页下载入口为准。
 
