@@ -130,6 +130,46 @@ internal static class NativePreviewTests
                 for (int i = 0; i < 15; i++) session.NavigatePage(1); await session.Pending; Check(session.Page == 9, "Rapid PPTX arrows clamp at final slide");
                 session.NavigateRecord(1); session.Cancel(); await session.Pending; Check(!session.Accepts(session.CurrentRequest), "Closing rejects all late results");
             }
+            Check(!new AppSettings().PrewarmAdjacentPreview, "Adjacent preview warming defaults off for existing settings");
+            var warmRecords = new[] { FilePreviewTests.Item(Path.Combine(root, "slides-10.pptx")), FilePreviewTests.Item(doc), FilePreviewTests.Item(Path.Combine(root, "pdf-20.pdf")) };
+            using (var warmCache = new PreviewCacheService(Path.Combine(root, "warmup-cache"))) {
+                await using var warmSession = new PreviewSession(warmRecords, 1, warmCache, prewarmAdjacent: true);
+                warmSession.Start(); await warmSession.Pending; await warmSession.PrefetchPending; await warmSession.WarmupPending;
+                Check(warmSession.WarmupCompleted == 2, "Low-priority warmup prepares both adjacent records");
+                foreach (var neighbor in new[] { warmRecords[0], warmRecords[2] }) {
+                    var id = DocumentIdentity.Read(neighbor.FilePaths[0]);
+                    Check(warmCache.ReadPage(PreviewCacheService.RenderKey(id, 0, warmSession.PixelWidth, warmSession.PixelDpi), default) is not null,
+                        "Warmup uses the ordinary foreground page-cache key");
+                }
+                var oldRequest = warmSession.CurrentRequest;
+                warmSession.SetZoomFactor(1.37); await warmSession.Pending;
+                Check(warmSession.ZoomFactor == 1.37 && warmSession.Presented?.Image.PixelWidth > 1000 && !warmSession.Accepts(oldRequest),
+                    "Arbitrary zoom rerenders a sharper layer and rejects the old request");
+                var zoomId = DocumentIdentity.Read(doc);
+                Check(PreviewCacheService.RenderKey(zoomId, 0, 1370, 96, zoom: 1.37) != PreviewCacheService.RenderKey(zoomId, 0, 1370, 96),
+                    "Zoom factor separates otherwise identical resolution cache entries");
+                warmSession.NavigateRecord(1); await warmSession.Pending;
+                Check(warmSession.ZoomFactor == 1 && warmSession.Index == 2 && !warmSession.Accepts(oldRequest), "Record navigation cancels obsolete zoom and resets the next record");
+                warmSession.Cancel(); await warmSession.Pending; await warmSession.WarmupPending;
+                Check(warmCache.Scheduler.QueuedCount == 0, "Closing removes stale speculative jobs from the renderer queue");
+            }
+            using (var bounded = new PreviewCacheService(Path.Combine(root, "bounded-layer-cache"))) {
+                var bytes = new byte[800 * 800 * 4]; var bitmap = BitmapSource.Create(800, 800, 96, 96, PixelFormats.Bgra32, null, bytes, 800 * 4); bitmap.Freeze();
+                bounded.SetActiveDocument("active"); bounded.Put("native-2:active:0:800:96:Normal:z1000", bitmap);
+                for (int i = 0; i < 32; i++) bounded.Put($"native-2:other-{i}:0:800:96:Normal:z1000", bitmap);
+                Check(bounded.MemoryBytes <= PreviewCacheService.MemoryLimit && bounded.PageCount <= 24 && bounded.Get("native-2:active:0:800:96:Normal:z1000") is not null,
+                    "Zoom layers respect 64 MiB / 24 pages and preserve the current document over older neighbors");
+            }
+            using (var cancelQueue = new CancellationTokenSource()) {
+                var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var release = new ManualResetEventSlim();
+                Task blocker = cache.Scheduler.Run(() => { started.TrySetResult(); release.Wait(); return true; }, default);
+                await started.Task;
+                var queued = Enumerable.Range(0, 40).Select(_ => cache.Scheduler.Run(() => true, cancelQueue.Token, 2)).ToArray();
+                cancelQueue.Cancel(); await Task.WhenAll(queued.Select(async job => { try { await job; } catch (OperationCanceledException) { } }));
+                Check(cache.Scheduler.QueuedCount == 0, "Cancelled warmup jobs leave the priority queue without piling up");
+                release.Set(); await blocker;
+            }
             using (var cancel = new CancellationTokenSource()) { cancel.Cancel(); bool cancelled = false; try { await cache.Scheduler.Run(() => 1, cancel.Token); } catch (OperationCanceledException) { cancelled = true; } Check(cancelled, "Scheduler observes cancellation before execution"); }
             string bad = Path.Combine(root, "bad.docx"); Package(bad, new() { ["word/document.xml"] = Xml("<broken>") });
             await Error(bad, "InvalidPackage");
@@ -170,6 +210,11 @@ internal static class NativePreviewTests
             var window = new PreviewWindow(records, 2, cache) { ShowActivated = false, ShowInTaskbar = false };
             try { var showTimer = Stopwatch.StartNew(); window.Show(); timing["container-show-call-ms"] = showTimer.Elapsed.TotalMilliseconds; await FilePreviewTests.Idle(); await window.PendingRender; await Task.Delay(400); window.UpdateLayout();
                 SaveWindow(window, Path.Combine(root, "preview-window.png")); double width = window.ActualWidth, height = window.ActualHeight;
+                window.ZoomTo(1.2); window.ZoomTo(1.43); await Task.Delay(280); await window.PendingRender; window.UpdateLayout();
+                Check(window.Session.ZoomFactor == 1.43 && window.ActualWidth == width && window.ActualHeight == height,
+                    "Debounced zoom applies only its latest target without resizing the outer preview window");
+                SaveWindow(window, Path.Combine(root, "preview-zoom.png"));
+                window.ZoomTo(1); await Task.Delay(280); await window.PendingRender;
                 for (int i = 0; i < 20; i++) { Send(window, Key.Right); Send(window, Key.Left); } await window.PendingRender;
                 Check(window.ActualWidth == width && window.ActualHeight == height && window.PageIndex == 0, "Real preview routed keys keep fixed window and final page");
                 foreach (bool dark in new[] { false, true }) { ThemeManager.Apply(new AppSettings { Theme = dark ? "Dark" : "Light" }); await Task.Delay(220); window.UpdateLayout();

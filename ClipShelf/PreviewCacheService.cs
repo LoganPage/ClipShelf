@@ -25,7 +25,7 @@ internal sealed class PreviewCacheService : IDisposable
     private int diskPending;
     internal long Hits, Misses;
     internal sealed record PageHeader(string Id, int Page, int Count, bool CountFinal, bool Approximate, string[] Warnings);
-    internal static string RenderKey(DocumentIdentity id, int page, int width, double dpi = 96, PreviewQuality quality = PreviewQuality.Normal) => $"{PreviewProviderRegistry.Version}:{id.Id}:{page}:{((width + 63) / 64) * 64}:{Math.Round(dpi / 24) * 24}:{quality}";
+    internal static string RenderKey(DocumentIdentity id, int page, int width, double dpi = 96, PreviewQuality quality = PreviewQuality.Normal, double zoom = 1) => $"{PreviewProviderRegistry.Version}:{id.Id}:{page}:{((width + 63) / 64) * 64}:{Math.Round(dpi / 24) * 24}:{quality}:z{Math.Round(Math.Clamp(zoom, .5, 4) * 1000)}";
     private string DiskPath(string key) => Path.Combine(Root, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))));
     internal RenderedPage? ReadPage(string key, CancellationToken token) {
         using var timing = PreviewMetrics.Measure("cache-query"); token.ThrowIfCancellationRequested();
@@ -35,7 +35,7 @@ internal sealed class PreviewCacheService : IDisposable
             var meta = new FileInfo(path + ".json"); var png = new FileInfo(path + ".png");
             if (!meta.Exists || !png.Exists || meta.Length > 65536 || png.Length > 32 * 1024 * 1024) { Interlocked.Increment(ref Misses); return null; }
             var h = JsonSerializer.Deserialize<PageHeader>(File.ReadAllText(meta.FullName)); if (h is null || h.Id.Length != 64 || !h.Id.All(Uri.IsHexDigit) || h.Page < 0 || h.Count is < 1 or > 10000 || (h.CountFinal && h.Page >= h.Count)) return null;
-            var bitmap = PreviewSceneRenderer.Decode(File.ReadAllBytes(png.FullName), 2200, token);
+            var bitmap = PreviewSceneRenderer.Decode(File.ReadAllBytes(png.FullName), 4096, token);
             Put(key, bitmap); Model(key, h, 256); Interlocked.Increment(ref Hits); return new(h.Id, h.Page, h.Count, bitmap, h.CountFinal, IsApproximate: h.Approximate, Warnings: h.Warnings);
         } catch (OperationCanceledException) { throw; } catch { Interlocked.Increment(ref Misses); return null; }
     }
@@ -55,6 +55,9 @@ internal sealed class PreviewCacheService : IDisposable
     private readonly object sync = new();
     private readonly Dictionary<string, (BitmapSource Image, long Bytes, long Access)> pages = new();
     private long bytes, clock;
+    private string? activeDocumentId;
+    internal void SetActiveDocument(string? id) { lock (sync) activeDocumentId = id; }
+    internal int PageCount { get { lock (sync) return pages.Count; } }
     internal long MemoryBytes { get { lock (sync) return bytes; } }
     internal PreviewCacheService(string? root = null) => Root = root ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipShelf-PreviewCache", "native-v1");
     internal BitmapSource? Get(string key)
@@ -68,7 +71,11 @@ internal sealed class PreviewCacheService : IDisposable
         lock (sync) {
             if (pages.Remove(key, out var old)) bytes -= old.Bytes;
             pages[key] = (image, cost, ++clock); bytes += cost;
-            while (bytes > MemoryLimit || pages.Count > 24) { var victim = pages.MinBy(x => x.Value.Access); bytes -= victim.Value.Bytes; pages.Remove(victim.Key); }
+            while (bytes > MemoryLimit || pages.Count > 24) {
+                var victim = pages.Where(x => activeDocumentId is null || !x.Key.Contains(":" + activeDocumentId + ":", StringComparison.Ordinal)).OrderBy(x => x.Value.Access).FirstOrDefault();
+                if (victim.Key is null) victim = pages.MinBy(x => x.Value.Access);
+                bytes -= victim.Value.Bytes; pages.Remove(victim.Key);
+            }
         }
     }
     // Only our cache directory and recognized generated names are eligible for cleanup.

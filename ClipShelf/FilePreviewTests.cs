@@ -126,7 +126,8 @@ internal static class FilePreviewTests
             void SendKey(PreviewWindow target, System.Windows.Input.Key key) => target.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(target)!, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
             for (int i = 0; i < 20; i++) { SendKey(window, System.Windows.Input.Key.Right); SendKey(window, System.Windows.Input.Key.Left); }
             SendKey(window, System.Windows.Input.Key.Down); SendKey(window, System.Windows.Input.Key.Up); await window.PendingRender;
-            Check(window.RecordIndex == 0 && window.Session.Presented?.DocumentId == id.Id, "Routed rapid arrows stay inside preview and settle on latest document");
+            Check(window.RecordIndex == 0 && window.Session.Presented?.DocumentId == id.Id,
+                $"Routed rapid arrows stay inside preview and settle on latest document (index={window.RecordIndex}, error={window.Session.Error?.Code})");
             foreach (bool dark in new[] { false, true }) {
                 ThemeManager.Apply(new AppSettings { Theme = dark ? "Dark" : "Light" }); await Task.Delay(220); window.UpdateLayout();
                 foreach (double dpi in new[] { 1.25, 1.5, 2.0 }) {

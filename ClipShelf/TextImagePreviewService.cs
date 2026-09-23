@@ -22,10 +22,10 @@ internal sealed class TextImagePreviewService(PreviewCacheService cache)
         return new TextPreviewResult(item.Id.ToString(), text[..length], length < text.Length);
     }, token);
 
-    internal Task<RenderedPage> RenderImageAsync(DocumentIdentity identity, int width, CancellationToken token) => Task.Run(() => {
+    internal Task<RenderedPage> RenderImageAsync(DocumentIdentity identity, int width, CancellationToken token, double zoom = 1) => Task.Run(() => {
         token.ThrowIfCancellationRequested();
-        width = Math.Clamp(width, 480, 1800);
-        string key = $"image-v1:{identity.Id}:{width}";
+        width = Math.Clamp(width, 240, 4096);
+        string key = $"image-v1:{identity.Id}:{width}:z{Math.Round(Math.Clamp(zoom, .5, 4) * 1000)}";
         if (cache.Get(key) is { } cached) return new RenderedPage(identity.Id, 0, 1, cached);
         try {
             if (identity.Size > 256L * 1024 * 1024) throw new PreviewException("ImageTooLarge", "图片文件超过 256 MB，无法安全生成快速预览。");
@@ -33,7 +33,7 @@ internal sealed class TextImagePreviewService(PreviewCacheService cache)
             var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
             var frame = decoder.Frames[0];
             if ((long)frame.PixelWidth * frame.PixelHeight > 200_000_000) throw new PreviewException("ImageTooLarge", "图片像素尺寸过大，无法安全生成快速预览。");
-            double scale = Math.Min(1, Math.Min((double)width / frame.PixelWidth, 2400d / frame.PixelHeight));
+            double scale = Math.Min(1, Math.Min((double)width / frame.PixelWidth, Math.Min(5600d / frame.PixelHeight, Math.Sqrt(14_000_000d / ((double)frame.PixelWidth * frame.PixelHeight)))));
             int targetWidth = Math.Max(1, (int)(frame.PixelWidth * scale));
             token.ThrowIfCancellationRequested();
             stream.Position = 0;

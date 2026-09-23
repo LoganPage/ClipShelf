@@ -50,13 +50,13 @@ internal static class PreviewSceneRenderer
         using var stream = new MemoryStream(bytes, false);
         var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None); var frame = decoder.Frames[0];
         ValidateImageSize(frame.PixelWidth, frame.PixelHeight);
-        double scale = Math.Min(1, Math.Min(Math.Clamp(width, 1, 2200) / (double)Math.Max(1, frame.PixelWidth), 3200d / Math.Max(1, frame.PixelHeight)));
+        double scale = Math.Min(1, Math.Min(Math.Clamp(width, 1, 4096) / (double)Math.Max(1, frame.PixelWidth), Math.Min(5600d / Math.Max(1, frame.PixelHeight), Math.Sqrt(14_000_000d / ((double)frame.PixelWidth * frame.PixelHeight)))));
         stream.Position = 0; var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad;
         bitmap.DecodePixelWidth = Math.Max(1, (int)(frame.PixelWidth * scale)); bitmap.StreamSource = stream; bitmap.EndInit(); bitmap.Freeze(); token.ThrowIfCancellationRequested(); return bitmap;
     }
     internal static BitmapSource Render(PreviewScene scene, int width, CancellationToken token, HashSet<string>? warnings = null) {
         using var timing = PreviewMetrics.Measure("scene-draw");
-        double scale = Math.Min(Math.Clamp(width, 240, 2200) / scene.Width, Math.Min(3600 / scene.Height, Math.Sqrt(6_000_000 / (scene.Width * scene.Height))));
+        double scale = Math.Min(Math.Clamp(width, 240, 4096) / scene.Width, Math.Min(5600 / scene.Height, Math.Sqrt(14_000_000 / (scene.Width * scene.Height))));
         var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen()) {
             dc.PushTransform(new ScaleTransform(scale, scale)); dc.PushClip(new RectangleGeometry(new Rect(0, 0, scene.Width, scene.Height)));

@@ -13,7 +13,7 @@ internal sealed record RenderedPage(string DocumentId, int Page, int Count, Bitm
 internal interface IPreviewPageRenderer : IAsyncDisposable
 {
     Task<RenderedPage> RenderAsync(DocumentIdentity identity, int page, int width, CancellationToken token);
-    async Task<RenderedPage> RenderViewportAsync(DocumentIdentity identity, int page, int width, double dpi, long version, CancellationToken token) => (await RenderAsync(identity, page, width, token)) with { RequestVersion = version };
+    async Task<RenderedPage> RenderViewportAsync(DocumentIdentity identity, int page, int width, double dpi, long version, CancellationToken token, double zoom = 1) => (await RenderAsync(identity, page, width, token)) with { RequestVersion = version };
     Task<RenderedPage?> ThumbnailAsync(DocumentIdentity identity, CancellationToken token) => Task.FromResult<RenderedPage?>(null);
     Task<int?> CompletePaginationAsync(DocumentIdentity identity, CancellationToken token) => Task.FromResult<int?>(null);
 }
@@ -39,23 +39,23 @@ internal sealed class PdfPageRenderService(PreviewCacheService cache) : IPreview
         finally { gate.Release(); }
     }
     public Task<RenderedPage> RenderAsync(DocumentIdentity id, int page, int width, CancellationToken token) => RenderViewportAsync(id, page, width, 96, 0, token);
-    public Task<RenderedPage> RenderViewportAsync(DocumentIdentity id, int page, int width, double dpi, long version, CancellationToken token) => Task.Run<RenderedPage>(async () => {
+    public Task<RenderedPage> RenderViewportAsync(DocumentIdentity id, int page, int width, double dpi, long version, CancellationToken token, double zoom = 1) => Task.Run<RenderedPage>(async () => {
         await gate.WaitAsync(token);
         try {
             token.ThrowIfCancellationRequested();
             if (DocumentIdentity.Read(id.Path).Id != id.Id) throw new PreviewException("Changed", "文件已修改，请重新加载预览。");
-            string earlyKey = PreviewCacheService.RenderKey(id, page, width, dpi);
+            string earlyKey = PreviewCacheService.RenderKey(id, page, width, dpi, zoom: zoom);
             if (cache.ReadPage(earlyKey, token) is { } early && early.DocumentId == id.Id && early.Page == page) return early with { RequestVersion = version };
             var provider = await Open(id, token); var info = await provider.GetDocumentInfoAsync(token);
             cache.Model(id.Id + ":info", info, 512);
             page = info.PageCount is int count ? Math.Clamp(page, 0, count - 1) : Math.Max(0, page);
-            string key = PreviewCacheService.RenderKey(id, page, width, dpi);
+            string key = PreviewCacheService.RenderKey(id, page, width, dpi, zoom: zoom);
             if (cache.ReadPage(key, token) is { } hit && hit.DocumentId == id.Id && hit.Page == page) return hit with { RequestVersion = version };
             var result = await provider.RenderPageAsync(page, width, dpi, PreviewQuality.Normal, version, token);
             info = await provider.GetDocumentInfoAsync(token);
             if (DocumentIdentity.Read(id.Path).Id != id.Id) throw new PreviewException("Changed", "文件已修改，请重新加载预览。");
             var rendered = new RenderedPage(id.Id, result.PageIndex, info.PageCount ?? result.PageIndex + 1, result.RenderedBitmap, info.PageCount is not null, result.Quality, result.IsApproximate, result.Warnings, version);
-            cache.WritePage(PreviewCacheService.RenderKey(id, result.PageIndex, width, dpi), rendered); return rendered;
+            cache.WritePage(PreviewCacheService.RenderKey(id, result.PageIndex, width, dpi, zoom: zoom), rendered); return rendered;
         } finally { gate.Release(); }
     }, token);
     public async Task<int?> CompletePaginationAsync(DocumentIdentity id, CancellationToken token) {

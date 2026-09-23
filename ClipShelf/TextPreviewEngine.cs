@@ -184,9 +184,12 @@ internal sealed class TextPreviewDocument
 internal sealed class TextFilePreviewProvider(PreviewCacheService cache)
 {
     private readonly TextChunkReader reader = new();
+    private sealed record TextPreviewSeed(TextEncodingInfo Encoding, TextChunk First);
     internal async Task<TextPreviewDocument> OpenAsync(DocumentIdentity identity, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         string key = "text-encoding-v1:" + identity.Id;
+        if (cache.Model<TextPreviewSeed>(key) is { } warm) { token.ThrowIfCancellationRequested(); return new(identity, warm.Encoding, warm.First); }
         var encoding = cache.Model<TextEncodingInfo>(key);
         if (encoding is null) {
             encoding = await Task.Run(async () => {
@@ -195,11 +198,12 @@ internal sealed class TextFilePreviewProvider(PreviewCacheService cache)
                 int read = 0; while (read < sample.Length) { int amount = await stream.ReadAsync(sample.AsMemory(read), token); if (amount == 0) break; read += amount; }
                 return TextEncodingDetector.Detect(sample.AsSpan(0, read));
             }, token);
-            cache.Model(key, encoding, 512);
         }
         var first = await reader.ReadAsync(identity, encoding, encoding.PreambleLength, 1, token);
+        cache.Model(key, new TextPreviewSeed(encoding, first), 512 + first.Text.Length * 2L);
         return new(identity, encoding, first);
     }
+    internal async Task PrewarmAsync(DocumentIdentity identity, CancellationToken token) => _ = await OpenAsync(identity, token);
     internal Task<TextChunk> MoveAsync(TextPreviewDocument document, int direction, CancellationToken token) => document.MoveAsync(direction, reader, token);
 }
 

@@ -65,7 +65,7 @@ internal sealed class PdfPreviewProvider : IPreviewProvider
         using var timing = PreviewMetrics.Measure("pdf-draw"); token.ThrowIfCancellationRequested();
         index = Math.Clamp(index, 0, (int)pdf!.PageCount - 1);
         using var page = pdf.GetPage((uint)index); double ratio = page.Size.Height / Math.Max(1, page.Size.Width);
-        int w = Math.Max(1, (int)Math.Min(Math.Clamp(width, 240, 2200), Math.Min(3600 / Math.Max(.01, ratio), Math.Sqrt(6_000_000 / Math.Max(.01, ratio)))));
+        int w = Math.Max(1, (int)Math.Min(Math.Clamp(width, 240, 4096), Math.Min(5600 / Math.Max(.01, ratio), Math.Sqrt(14_000_000 / Math.Max(.01, ratio)))));
         using var output = new InMemoryRandomAccessStream();
         try { await page.RenderToStreamAsync(output, new PdfPageRenderOptions { DestinationWidth = (uint)w, DestinationHeight = (uint)Math.Max(1, w * ratio) }).AsTask(token); }
         catch (OperationCanceledException) { throw; } catch { throw new PreviewException("PdfRenderFailed", "PDF 当前页无法渲染，请重试或使用默认应用打开。"); }

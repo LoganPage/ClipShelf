@@ -26,7 +26,7 @@ public static class ScrollRenderingProbe
         string? error = null; int frames = 0, movedFrames = 0, packets = 0, handledPackets = 0, resets = 0, realized = 0;
         int tier = RenderCapability.Tier >> 16; bool animations = SystemParameters.ClientAreaAnimation;
         double distance = 0; long lastTick = 0; TimeSpan previousRendering = TimeSpan.MinValue;
-        PreviewCacheService? previewCache = null; IPreviewPageRenderer? previewRenderer = null; using var previewCancel = new CancellationTokenSource(); Task previewWork = Task.CompletedTask;
+        PreviewCacheService? previewCache = null; PreviewSession? previewSession = null; using var previewCancel = new CancellationTokenSource(); Task previewWork = Task.CompletedTask;
         void Check(bool ok, string name) { if (!ok) throw new InvalidOperationException(name); checks.Add(name); }
         try
         {
@@ -46,9 +46,14 @@ public static class ScrollRenderingProbe
             await Task.Delay(700);
             if (previewStress) {
                 string document = Path.Combine(fixture, "scroll-preview-load.docx"); NativePreviewTests.Docx(document, 3000);
-                previewCache = new PreviewCacheService(Path.Combine(fixture, "preview-cache")); previewRenderer = new PdfPageRenderService(previewCache);
-                var id = DocumentIdentity.Read(document);
-                previewWork = Task.Run(async () => { await previewRenderer.RenderAsync(id, 0, 1000, previewCancel.Token); await previewRenderer.CompletePaginationAsync(id, previewCancel.Token); });
+                string before = Path.Combine(fixture, "scroll-preview-before.pptx"); NativePreviewTests.Pptx(before, 10);
+                string after = Path.Combine(fixture, "scroll-preview-after.docx"); NativePreviewTests.Docx(after, 20);
+                previewCache = new PreviewCacheService(Path.Combine(fixture, "preview-cache"));
+                previewSession = new PreviewSession(new[] { FilePreviewTests.Item(before), FilePreviewTests.Item(document), FilePreviewTests.Item(after) }, 1, previewCache, prewarmAdjacent: true);
+                previewSession.Start();
+                var stressSession = previewSession;
+                previewWork = Task.Run(async () => { await stressSession.Pending; previewCancel.Token.ThrowIfCancellationRequested(); stressSession.SetZoomFactor(2.3);
+                    await stressSession.Pending; await stressSession.PrefetchPending; await stressSession.WarmupPending; }, previewCancel.Token);
             }
             Check(window.Integration is null && list.Items.Count == 1000, "Visible probe contains only 1000 synthetic records and no native integration");
             if (multiSelection) { list.SelectAll(); Check(list.SelectedItems.Count == 1000, "Scroll probe retains 1000 selected rows"); }
@@ -124,15 +129,15 @@ public static class ScrollRenderingProbe
         finally
         {
             if (handler is not null) CompositionTarget.Rendering -= handler;
-            previewCancel.Cancel(); try { await previewWork; } catch (OperationCanceledException) { } catch (Exception e) { error ??= e.GetType().Name; }
-            if (previewRenderer is not null) await previewRenderer.DisposeAsync(); previewCache?.Dispose();
+            previewCancel.Cancel(); previewSession?.Cancel(); try { await previewWork; } catch (OperationCanceledException) { } catch (Exception e) { error ??= e.GetType().Name; }
+            if (previewSession is not null) await previewSession.DisposeAsync(); previewCache?.Dispose();
             list?.CancelWheelMotion();
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(reportPath))!);
             File.WriteAllText(reportPath, JsonSerializer.Serialize(new { passed = error is null, checks, error, renderTier = tier, clientAreaAnimation = animations,
                 previewStress, multiSelection, fineWheel, frames, movedFrames, offsetChangedRatio = frames > 0 ? (double)movedFrames / frames : 0, packets, handledPackets, traveledDip = distance,
                 realizedContainers = realized, collectionResets = resets,
                 callbackIntervalMs = Summary(intervals), scheduledRenderIntervalMs = Summary(renderIntervals),
-                scope = "Visible synthetic WPF fixture; app-internal routed events, no injected system input or real clipboard. Callback intervals and offset changes are NOT measured displayed frames or a 160 FPS guarantee." }, new JsonSerializerOptions { WriteIndented = true }));
+                scope = "Visible synthetic WPF fixture with optional adjacent-record warmup and 2.3x high-resolution preview stress; app-internal routed events, no injected system input or real clipboard. Callback intervals and offset changes are NOT measured displayed frames or a 160 FPS guarantee." }, new JsonSerializerOptions { WriteIndented = true }));
             window?.Quit(); Application.Current.Shutdown(error is null ? 0 : 1);
         }
     }

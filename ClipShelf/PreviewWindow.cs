@@ -46,6 +46,8 @@ public sealed class PreviewWindow : Window
         MaxWidth = 480, MaxHeight = 120, Margin = new(0, 14, 0, 0), BorderThickness = new(0), Background = Brushes.Transparent,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Visibility = Visibility.Collapsed };
     private readonly TextBlock warnings = new() { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(16), MaxWidth = 400, TextTrimming = TextTrimming.CharacterEllipsis, IsHitTestVisible = false };
+    private readonly TextBlock zoomLabel = new() { Width = 52, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+    private readonly StackPanel zoomControls = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(16) };
     private readonly Button back, next, retry, searchToggle, wrapToggle, linesToggle, previousSegment, nextSegment;
     private RenderedPage? displayed;
     private TextPreviewResult? displayedText;
@@ -54,6 +56,8 @@ public sealed class PreviewWindow : Window
     private int lastRecordIndex;
     private bool closing, finishedClose;
     private readonly DispatcherTimer resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
+    private readonly DispatcherTimer zoomTimer = new() { Interval = TimeSpan.FromMilliseconds(220) };
+    private double visualZoom = 1;
     internal Task Cleanup { get; private set; } = Task.CompletedTask;
     internal object? PresentedContent => session.Error is not null ? errorText : displayedText is not null ? textContent : image;
     internal Task PendingRender => session.Pending;
@@ -64,14 +68,15 @@ public sealed class PreviewWindow : Window
     internal string DisplayedLocation => fileLocation.Text;
     internal TextBox TextContent => textContent;
     internal TextBox PreviewSearch => previewSearch;
+    internal void ZoomTo(double factor) => SetVisualZoom(factor);
     internal event Action<ClipItem>? RecordChanged;
     private string? ActionPath => session.Path ?? session.Current.SourcePath ?? (session.Current.FilePaths.Count > 0 ? session.Current.FilePaths[0] : null);
     internal void SetAnimationOrigin(double rowFraction) => card.RenderTransformOrigin = new Point(.5, Math.Clamp(rowFraction, .1, .9));
     public PreviewWindow(IReadOnlyList<ClipItem> items, int index) : this(items, index, null) { }
-    internal PreviewWindow(IReadOnlyList<ClipItem> items, int index, PreviewCacheService? sharedCache)
+    internal PreviewWindow(IReadOnlyList<ClipItem> items, int index, PreviewCacheService? sharedCache, bool prewarmAdjacent = false)
     {
         if (items.Count == 0) throw new ArgumentException("No preview items", nameof(items));
-        cache = sharedCache ?? new(); ownsCache = sharedCache is null; session = new(items, index, cache); lastRecordIndex = session.Index;
+        cache = sharedCache ?? new(); ownsCache = sharedCache is null; session = new(items, index, cache, prewarmAdjacent: prewarmAdjacent); lastRecordIndex = session.Index;
         Width = 900; Height = 720; MinWidth = 620; MinHeight = 420; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Title = "快速预览 · ClipShelf";
         SetResourceReference(BackgroundProperty, "BackgroundBrush"); SetResourceReference(ForegroundProperty, "TextBrush");
@@ -92,7 +97,6 @@ public sealed class PreviewWindow : Window
         var content = new Grid { ClipToBounds = true, Margin = new(10, 0, 10, 10) }; Grid.SetRow(content, 1); layout.Children.Add(content);
         var pageLayers = new Grid { Margin = new(12) };
         var retained = new Canvas { IsHitTestVisible = false, ClipToBounds = true };
-        previous.SetBinding(WidthProperty, new System.Windows.Data.Binding(nameof(ActualWidth)) { Source = pageLayers });
         retained.Children.Add(previous); pageLayers.Children.Add(retained); pageLayers.Children.Add(image);
         textContent.SetResourceReference(ForegroundProperty, "TextBrush"); textNotice.SetResourceReference(ForegroundProperty, "MutedBrush");
         lineNumbers.SetResourceReference(ForegroundProperty, "MutedBrush");
@@ -104,6 +108,12 @@ public sealed class PreviewWindow : Window
         segmentControls.Children.Add(previousSegment); segmentControls.Children.Add(nextSegment); Grid.SetRow(segmentControls, 2); textPanel.Children.Add(segmentControls);
         pageLayers.Children.Add(textPanel);
         scroll.Content = pageLayers; content.Children.Add(scroll);
+        zoomControls.Children.Add(Button("\uE738", "缩小预览", () => SetVisualZoom(visualZoom / 1.2)));
+        zoomControls.Children.Add(zoomLabel);
+        zoomControls.Children.Add(Button("\uE710", "放大预览", () => SetVisualZoom(visualZoom * 1.2)));
+        zoomControls.Children.Add(Button("\uE777", "重置缩放", () => SetVisualZoom(1)));
+        zoomControls.SetResourceReference(Panel.BackgroundProperty, "SurfaceBrush");
+        Panel.SetZIndex(zoomControls, 10); content.Children.Add(zoomControls);
         skeleton.SetResourceReference(Border.BackgroundProperty, "ActionBrush"); content.Children.Add(skeleton);
         loading.SetResourceReference(Border.BackgroundProperty, "ActionBrush"); loading.Child = loadingText; content.Children.Add(loading);
         var errorStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
@@ -125,14 +135,16 @@ public sealed class PreviewWindow : Window
         PreviewKeyDown += OnPreviewKey;
         PreviewKeyUp += (_, e) => e.Handled = true;
         Loaded += (_, _) => { session.PixelDpi = VisualTreeHelper.GetDpi(this).PixelsPerInchX; session.PixelWidth = Math.Clamp((int)((ActualWidth - 70) * VisualTreeHelper.GetDpi(this).DpiScaleX), 480, 1800); AnimateCard(true); session.Start(); Focus(); };
-        resizeTimer.Tick += (_, _) => { resizeTimer.Stop(); if (!closing) { session.PixelDpi = VisualTreeHelper.GetDpi(this).PixelsPerInchX; session.Resize((int)((ActualWidth - 70) * VisualTreeHelper.GetDpi(this).DpiScaleX)); } };
+        resizeTimer.Tick += (_, _) => { resizeTimer.Stop(); if (!closing) { session.PixelDpi = VisualTreeHelper.GetDpi(this).PixelsPerInchX; session.Resize((int)((ActualWidth - 70) * VisualTreeHelper.GetDpi(this).DpiScaleX), deferRender: zoomTimer.IsEnabled && Math.Abs(visualZoom - session.ZoomFactor) >= .001); } };
+        zoomTimer.Tick += (_, _) => { zoomTimer.Stop(); if (resizeTimer.IsEnabled) { zoomTimer.Start(); return; } if (!closing) session.SetZoomFactor(visualZoom); };
         SizeChanged += (_, _) => { if (IsLoaded && !closing) { resizeTimer.Stop(); resizeTimer.Start(); } };
         DpiChanged += (_, _) => { if (!closing) { resizeTimer.Stop(); resizeTimer.Start(); } };
+        PreviewMouseWheel += OnPreviewWheel;
         previewSearch.TextChanged += (_, _) => { if (!updatingSearch && displayedTextViewModel is { } view) { view.SearchText = previewSearch.Text; FindText(false, true); } };
         previewSearch.KeyDown += (_, e) => { if (e.Key == Key.Enter) { FindText(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)); e.Handled = true; } };
         scroll.ScrollChanged += (_, _) => { if (displayedTextViewModel is { } view && textPanel.IsVisible) view.ScrollOffset = scroll.VerticalOffset; };
         Closing += OnClosing;
-        Closed += (_, _) => { resizeTimer.Stop(); scroll.CancelWheelMotion(); session.Changed -= Update; PreviewKeyDown -= OnPreviewKey; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); Cleanup = ReleaseAsync(); };
+        Closed += (_, _) => { resizeTimer.Stop(); zoomTimer.Stop(); scroll.CancelWheelMotion(); session.Changed -= Update; PreviewKeyDown -= OnPreviewKey; PreviewMouseWheel -= OnPreviewWheel; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); Cleanup = ReleaseAsync(); };
     }
     private static Button Button(string glyph, string tooltip, Action action)
     {
@@ -146,6 +158,10 @@ public sealed class PreviewWindow : Window
     private void OnPreviewKey(object sender, KeyEventArgs e)
     {
         scroll.CancelWheelMotion();
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.OemPlus or Key.Add or Key.OemMinus or Key.Subtract or Key.D0 or Key.NumPad0) {
+            SetVisualZoom(e.Key is Key.OemPlus or Key.Add ? visualZoom * 1.2 : e.Key is Key.OemMinus or Key.Subtract ? visualZoom / 1.2 : 1);
+            e.Handled = true; return;
+        }
         if (e.Key == Key.Escape && searchPanel.IsVisible) { HideTextSearch(); e.Handled = true; return; }
         if (e.Key is Key.Space or Key.Escape) { if (!e.IsRepeat) Close(); e.Handled = true; return; }
         if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F && session.PresentedTextViewModel is not null) { ShowTextSearch(); e.Handled = true; return; }
@@ -156,6 +172,20 @@ public sealed class PreviewWindow : Window
         if ((textContent.IsKeyboardFocusWithin || fileLocation.IsKeyboardFocusWithin || previewSearch.IsKeyboardFocusWithin) && Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.C or Key.A) return;
         // A separate top-level window plus this boundary prevents owner shortcuts firing.
         if (e.Key is not (Key.Tab or Key.Enter or Key.LeftAlt or Key.RightAlt or Key.System)) e.Handled = true;
+    }
+    private void OnPreviewWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0 || zoomControls.Visibility != Visibility.Visible) return;
+        SetVisualZoom(visualZoom * Math.Pow(1.1, e.Delta / 120d)); e.Handled = true;
+    }
+    private void SetVisualZoom(double factor)
+    {
+        if (zoomControls.Visibility != Visibility.Visible) return;
+        visualZoom = Math.Clamp(Math.Round(factor, 3), .5, 4);
+        zoomLabel.Text = $"{visualZoom:P0}";
+        double width = Math.Max(240, ActualWidth - 70) * visualZoom;
+        image.Width = width; previous.Width = width;
+        zoomTimer.Stop(); zoomTimer.Start();
     }
     internal void NavigatePage(int delta) => session.NavigatePage(delta);
     internal void NavigateFile(int delta) => session.NavigateRecord(delta);
@@ -190,11 +220,13 @@ public sealed class PreviewWindow : Window
     {
         using var timing = PreviewMetrics.Measure("bitmap-submit");
         if (closing) return;
-        if (lastRecordIndex != session.Index) { lastRecordIndex = session.Index; RecordChanged?.Invoke(session.Current); }
+        if (lastRecordIndex != session.Index) { lastRecordIndex = session.Index; visualZoom = 1; zoomTimer.Stop(); RecordChanged?.Invoke(session.Current); }
         title.Text = session.Current.Kind == ClipKind.File && session.Path is { } path ? Path.GetFileName(path) : session.Current.DisplayTitle;
         icon.Item = session.Current; icon.SetResourceReference(RecordTypeIcon.PaletteProperty, "TextBrush");
         back.IsEnabled = session.Count > 0 && session.Page > 0; next.IsEnabled = session.Count > 0 && (!session.CountFinal || session.Page < session.Count - 1);
         bool textMode = session.Error is null && PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Text;
+        zoomControls.Visibility = session.Error is null && !textMode && PreviewFormatRegistry.Supports(session.Current) ? Visibility.Visible : Visibility.Collapsed;
+        zoomLabel.Text = $"{visualZoom:P0}";
         searchToggle.Visibility = wrapToggle.Visibility = linesToggle.Visibility = textMode ? Visibility.Visible : Visibility.Hidden;
         back.Visibility = next.Visibility = textMode ? Visibility.Hidden : Visibility.Visible;
         if (!textMode) searchPanel.Visibility = Visibility.Collapsed;
@@ -226,7 +258,11 @@ public sealed class PreviewWindow : Window
         }
         if (session.Presented is not { } page || ReferenceEquals(displayed, page)) return;
         // Only the content changes. Hold the last decoded frame until a valid new page arrives.
-        scroll.CancelWheelMotion(); previous.Source = image.Source; image.Source = page.Image; displayed = page; scroll.ScrollToTop();
+        scroll.CancelWheelMotion(); bool changedPage = displayed is null || displayed.DocumentId != page.DocumentId || displayed.Page != page.Page;
+        previous.Source = image.Source; image.Source = page.Image; displayed = page;
+        image.Width = previous.Width = Math.Max(240, ActualWidth - 70) * visualZoom;
+        scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+        if (changedPage) scroll.ScrollToTop();
         displayedText = null; displayedTextViewModel = null; textPanel.Visibility = Visibility.Collapsed; textContent.Clear(); image.Visibility = Visibility.Visible;
         var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1));
         fade.Completed += (_, _) => { if (ReferenceEquals(displayed, page)) previous.Source = null; };

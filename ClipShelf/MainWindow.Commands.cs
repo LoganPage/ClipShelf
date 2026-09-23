@@ -405,7 +405,7 @@ public partial class MainWindow
     {
         if (index < 0 || index >= visible.Count) return;
         if (preview?.IsVisible == true) { preview.Activate(); return; }
-        var window = new PreviewWindow(visible.ToArray(), index, previewCache) { Owner = this };
+        var window = new PreviewWindow(visible.ToArray(), index, previewCache, Store.Settings.PrewarmAdjacentPreview) { Owner = this };
         if (HistoryList.ItemContainerGenerator.ContainerFromIndex(index) is FrameworkElement row)
             window.SetAnimationOrigin(row.TranslatePoint(new Point(0, row.ActualHeight / 2), this).Y / Math.Max(1, ActualHeight));
         window.RecordChanged += item => {

@@ -100,7 +100,10 @@ public sealed class SettingsPanel : UserControl
         keys.Children.Add(ShortcutRow("取消选择", S.ClearSelectionHotKey, value => { if (!ValidateShortcut(value, S.GlobalHotKey, S.PinHotKey)) return false; S.ClearSelectionHotKey = value; owner.Store.SaveSettings(); return true; }));
         keys.Children.Add(ShortcutRow("置顶选中记录", S.PinHotKey, value => { if (!ValidateShortcut(value, S.GlobalHotKey, S.ClearSelectionHotKey)) return false; S.PinHotKey = value; owner.Store.SaveSettings(); return true; }));
         keys.Children.Add(Note("点击右侧输入框，按下新的组合键。"));
-        keys.Children.Add(Note("↑↓ 选择 · Space 预览 · Ctrl+A 全选 · Ctrl+C 复制\n预览支持文字、常见文本文件、图片及 PDF / DOCX / PPTX；不需要 Office。预览文字时 Ctrl+F 查找、F3 前后跳转，并可切换换行与行号。↑↓ 逐条切换记录，←→ 翻文档页，Home/End 首末页，Space/Esc 关闭，滚轮滚动内容。\nDelete 删除 · Ctrl+Z 撤销 · Shift+F10 菜单 · Ctrl+F 搜索\n复制后，在需要输入的位置按 Ctrl+V 粘贴；ClipShelf 不自动切换应用。"));
+        keys.Children.Add(Note("↑↓ 选择 · Space 预览 · Ctrl+A 全选 · Ctrl+C 复制\n预览支持文字、常见文本文件、图片及 PDF / DOCX / PPTX；不需要 Office。预览文字时 Ctrl+F 查找、F3 前后跳转，并可切换换行与行号。↑↓ 逐条切换记录，←→ 翻文档页，Home/End 首末页，Ctrl+滚轮缩放，Space/Esc 关闭，普通滚轮滚动内容。\nDelete 删除 · Ctrl+Z 撤销 · Shift+F10 菜单 · Ctrl+F 搜索\n复制后，在需要输入的位置按 Ctrl+V 粘贴；ClipShelf 不自动切换应用。"));
+        var previewPerformance = Card(Section("快速预览性能"));
+        previewPerformance.Children.Add(Toggle("预热相邻记录首屏（实验性）", () => S.PrewarmAdjacentPreview, value => { S.PrewarmAdjacentPreview = value; Changed(); }));
+        previewPerformance.Children.Add(Note("默认关闭。开启后，当前预览稳定显示时会在后台准备相邻记录，可能增加短时内存和磁盘活动。"));
 
         var startup = Card(Section("启动与托盘"));
         startup.Children.Add(Toggle("开机时启动 ClipShelf", () => S.LaunchAtLogin, value => { S.LaunchAtLogin = value; Changed(); }));

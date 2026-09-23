@@ -25,6 +25,7 @@ public sealed class AppSettings
     public int MaxItems { get; set; } = 100;
     public bool LaunchAtLogin { get; set; }
     public bool CloseToTray { get; set; } = true;
+    public bool PrewarmAdjacentPreview { get; set; }
     public const double DefaultWindowWidth = 680;
     public const double DefaultWindowHeight = 552;
     public double WindowWidth { get; set; } = DefaultWindowWidth;
