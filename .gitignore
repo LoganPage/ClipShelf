@@ -11,3 +11,8 @@ dist-*/
 *.user
 *.suo
 *.log
+
+# Local-only scroll smoothness diagnostics. Deliberately untracked; App.xaml.cs does
+# not reference them, so a clean checkout builds without these files present.
+ClipShelf/SmoothnessProbe.cs
+ClipShelf/SmoothnessRegressionTests.cs

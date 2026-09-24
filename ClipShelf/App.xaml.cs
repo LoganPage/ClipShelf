@@ -59,10 +59,6 @@ public partial class App : Application
         if (e.Args.Length >= 2 && e.Args[0] == "--multi-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], multiSelection: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--fine-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], fineWheel: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--preview-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], previewStress: true); return; }
-        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-test") { await SmoothnessProbe.RunAsync(e.Args[1]); return; }
-        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-multi-test") { await SmoothnessProbe.RunAsync(e.Args[1], multiSelection: true); return; }
-        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-fine-test") { await SmoothnessProbe.RunAsync(e.Args[1], fineWheel: true, variant: e.Args.Length >= 3 ? e.Args[2] : null); return; }
-        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-regression-test") { await SmoothnessRegressionTests.RunAsync(e.Args[1]); return; }
         DispatcherUnhandledException += (_, args) =>
         {
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipShelf");
@@ -159,8 +155,7 @@ public partial class App : Application
         };
         if (file is not null) return Path.GetFullPath(Path.Combine(args[1], file));
         return args[0] is "--theme-transition-test" or "--ui-performance-test" or "--interaction-test" or
-            "--scroll-render-test" or "--multi-scroll-test" or "--fine-scroll-test" or "--preview-scroll-test" or
-            "--smoothness-test" or "--smoothness-multi-test" or "--smoothness-fine-test" or "--smoothness-regression-test"
+            "--scroll-render-test" or "--multi-scroll-test" or "--fine-scroll-test" or "--preview-scroll-test"
             ? Path.GetFullPath(args[1]) : null;
     }
 }
