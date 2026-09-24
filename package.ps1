@@ -20,14 +20,17 @@ function Write-ClipArchive([string]$Destination, [string]$Root, [IO.FileInfo[]]$
     } finally { $clipArchive.Dispose(); $clipStream.Dispose() }
 }
 $clipRuntimeArchive = Join-Path $clipPackageRoot "ClipShelf-Windows-v$Version-x64.zip"
-Write-ClipArchive $clipRuntimeArchive $clipDistribution @(Get-ChildItem -LiteralPath $clipDistribution -File -Recurse)
+$clipRuntimeFiles = @(Get-ChildItem -LiteralPath (Join-Path $clipDistribution 'ClipShelf') -File -Recurse | Where-Object { $_.Extension -ne '.pdb' })
+$clipRuntimeFiles += @(Get-ChildItem -LiteralPath $clipDistribution -File | Where-Object { $_.Name -in 'README.md','PARITY.md','PERFORMANCE.md','LICENSE','install.ps1' })
+Write-ClipArchive $clipRuntimeArchive $clipDistribution $clipRuntimeFiles
 $clipSourceFiles = @()
 foreach ($clipFolder in @('ClipShelf','benchmarks')) {
     $clipSourceFiles += @(Get-ChildItem -LiteralPath (Join-Path $clipPackageRoot $clipFolder) -File -Recurse | Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' })
 }
 $clipSourceFiles += @(Get-ChildItem -LiteralPath $clipPackageRoot -File | Where-Object { $_.Extension -in '.md','.ps1' -or $_.Name -in 'LICENSE','.gitignore' })
 foreach ($clipReport in @('storage-baseline.json','storage-deferred.json','storage-tests.json','search-baseline.json','search-optimized.json','search-regression-results.json','ui-performance.json','self-test-v1.0.1.json')) {
-    $clipSourceFiles += Get-Item -LiteralPath (Join-Path $clipPackageRoot "artifacts\$clipReport")
+    $clipReportPath = Join-Path $clipPackageRoot "artifacts\$clipReport"
+    if (Test-Path -LiteralPath $clipReportPath) { $clipSourceFiles += Get-Item -LiteralPath $clipReportPath }
 }
 $clipSourceArchive = Join-Path $clipPackageRoot "artifacts\ClipShelf-Windows-v$Version-source.zip"
 foreach ($clipOptionalReport in @('ui-performance-v1.0.2.json','self-test-v1.0.2.json','layout-v1.0.2\layout-regression-results.json','interaction-v1.0.3.json','ui-performance-v1.0.3.json','self-test-v1.0.3.json','storage-undo-tests-1.0.3.json','layout-v1.0.3\layout-regression-results.json','presentation-v1.0.4\presentation-results.json','interaction-v1.0.4.json','ui-performance-v1.0.4.json','layout-v1.0.4\layout-regression-results.json','scroll-render-v1.0.4.json','display-timing-v1.0.4.json','self-test-v1.0.4.json','presentation-v1.0.5\presentation-results.json','interaction-v1.0.5.json','ui-performance-v1.0.5.json','layout-v1.0.5\layout-regression-results.json','self-test-v1.0.5.json')) {

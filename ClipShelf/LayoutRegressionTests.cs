@@ -131,7 +131,8 @@ public static class LayoutRegressionTests
                 {
                     window.Width = size.Width; window.Height = size.Height;
                     scroll.ScrollToTop(); await Idle();
-                    list.ReplaceSelection(new[] { list.Items[0], list.Items[1] }); await Idle();
+                    list.ReplaceSelection(new[] { list.Items[0], list.Items[1] });
+                    await Task.Delay(130); await Idle(); // Raster assertions inspect the settled 110 ms selection surface.
                     foreach (double scale in new[] { 1.25, 1.5, 2.0 })
                     {
                         string label = $"{theme} {size.Width:0}x{size.Height:0} @{scale * 100:0}%";
@@ -155,7 +156,8 @@ public static class LayoutRegressionTests
                 }
 
                 window.Width = 720; window.Height = 572; scroll.ScrollToTop(); await Idle();
-                list.ReplaceSelection(new[] { list.Items[0], list.Items[1] }); await Idle();
+                list.ReplaceSelection(new[] { list.Items[0], list.Items[1] });
+                await Task.Delay(130); await Idle();
                 var previousContainers = Realized(list);
                 var originalClips = new[] { frame, search, history }.Select(element => element.Clip).ToArray();
                 int blankFrames = 0;
