@@ -39,6 +39,7 @@ public static class AppSelfTest
         try
         {
             checks.AddRange(StorageTests.Run(testDirectory));
+            checks.AddRange(await StorageTests.RunDeferredAsync(testDirectory));
             await CheckFrozenDecodedFrameEncodingAsync(checks);
             clipboardBackup = CaptureClipboard();
             clipboardCaptured = true;

@@ -363,6 +363,7 @@ public sealed class HistoryStore
         MaxItems = source.MaxItems,
         LaunchAtLogin = source.LaunchAtLogin,
         CloseToTray = source.CloseToTray,
+        PrewarmAdjacentPreview = source.PrewarmAdjacentPreview,
         WindowWidth = source.WindowWidth,
         WindowHeight = source.WindowHeight
     };

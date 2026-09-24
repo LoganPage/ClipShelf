@@ -87,15 +87,19 @@ public static class StorageTests
         file.FilePaths.Add("unsaved-second-file.txt");
         snapshots.Settings.Theme = "Dark";
         snapshots.Settings.WindowWidth = 888;
+        snapshots.Settings.PrewarmAdjacentPreview = true;
         snapshots.SaveSettings();
         snapshots.Settings.Theme = "Light";
         snapshots.Settings.WindowWidth = 999;
+        snapshots.Settings.PrewarmAdjacentPreview = false;
         Assert(await snapshots.FlushAsync(), "Deferred snapshots flush successfully", results);
         var snapshotReload = new HistoryStore(snapshots.DirectoryPath);
         Assert(snapshotReload.Items.Single().Title == "Saved title" && snapshotReload.Items.Single().FilePaths.SequenceEqual(["first-file.txt"]),
             "Writer uses an independent item and file-list snapshot", results);
         Assert(snapshotReload.Settings.Theme == "Dark" && snapshotReload.Settings.WindowWidth == 888,
             "Writer uses an independent settings snapshot", results);
+        Assert(snapshotReload.Settings.PrewarmAdjacentPreview,
+            "Adjacent preview prewarm survives deferred save and restart", results);
         snapshots.Save();
         snapshots.SaveSettings();
         Assert(snapshots.Flush(), "Synchronous exit flush waits without a dispatcher", results);
