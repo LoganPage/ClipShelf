@@ -172,9 +172,15 @@ public static class FluentPresentationTests
     {
         var buttons = FindAll<Button>(root).ToArray();
         check(buttons.Length > 0, label + ": button templates are present");
+        var captionStyle = (Style)Application.Current.FindResource("CaptionButton");
         foreach (var button in buttons)
         {
-            check(TemplateBorder(button)?.CornerRadius == new CornerRadius(4), label + ": button surface uses 4 DIP corners");
+            bool caption = false;
+            for (Style? style = button.Style; style is not null; style = style.BasedOn)
+                if (ReferenceEquals(style, captionStyle)) { caption = true; break; }
+            var expectedRadius = caption ? new CornerRadius(0) : new CornerRadius(4);
+            check(TemplateBorder(button)?.CornerRadius == expectedRadius,
+                label + (caption ? ": native-style caption button stays square" : ": content button uses 4 DIP corners"));
             check(ReferenceEquals(button.FocusVisualStyle, Application.Current.FindResource("KeyboardFocusVisual")),
                 label + ": button retains the 4 DIP keyboard-focus style");
         }

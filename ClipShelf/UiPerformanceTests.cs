@@ -98,7 +98,9 @@ public static class UiPerformanceTests
             window.OpenSettings(); await Task.Delay(180); await Idle();
             var settingsScroller = Find<SmoothScrollViewer>((ContentControl)window.FindName("SettingsContent"))!;
             var settingsBar = (System.Windows.Controls.Primitives.ScrollBar)settingsScroller.Template.FindName("PART_VerticalScrollBar", settingsScroller);
-            Check(historyBar.Width == settingsBar.Width && historyBar.Margin == settingsBar.Margin, "History and settings scrollbar width and margins match");
+            Check(historyBar.Width == 13 && settingsBar.Width == 13 &&
+                historyBar.Margin == new Thickness(0, 3, 0, 3) && settingsBar.Margin == new Thickness(2, 3, 0, 3),
+                "History and settings use equal-width rails with their own documented container insets");
             var historyThumb = Find<System.Windows.Controls.Primitives.Thumb>(historyBar)!;
             var settingsThumb = Find<System.Windows.Controls.Primitives.Thumb>(settingsBar)!;
             Check(ReferenceEquals(historyThumb.Style, settingsThumb.Style) && Math.Abs(historyThumb.ActualWidth - settingsThumb.ActualWidth) < .1, "Both scrollbars share thumb style and actual width");

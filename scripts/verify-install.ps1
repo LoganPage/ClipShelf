@@ -58,8 +58,6 @@ if ($build.Equals($installed, [StringComparison]::OrdinalIgnoreCase)) {
 
 $historyPath = Join-Path $data 'history.json'
 $settingsPath = Join-Path $data 'settings.json'
-$historyBefore = Get-ClipOptionalFileState $historyPath
-$settingsBefore = Get-ClipOptionalFileState $settingsPath
 $localData = [Environment]::GetFolderPath('LocalApplicationData')
 $stage = Join-Path (Join-Path $localData 'ClipShelf-Updates') ('stage-' + [Guid]::NewGuid().ToString('N'))
 $verificationStarted = Get-Date
@@ -81,6 +79,11 @@ try {
     if (Get-Process ClipShelf -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installedExe }) {
         throw 'ClipShelf is still running from the installation directory.'
     }
+
+    # Normal shutdown may persist the user's latest window geometry. Compare
+    # against that stable state so only the installation itself is measured.
+    $historyBefore = Get-ClipOptionalFileState $historyPath
+    $settingsBefore = Get-ClipOptionalFileState $settingsPath
 
     $waitProcessId = if ($runningBefore.Count -gt 0) { $runningBefore[0].Id } else { 2147483647 }
     $windowsPowerShell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'

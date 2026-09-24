@@ -32,7 +32,8 @@ public static class LayoutRegressionTests
         double LayoutDpiX, double LayoutDpiY, WindowAppearanceStatus Status);
     private sealed record ScrollbarGeometryResult(string Stage, double RequestedWidth, double ActualWidth,
         double DesiredWidth, double MinWidth, string ScrollbarBoundsInList, double ThumbWidth,
-        string ThumbBoundsInList, string DeleteButtonBoundsInList, double HorizontalClearanceDip);
+        string ThumbBoundsInList, string GripBoundsInList, string DeleteButtonBoundsInList,
+        double HitClearanceDip, double VisualClearanceDip);
     private sealed class Raster(RenderTargetBitmap bitmap, double scale)
     {
         internal RenderTargetBitmap Bitmap { get; } = bitmap;
@@ -278,19 +279,24 @@ public static class LayoutRegressionTests
             var deleteButton = FindAll<Button>(first).LastOrDefault();
             var scrollbar = FindAll<ScrollBar>(scroll).FirstOrDefault(bar => bar.IsVisible && bar.Orientation == Orientation.Vertical);
             var thumb = scrollbar is null ? null : FindAll<Thumb>(scrollbar).FirstOrDefault(item => item.IsVisible && item.ActualWidth > 0);
-            check(deleteButton is not null && scrollbar is not null && thumb is not null,
+            var grip = thumb?.Template.FindName("Grip", thumb) as Border;
+            check(deleteButton is not null && scrollbar is not null && thumb is not null && grip is not null,
                 "Scrollbar/action geometry is available: " + label, null);
-            if (deleteButton is not null && scrollbar is not null && thumb is not null)
+            if (deleteButton is not null && scrollbar is not null && thumb is not null && grip is not null)
             {
                 var buttonBounds = Bounds(deleteButton, list);
                 var thumbBounds = Bounds(thumb, list);
-                double clearance = thumbBounds.Left - buttonBounds.Right;
+                var gripBounds = Bounds(grip, list);
+                double hitClearance = thumbBounds.Left - buttonBounds.Right;
+                double visualClearance = gripBounds.Left - buttonBounds.Right;
                 scrollbarGeometry.Add(new ScrollbarGeometryResult(label, scrollbar.Width, scrollbar.ActualWidth,
                     scrollbar.DesiredSize.Width, scrollbar.MinWidth, Bounds(scrollbar, list).ToString(),
-                    thumb.ActualWidth, thumbBounds.ToString(), buttonBounds.ToString(), clearance));
-                // The rail overlays the row background, never its interactive action hit area.
-                check(clearance >= 2 - 0.001, "Scrollbar thumb clears row action by at least 2 DIP: " + label,
-                    $"clearance={clearance:F3}; scrollbar requested/actual/desired/min={scrollbar.Width:F3}/{scrollbar.ActualWidth:F3}/{scrollbar.DesiredSize.Width:F3}/{scrollbar.MinWidth:F3}; thumb={thumbBounds}; delete={buttonBounds}");
+                    thumb.ActualWidth, thumbBounds.ToString(), gripBounds.ToString(), buttonBounds.ToString(), hitClearance, visualClearance));
+                // The widened transparent hit target may touch the button, but the visible 5 DIP grip must retain whitespace.
+                check(hitClearance >= -0.001 && visualClearance >= 2 - 0.001 &&
+                    Math.Abs(grip.ActualWidth - 5) < 0.1 && thumb.ActualWidth >= grip.ActualWidth + 4,
+                    "Visible scrollbar grip clears row action by at least 2 DIP without hit-area overlap: " + label,
+                    $"hit={hitClearance:F3}, visible={visualClearance:F3}; thumb={thumbBounds}; grip={gripBounds}; delete={buttonBounds}");
             }
         }
     }

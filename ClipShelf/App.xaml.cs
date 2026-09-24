@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Windows;
 
@@ -10,9 +11,21 @@ public partial class App : Application
 {
     private Mutex? instance;
     private HistoryStore? activeStore;
+    private string? expectedTestReport;
+    private string? testUnhandledError;
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        expectedTestReport = ExpectedTestReport(e.Args);
+        if (expectedTestReport is not null)
+            DispatcherUnhandledException += (_, args) => { testUnhandledError = args.Exception.ToString(); args.Handled = true; Shutdown(1); };
+        if (e.Args.Length == 3 && e.Args[0] == "--test-report-guard-probe")
+        {
+            if (e.Args[2] == "false") File.WriteAllText(e.Args[1], "{\"passed\":false,\"error\":\"Deliberate guard probe\"}");
+            if (e.Args[2] == "malformed") File.WriteAllText(e.Args[1], "not a JSON report");
+            Shutdown(0);
+            return;
+        }
         if (e.Args.Length == 2 && e.Args[0] == "--cleanup-test") { await CacheCleanupTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--tooltip-test") { await ToolTipPresentationTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--update-test") { await WindowsUpdateTests.RunAsync(e.Args[1]); return; }
@@ -46,6 +59,10 @@ public partial class App : Application
         if (e.Args.Length >= 2 && e.Args[0] == "--multi-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], multiSelection: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--fine-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], fineWheel: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--preview-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], previewStress: true); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-test") { await SmoothnessProbe.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-multi-test") { await SmoothnessProbe.RunAsync(e.Args[1], multiSelection: true); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-fine-test") { await SmoothnessProbe.RunAsync(e.Args[1], fineWheel: true, variant: e.Args.Length >= 3 ? e.Args[2] : null); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-regression-test") { await SmoothnessRegressionTests.RunAsync(e.Args[1]); return; }
         DispatcherUnhandledException += (_, args) =>
         {
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipShelf");
@@ -84,9 +101,66 @@ public partial class App : Application
     }
     protected override void OnExit(ExitEventArgs e)
     {
+        if (expectedTestReport is { } report)
+        {
+            bool passed = false, validReport = false;
+            try
+            {
+                if (File.Exists(report))
+                {
+                    using var json = JsonDocument.Parse(File.ReadAllText(report));
+                    if (json.RootElement.TryGetProperty("passed", out var value) &&
+                        value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    { validReport = true; passed = value.ValueKind == JsonValueKind.True; }
+                }
+            }
+            catch (Exception error) { testUnhandledError ??= error.ToString(); }
+            if (!passed || testUnhandledError is not null)
+            {
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+                    if (!validReport || passed)
+                        File.WriteAllText(report, JsonSerializer.Serialize(new { passed = false,
+                            error = testUnhandledError ?? "Test report was not produced or was invalid." }));
+                }
+                catch (Exception) { /* The requested path itself may be inaccessible; the exit code still fails. */ }
+                e.ApplicationExitCode = 1;
+                Environment.ExitCode = 1;
+            }
+        }
         activeStore?.Flush();
         try { instance?.ReleaseMutex(); } catch (ApplicationException) { }
         instance?.Dispose();
         base.OnExit(e);
+    }
+
+    private static string? ExpectedTestReport(string[] args)
+    {
+        if (args.Contains("--self-test"))
+        {
+            int index = Array.IndexOf(args, "--test-report");
+            return Path.GetFullPath(index >= 0 && index + 1 < args.Length
+                ? args[index + 1] : Path.Combine(AppContext.BaseDirectory, "self-test-results.json"));
+        }
+        if (args.Length < 2) return null;
+        if (args[0] == "--test-report-guard-probe") return Path.GetFullPath(args[1]);
+        string? file = args[0] switch
+        {
+            "--cleanup-test" => "cleanup-tests.json", "--tooltip-test" => "results.json",
+            "--update-test" => "update-tests.json", "--native-preview-test" or "--preview-interaction-test" => "native-preview-results.json",
+            "--text-preview-test" => "text-preview-results.json", "--native-preview-benchmark" => "benchmark.json",
+            "--common-preview-test" or "--file-preview-test" => "file-preview-results.json",
+            "--file-record-test" => "file-record-results.json", "--copy-only-test" => "copy-only-results.json",
+            "--layout-test" => "layout-regression-results.json", "--presentation-test" => "presentation-results.json",
+            "--settings-test" => "settings-results.json", "--tray-test" => "tray-results.json",
+            "--tray-popup-test" => "tray-popup-results.json", "--drag-test" => "drag-selection-results.json",
+            "--focus-test" => "focus-results.json", _ => null
+        };
+        if (file is not null) return Path.GetFullPath(Path.Combine(args[1], file));
+        return args[0] is "--theme-transition-test" or "--ui-performance-test" or "--interaction-test" or
+            "--scroll-render-test" or "--multi-scroll-test" or "--fine-scroll-test" or "--preview-scroll-test" or
+            "--smoothness-test" or "--smoothness-multi-test" or "--smoothness-fine-test" or "--smoothness-regression-test"
+            ? Path.GetFullPath(args[1]) : null;
     }
 }

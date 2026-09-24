@@ -27,11 +27,12 @@ internal static class IconAssetTests
                 $"icon {choice} rounded-square tile fills at least 98 percent of the Windows canvas");
             check(pixels[3] == 0 && pixels[(255 * 256 + 255) * 4 + 3] == 0 &&
                 pixels[(128 * 256 + 128) * 4 + 3] == 255, $"icon {choice} retains transparent rounded corners and opaque artwork");
-            check(designs.All(previous => !previous.SequenceEqual(pixels)), $"icon {choice} retains its distinct original design");
+            check(designs.All(previous => previous.SequenceEqual(pixels)) && ReferenceEquals(icon, ThemeManager.Icon(2)),
+                $"legacy icon choice {choice} resolves to the single selected scheme 2 artwork");
             designs.Add(pixels);
         }
-        check(ReferenceEquals(ThemeManager.Icon(0), ThemeManager.Icon(1)) &&
-            ReferenceEquals(ThemeManager.Icon(5), ThemeManager.Icon(4)), "invalid icon choices retain existing safe clamping");
+        check(ReferenceEquals(ThemeManager.Icon(0), ThemeManager.Icon(2)) &&
+            ReferenceEquals(ThemeManager.Icon(5), ThemeManager.Icon(2)), "invalid icon choices also resolve to scheme 2");
 
         string path = Path.Combine(AppContext.BaseDirectory, "Assets", "ClipShelf.ico");
         using var stream = File.OpenRead(path);

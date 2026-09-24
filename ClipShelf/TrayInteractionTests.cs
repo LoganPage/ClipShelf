@@ -60,6 +60,10 @@ public static class TrayInteractionTests
                 store.Settings.HistoryEnabled = true;
                 window.ApplyPreferences();
                 await Idle();
+                // MenuSurfaceBrush transitions over 200 ms; compare settled theme colors, not an animation's first frame.
+                for (int attempt = 0; ThemeTransition.ActiveCount > 0 && attempt < 80; attempt++)
+                    await Task.Delay(25);
+                Check(ThemeTransition.ActiveCount == 0, $"{theme}: menu surface transition settles before theme comparison");
                 var menu = window.BuildTrayContextMenu();
                 Check(!menu.IsOpen && PresentationSource.FromVisual(menu) is null,
                     $"{theme}: menu fixture never opens a native popup");

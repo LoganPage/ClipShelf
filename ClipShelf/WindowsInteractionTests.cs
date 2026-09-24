@@ -386,13 +386,10 @@ public static class WindowsInteractionTests
             Check(store.Settings.Theme == nextTheme && ReferenceEquals(settingsContent.Content, settingsPanel) &&
                 Descendants<Button>(settingsPanel).SequenceEqual(originalSettingsButtons) && IsDescendantOf(themeButton, settingsPanel),
                 "Changing theme updates synthetic preferences without replacing settings buttons or their visual tree");
-            int nextIcon = originalIcon == 2 ? 1 : 2;
-            var iconButton = originalSettingsButtons.Single(button => AutomationProperties.GetName(button) == $"图标方案 {nextIcon}");
-            iconButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, iconButton));
-            await IdleAsync();
-            Check(store.Settings.AppIcon == nextIcon && ReferenceEquals(settingsContent.Content, settingsPanel) &&
-                Descendants<Button>(settingsPanel).SequenceEqual(originalSettingsButtons) && IsDescendantOf(iconButton, settingsPanel),
-                "Changing the app icon keeps the original settings controls attached");
+            Check(originalSettingsButtons.All(button => !AutomationProperties.GetName(button).StartsWith("图标方案 ", StringComparison.Ordinal)) &&
+                store.Settings.AppIcon == 2 && ReferenceEquals(Named<Image>(window, "AppImage").Source, ThemeManager.Icon(2)) &&
+                ReferenceEquals(settingsContent.Content, settingsPanel) && Descendants<Button>(settingsPanel).SequenceEqual(originalSettingsButtons),
+                "Settings omit removed icon choices and retain the single scheme 2 window icon after theme changes");
 
             var recorders = Descendants<TextBox>(settingsPanel).Where(input => input.Tag as string == "ShortcutRecorder").ToArray();
             Check(recorders.Length == 3, "The settings fixture exposes all three shortcut-recording inputs");
