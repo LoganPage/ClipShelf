@@ -70,8 +70,8 @@ internal static class NativePreviewTests
             scrollFixture.ApplyTemplate(); scrollFixture.Measure(new Size(300, 120)); scrollFixture.Arrange(new Rect(0, 0, 300, 120)); scrollFixture.UpdateLayout();
             var fixtureBar = (System.Windows.Controls.Primitives.ScrollBar)scrollFixture.Template.FindName("PART_VerticalScrollBar", scrollFixture);
             Check(fixtureBar.Width == 13 && fixtureBar.Margin.Left == 2 && fixtureBar.Margin.Right == 0, "Shared scrollbar moves right without reducing its drag target");
-            foreach (string ext in new[] { "pdf", "docx", "pptx", "txt", "md", "json", "cs" }) Check(PreviewFormatRegistry.Get("x." + ext) != PreviewFormat.Unsupported, "Supported " + ext);
-            foreach (string ext in new[] { "doc", "ppt", "xlsx", "zip", "mp3", "mp4" }) Check(PreviewFormatRegistry.Get("x." + ext) == PreviewFormat.Unsupported, "Excluded " + ext);
+            foreach (string ext in new[] { "pdf", "docx", "pptx", "xlsx", "xlsm", "txt", "md", "json", "cs" }) Check(PreviewFormatRegistry.Get("x." + ext) != PreviewFormat.Unsupported, "Supported " + ext);
+            foreach (string ext in new[] { "doc", "ppt", "xls", "zip", "mp3", "mp4" }) Check(PreviewFormatRegistry.Get("x." + ext) == PreviewFormat.Unsupported, "Excluded " + ext);
             Check(PreviewFormatRegistry.Supports(new ClipItem { Kind = ClipKind.Text }) && PreviewFormatRegistry.Supports(new ClipItem { Kind = ClipKind.Image }), "Latest user override retains text and images");
             foreach (int count in new[] { 1, 20, 200 }) {
                 string path = Path.Combine(root, $"pdf-{count}.pdf"); FilePreviewTests.MakePdf(path, count); var id = DocumentIdentity.Read(path); var watch = Stopwatch.StartNew();
@@ -120,7 +120,7 @@ internal static class NativePreviewTests
                 Check(!File.Exists(oversized) && File.Exists(keep), "Disk capacity cleanup removes oversized generated cache only");
             }
             string mutable = Path.Combine(root, "mutable.docx"); File.Copy(doc, mutable, true); var original = DocumentIdentity.Read(mutable); Docx(mutable, 3); Check(original.Id != DocumentIdentity.Read(mutable).Id, "Source modification invalidates all cache layers");
-            var records = new[] { FilePreviewTests.Item(doc), FilePreviewTests.Item(Path.Combine(root, "unsupported.xlsx")), FilePreviewTests.Item(Path.Combine(root, "slides-10.pptx")), FilePreviewTests.Item(Path.Combine(root, "pdf-20.pdf")) };
+            var records = new[] { FilePreviewTests.Item(doc), FilePreviewTests.Item(Path.Combine(root, "unsupported.mp3")), FilePreviewTests.Item(Path.Combine(root, "slides-10.pptx")), FilePreviewTests.Item(Path.Combine(root, "pdf-20.pdf")) };
             await using (var session = new PreviewSession(records, 0, cache)) {
                 session.Start(); await session.Pending; Check(session.Error is null, "Unified session opens DOCX directly"); var stale = session.CurrentRequest;
                 session.NavigateRecord(1); await session.Pending; Check(session.Index == 1 && session.Error?.Code == "Unsupported", "Unified session exposes unsupported adjacent records");
@@ -188,7 +188,7 @@ internal static class NativePreviewTests
             async Task Error(string path, string code) { await using var session = new PreviewSession(new[] { FilePreviewTests.Item(path) }, 0, cache); session.Start(); await session.Pending; Check(session.Error?.Code == code, "Safe failure " + code); }
             Check(!typeof(PreviewProviderRegistry).Assembly.GetTypes().Any(t => t.Name is "WindowsPreviewHandler" or "OfficeConversionWorker" or "DocumentConversionService"), "No Preview Handler or Office conversion implementation remains");
             var store = new HistoryStore(Path.Combine(root, "unsupported-main-fixture")); store.Settings.HistoryEnabled = store.Settings.WatchScreenshots = false;
-            string[] unsupportedPaths = [Path.Combine(root, "excluded.xlsx"), Path.Combine(root, "excluded.zip"), Path.Combine(root, "excluded.mp3")];
+            string[] unsupportedPaths = [Path.Combine(root, "excluded.xls"), Path.Combine(root, "excluded.zip"), Path.Combine(root, "excluded.mp3")];
             DateTimeOffset unsupportedTime = DateTimeOffset.UtcNow;
             for (int i = 0; i < unsupportedPaths.Length; i++) {
                 var item = FilePreviewTests.Item(unsupportedPaths[i]); item.CreatedAt = unsupportedTime.AddSeconds(i); store.Add(item);

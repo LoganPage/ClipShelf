@@ -31,6 +31,8 @@ internal sealed class SafeOoxmlPackage : IDisposable
     internal static PreviewException Limit() => new("SafetyLimit", "文档超出快速预览安全限制，请使用默认应用打开。");
     internal bool Has(string path) => entries.ContainsKey(path);
     internal long Length(string path) => entries.TryGetValue(path, out var e) ? e.Length : 0;
+    internal Stream OpenPart(string path) => entries.TryGetValue(path, out var entry)
+        ? entry.Open() : throw new PreviewException("MissingRelationship", "文档缺少所需内容或关联文件。");
     internal byte[] Bytes(string path, CancellationToken token, int max = (int)EntryLimit) {
         token.ThrowIfCancellationRequested();
         if (!entries.TryGetValue(path, out var entry)) throw new PreviewException("MissingRelationship", "文档缺少所需内容或关联文件。");

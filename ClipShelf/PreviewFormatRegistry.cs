@@ -5,12 +5,13 @@ using System.Text;
 
 namespace ClipShelf;
 
-internal enum PreviewFormat { Unsupported, Pdf, Word, PowerPoint, Text, Image }
+internal enum PreviewFormat { Unsupported, Pdf, Word, PowerPoint, Spreadsheet, Text, Image }
 internal static class PreviewFormatRegistry
 {
     internal static PreviewFormat Get(string? path) => Path.GetExtension(path ?? "").ToLowerInvariant() switch {
         ".pdf" => PreviewFormat.Pdf, ".docx" => PreviewFormat.Word,
         ".pptx" => PreviewFormat.PowerPoint,
+        ".xlsx" or ".xlsm" => PreviewFormat.Spreadsheet,
         ".txt" or ".md" or ".log" or ".json" or ".xml" or ".csv" or ".ini" or ".yaml" or ".yml" or
         ".cs" or ".cpp" or ".h" or ".py" or ".js" or ".ts" or ".html" or ".css" or ".sql" or
         ".ps1" or ".bat" or ".cmd" => PreviewFormat.Text,

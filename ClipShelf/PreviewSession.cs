@@ -16,6 +16,7 @@ internal sealed class PreviewSession : IAsyncDisposable
     private readonly IPreviewPageRenderer renderer;
     private readonly TextImagePreviewService textImages;
     private readonly TextFilePreviewProvider textFiles;
+    private readonly SpreadsheetPreviewService spreadsheets = new();
     private readonly PreviewCacheService cache;
     private readonly bool customRenderer;
     private readonly bool prewarmAdjacent;
@@ -46,6 +47,7 @@ internal sealed class PreviewSession : IAsyncDisposable
     internal RenderedPage? Presented { get; private set; }
     internal TextPreviewResult? PresentedText { get; private set; }
     internal TextPreviewViewModel? PresentedTextViewModel { get; private set; }
+    internal SpreadsheetPreview? PresentedSpreadsheet { get; private set; }
     internal string LoadingStatus { get; private set; } = "正在准备预览…";
     internal Task Pending { get; private set; } = Task.CompletedTask;
     internal ClipItem Current => items[Index];
@@ -68,14 +70,14 @@ internal sealed class PreviewSession : IAsyncDisposable
         double zoom = Math.Clamp(Math.Round(factor, 3), .5, 4);
         if (Math.Abs(ZoomFactor - zoom) < .001 || closed) return;
         ZoomFactor = zoom;
-        if (Count > 0 && PreviewFormatRegistry.FormatOf(Current) != PreviewFormat.Text) Load(reidentify: false);
+        if (Count > 0 && PreviewFormatRegistry.FormatOf(Current) is not (PreviewFormat.Text or PreviewFormat.Spreadsheet)) Load(reidentify: false);
     }
     internal void Resize(int pixelWidth, bool deferRender = false)
     {
         int width = Math.Clamp(pixelWidth, 480, 1800);
         if (Math.Abs(PixelWidth - width) < 64) return;
         PixelWidth = width;
-        if (!deferRender && Count > 0 && !closed && PreviewFormatRegistry.FormatOf(Current) != PreviewFormat.Text) Load(reidentify: false);
+        if (!deferRender && Count > 0 && !closed && PreviewFormatRegistry.FormatOf(Current) is not (PreviewFormat.Text or PreviewFormat.Spreadsheet)) Load(reidentify: false);
     }
     internal void NavigateRecord(int direction)
     {
@@ -156,6 +158,15 @@ internal sealed class PreviewSession : IAsyncDisposable
                 if (!Accepts(textStamp)) return;
                 PresentText(textView); ScheduleWarmup(token); return;
             }
+            if (format == PreviewFormat.Spreadsheet) {
+                var sheetStamp = CurrentRequest;
+                LoadingStatus = "正在读取工作表…"; Changed?.Invoke();
+                var sheet = await spreadsheets.ReadAsync(identity!, sheetStamp.Page, token);
+                if (!Accepts(sheetStamp)) return;
+                PresentedSpreadsheet = sheet; Presented = null; PresentedText = null; PresentedTextViewModel = null;
+                Page = sheet.SheetIndex; Count = sheet.SheetCount; CountFinal = true; rememberedPages[sheet.DocumentId] = Page;
+                Loading = false; Changed?.Invoke(); return;
+            }
             var stamp = CurrentRequest;
             int renderWidth = RenderWidth; double zoom = ZoomFactor;
             var cached = !customRenderer && format != PreviewFormat.Image ? await Task.Run(() => cache.ReadPage(PreviewCacheService.RenderKey(identity!, stamp.Page, renderWidth, PixelDpi, zoom: zoom), token), token) : null;
@@ -170,7 +181,7 @@ internal sealed class PreviewSession : IAsyncDisposable
                 : await renderer.RenderViewportAsync(identity!, stamp.Page, renderWidth, PixelDpi, stamp.Version, token, zoom));
             if (!Accepts(stamp)) return;
             if (result.DocumentId != stamp.DocumentId) throw new PreviewException("InvalidDocument", "预览结果与当前文档不匹配，请重试。");
-            Page = result.Page; Count = result.Count; CountFinal = result.CountFinal; Presented = result with { RequestVersion = stamp.Version }; PresentedText = null; PresentedTextViewModel = null; rememberedPages[result.DocumentId] = Page; Loading = false;
+            Page = result.Page; Count = result.Count; CountFinal = result.CountFinal; Presented = result with { RequestVersion = stamp.Version }; PresentedText = null; PresentedTextViewModel = null; PresentedSpreadsheet = null; rememberedPages[result.DocumentId] = Page; Loading = false;
             Changed?.Invoke();
             if (format != PreviewFormat.Image) prefetch = Track(PrefetchAsync(identity!, Page, Count, renderWidth, zoom, token));
             else ScheduleWarmup(token);
@@ -196,7 +207,7 @@ internal sealed class PreviewSession : IAsyncDisposable
     }
     private void PresentText(TextPreviewViewModel view)
     {
-        PresentedTextViewModel = view; PresentedText = view.Result; Presented = null; Page = 0; Count = 1; CountFinal = true; Loading = false; Error = null; Changed?.Invoke();
+        PresentedTextViewModel = view; PresentedText = view.Result; Presented = null; PresentedSpreadsheet = null; Page = 0; Count = 1; CountFinal = true; Loading = false; Error = null; Changed?.Invoke();
     }
     private async Task PrefetchAsync(DocumentIdentity document, int page, int count, int width, double zoom, CancellationToken token)
     {
@@ -233,6 +244,7 @@ internal sealed class PreviewSession : IAsyncDisposable
                     PreviewRenderScheduler.Priority.Value = 2;
                     if (format == PreviewFormat.Text) await textFiles.PrewarmAsync(id, token);
                     else if (format == PreviewFormat.Image) await textImages.RenderImageAsync(id, PixelWidth, token);
+                    else if (format == PreviewFormat.Spreadsheet) await spreadsheets.ReadAsync(id, 0, token);
                     else await renderer.RenderViewportAsync(id, 0, PixelWidth, PixelDpi, revision, token);
                     if (revision == version) WarmupCompleted++;
                 } catch (OperationCanceledException) { throw; }
@@ -263,6 +275,6 @@ internal sealed class PreviewSession : IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
-        Cancel(); await Task.WhenAll(work.Keys); await Pending; await prefetch; await WarmupPending; await renderer.DisposeAsync(); request?.Dispose(); lifetime.Dispose(); Presented = null; PresentedText = null; PresentedTextViewModel = null; rememberedText.Clear();
+        Cancel(); await Task.WhenAll(work.Keys); await Pending; await prefetch; await WarmupPending; await renderer.DisposeAsync(); request?.Dispose(); lifetime.Dispose(); Presented = null; PresentedText = null; PresentedTextViewModel = null; PresentedSpreadsheet = null; rememberedText.Clear();
     }
 }

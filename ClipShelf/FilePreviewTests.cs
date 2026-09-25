@@ -48,10 +48,11 @@ internal static class FilePreviewTests
         void Check(bool value, string label) { if (!value) throw new Exception(label); checks.Add(label); }
         using var cache = new PreviewCacheService(Path.Combine(root, "cache"));
         try {
-            string small = Path.Combine(root, "small.pdf"), large = Path.Combine(root, "large.pdf"), unsupported = Path.Combine(root, "other.xlsx"), otherUnsupported = Path.Combine(root, "other.zip");
-            MakePdf(small, 4); MakePdf(large, 180, 65536); File.WriteAllText(unsupported, "Never parse this as a spreadsheet"); File.WriteAllText(otherUnsupported, "Never parse this as an archive");
-            foreach (string ext in new[] { ".pdf", ".docx", ".PPTX", ".png", ".JPG", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".ico", ".txt", ".md", ".json", ".cs", ".ps1" }) Check(PreviewFormatRegistry.Get("file" + ext) != PreviewFormat.Unsupported, "Allow " + ext);
-            foreach (string ext in new[] { ".doc", ".ppt", ".xlsx", ".xls", ".mp3", ".mp4", ".zip", ".docm", ".pptm", ".exe", "" }) Check(PreviewFormatRegistry.Get("file" + ext) == PreviewFormat.Unsupported, "Reject " + ext);
+            string small = Path.Combine(root, "small.pdf"), large = Path.Combine(root, "large.pdf"), unsupported = Path.Combine(root, "other.mp3"), otherUnsupported = Path.Combine(root, "other.zip");
+            MakePdf(small, 4); MakePdf(large, 180, 65536); File.WriteAllText(unsupported, "Never parse this as audio"); File.WriteAllText(otherUnsupported, "Never parse this as an archive");
+            foreach (string ext in new[] { ".pdf", ".docx", ".PPTX", ".xlsx", ".xlsm", ".png", ".JPG", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".ico", ".txt", ".md", ".json", ".cs", ".ps1" }) Check(PreviewFormatRegistry.Get("file" + ext) != PreviewFormat.Unsupported, "Allow " + ext);
+            foreach (string ext in new[] { ".doc", ".ppt", ".xls", ".mp3", ".mp4", ".zip", ".docm", ".pptm", ".exe", "" }) Check(PreviewFormatRegistry.Get("file" + ext) == PreviewFormat.Unsupported, "Reject " + ext);
+            await SpreadsheetPreviewTests.RunAsync(root, Check);
             await TextImagePreviewTests.RunAsync(root, cache, Check);
             var folder = Item(small); folder.IsDirectory = true; Check(!PreviewFormatRegistry.Supports(folder), "Directories cannot masquerade as PDFs");
             Check(PreviewSession.BoundPage(-10, 12) == 0 && PreviewSession.BoundPage(200, 12) == 11 && PreviewSession.BoundPage(1, 0) == 0, "Page boundaries");

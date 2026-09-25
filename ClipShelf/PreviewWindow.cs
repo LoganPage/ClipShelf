@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -37,6 +38,10 @@ public sealed class PreviewWindow : Window
     private readonly TextBox previewSearch = new() { Width = 280, Height = 34, Padding = new(10, 5, 10, 5), VerticalContentAlignment = VerticalAlignment.Center };
     private readonly TextBlock searchStatus = new() { Width = 74, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly SmoothScrollViewer scroll = new();
+    private readonly DataGrid spreadsheet = new() { Visibility = Visibility.Collapsed, IsReadOnly = true, AutoGenerateColumns = false,
+        EnableRowVirtualization = true, EnableColumnVirtualization = true, HeadersVisibility = DataGridHeadersVisibility.All,
+        CanUserAddRows = false, CanUserDeleteRows = false, GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
+        RowHeaderWidth = 52, FrozenColumnCount = 0, Margin = new(12, 4, 12, 12) };
     private readonly Border loading = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(16), Padding = new(14, 8, 14, 8), CornerRadius = new(8), IsHitTestVisible = false };
     private readonly TextBlock loadingText = new() { Text = "正在准备文档…" };
     private readonly Border skeleton = new() { Width = 300, Height = 400, CornerRadius = new(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
@@ -51,6 +56,7 @@ public sealed class PreviewWindow : Window
     private readonly Button back, next, retry, searchToggle, wrapToggle, linesToggle, previousSegment, nextSegment;
     private RenderedPage? displayed;
     private TextPreviewResult? displayedText;
+    private SpreadsheetPreview? displayedSpreadsheet;
     private TextPreviewViewModel? displayedTextViewModel;
     private bool updatingSearch;
     private int lastRecordIndex;
@@ -59,7 +65,7 @@ public sealed class PreviewWindow : Window
     private readonly DispatcherTimer zoomTimer = new() { Interval = TimeSpan.FromMilliseconds(220) };
     private double visualZoom = 1;
     internal Task Cleanup { get; private set; } = Task.CompletedTask;
-    internal object? PresentedContent => session.Error is not null ? errorText : displayedText is not null ? textContent : image;
+    internal object? PresentedContent => session.Error is not null ? errorText : displayedSpreadsheet is not null ? spreadsheet : displayedText is not null ? textContent : image;
     internal Task PendingRender => session.Pending;
     internal int FileIndex => 0;
     internal int PageIndex => session.Page;
@@ -108,6 +114,11 @@ public sealed class PreviewWindow : Window
         segmentControls.Children.Add(previousSegment); segmentControls.Children.Add(nextSegment); Grid.SetRow(segmentControls, 2); textPanel.Children.Add(segmentControls);
         pageLayers.Children.Add(textPanel);
         scroll.Content = pageLayers; content.Children.Add(scroll);
+        spreadsheet.SetResourceReference(DataGrid.BackgroundProperty, "SurfaceBrush");
+        spreadsheet.LoadingRow += (_, e) => { if (e.Row.Item is SpreadsheetRow row) e.Row.Header = row.Number.ToString(); };
+        for (int i = 0; i < 50; i++) spreadsheet.Columns.Add(new DataGridTextColumn { Header = ColumnName(i), Width = new DataGridLength(136),
+            Binding = new Binding($"Cells[{i}]") { Mode = BindingMode.OneWay } });
+        content.Children.Add(spreadsheet);
         zoomControls.Children.Add(Button("\uE738", "缩小预览", () => SetVisualZoom(visualZoom / 1.2)));
         zoomControls.Children.Add(zoomLabel);
         zoomControls.Children.Add(Button("\uE710", "放大预览", () => SetVisualZoom(visualZoom * 1.2)));
@@ -144,8 +155,9 @@ public sealed class PreviewWindow : Window
         previewSearch.KeyDown += (_, e) => { if (e.Key == Key.Enter) { FindText(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)); e.Handled = true; } };
         scroll.ScrollChanged += (_, _) => { if (displayedTextViewModel is { } view && textPanel.IsVisible) view.ScrollOffset = scroll.VerticalOffset; };
         Closing += OnClosing;
-        Closed += (_, _) => { resizeTimer.Stop(); zoomTimer.Stop(); scroll.CancelWheelMotion(); session.Changed -= Update; PreviewKeyDown -= OnPreviewKey; PreviewMouseWheel -= OnPreviewWheel; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); Cleanup = ReleaseAsync(); };
+        Closed += (_, _) => { resizeTimer.Stop(); zoomTimer.Stop(); scroll.CancelWheelMotion(); session.Changed -= Update; PreviewKeyDown -= OnPreviewKey; PreviewMouseWheel -= OnPreviewWheel; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); spreadsheet.ItemsSource = null; Cleanup = ReleaseAsync(); };
     }
+    private static string ColumnName(int index) { string name = ""; for (int n = index + 1; n > 0; n = (n - 1) / 26) name = (char)('A' + (n - 1) % 26) + name; return name; }
     private static Button Button(string glyph, string tooltip, Action action)
     {
         var b = new Button { Content = glyph, ToolTip = tooltip, FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Width = 34, Height = 34, Margin = new(2, 0, 2, 0), Padding = new(0), Style = (Style)Application.Current.FindResource("SoftButton") };
@@ -158,7 +170,12 @@ public sealed class PreviewWindow : Window
     private void OnPreviewKey(object sender, KeyEventArgs e)
     {
         scroll.CancelWheelMotion();
-        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.OemPlus or Key.Add or Key.OemMinus or Key.Subtract or Key.D0 or Key.NumPad0) {
+        if (PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Spreadsheet && session.PresentedSpreadsheet is not null && Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.PageDown or Key.PageUp or Key.Home or Key.End) {
+            var viewer = FindScrollViewer(spreadsheet);
+            if (viewer is not null) { if (e.Key == Key.PageDown) viewer.PageDown(); else if (e.Key == Key.PageUp) viewer.PageUp(); else if (e.Key == Key.Home) viewer.ScrollToTop(); else viewer.ScrollToBottom(); }
+            e.Handled = true; return;
+        }
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.OemPlus or Key.Add or Key.OemMinus or Key.Subtract or Key.D0 or Key.NumPad0 && session.PresentedSpreadsheet is null) {
             SetVisualZoom(e.Key is Key.OemPlus or Key.Add ? visualZoom * 1.2 : e.Key is Key.OemMinus or Key.Subtract ? visualZoom / 1.2 : 1);
             e.Handled = true; return;
         }
@@ -172,6 +189,11 @@ public sealed class PreviewWindow : Window
         if ((textContent.IsKeyboardFocusWithin || fileLocation.IsKeyboardFocusWithin || previewSearch.IsKeyboardFocusWithin) && Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.C or Key.A) return;
         // A separate top-level window plus this boundary prevents owner shortcuts firing.
         if (e.Key is not (Key.Tab or Key.Enter or Key.LeftAlt or Key.RightAlt or Key.System)) e.Handled = true;
+    }
+    private static ScrollViewer? FindScrollViewer(DependencyObject root) {
+        if (root is ScrollViewer viewer) return viewer;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) if (FindScrollViewer(VisualTreeHelper.GetChild(root, i)) is { } found) return found;
+        return null;
     }
     private void OnPreviewWheel(object sender, MouseWheelEventArgs e)
     {
@@ -225,27 +247,38 @@ public sealed class PreviewWindow : Window
         icon.Item = session.Current; icon.SetResourceReference(RecordTypeIcon.PaletteProperty, "TextBrush");
         back.IsEnabled = session.Count > 0 && session.Page > 0; next.IsEnabled = session.Count > 0 && (!session.CountFinal || session.Page < session.Count - 1);
         bool textMode = session.Error is null && PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Text;
-        zoomControls.Visibility = session.Error is null && !textMode && PreviewFormatRegistry.Supports(session.Current) ? Visibility.Visible : Visibility.Collapsed;
+        bool sheetMode = session.Error is null && PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Spreadsheet;
+        zoomControls.Visibility = session.Error is null && !textMode && !sheetMode && PreviewFormatRegistry.Supports(session.Current) ? Visibility.Visible : Visibility.Collapsed;
         zoomLabel.Text = $"{visualZoom:P0}";
         searchToggle.Visibility = wrapToggle.Visibility = linesToggle.Visibility = textMode ? Visibility.Visible : Visibility.Hidden;
         back.Visibility = next.Visibility = textMode ? Visibility.Hidden : Visibility.Visible;
         if (!textMode) searchPanel.Visibility = Visibility.Collapsed;
-        if (!session.Loading) pages.Text = session.Error is not null ? "— / —" : session.PresentedText is { } textResult ? textResult.IsFile && textResult.IsLarge ? $"第 {textResult.SegmentIndex + 1} 段" : textResult.IsFile ? "文本" : "文字" :
+        if (!session.Loading) pages.Text = session.Error is not null ? "— / —" : session.PresentedSpreadsheet is { } table ? $"{table.SheetIndex + 1} / {table.SheetCount} 工作表" : session.PresentedText is { } textResult ? textResult.IsFile && textResult.IsLarge ? $"第 {textResult.SegmentIndex + 1} 段" : textResult.IsFile ? "文本" : "文字" :
             session.Presented is { } shown ? PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Image ? "图片" : session.CountFinal ? $"第 {shown.Page + 1} / {session.Count} 页" : $"第 {shown.Page + 1} 页" : "— / —";
         loading.Visibility = session.Loading ? Visibility.Visible : Visibility.Collapsed;
         loadingText.Text = session.LoadingStatus;
         if (session.Loading) { previousSegment.IsEnabled = false; nextSegment.IsEnabled = false; }
-        skeleton.Visibility = displayed is null && displayedText is null && session.Loading ? Visibility.Visible : Visibility.Collapsed;
+        skeleton.Visibility = displayed is null && displayedText is null && displayedSpreadsheet is null && session.Loading ? Visibility.Visible : Visibility.Collapsed;
         errorLayer.Visibility = session.Error is null ? Visibility.Collapsed : Visibility.Visible;
         errorText.Text = session.Error?.Message ?? ""; retry.Visibility = session.Error?.Code == "Unsupported" ? Visibility.Collapsed : Visibility.Visible;
         fileLocation.Text = ActionPath is { } location ? "文件位置：" + location : "";
         fileLocation.Visibility = session.Error is not null && fileLocation.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        warnings.Text = session.Presented?.IsApproximate == true ? "近似预览" + (session.Presented.Warnings?.Length > 0 ? " · " + string.Join("、", session.Presented.Warnings) : "") : "";
+        warnings.Text = session.PresentedSpreadsheet is { } sh ? "近似预览" + (sh.Truncated ? " · 仅显示前 500 行 / 50 列" : "") + (sh.MissingFormulaCache ? " · 部分公式结果未保存" : "") + (sh.HasUnsupportedLayout ? " · 部分排版未还原" : "") : session.Presented?.IsApproximate == true ? "近似预览" + (session.Presented.Warnings?.Length > 0 ? " · " + string.Join("、", session.Presented.Warnings) : "") : "";
         warnings.Visibility = session.Error is null && !session.Loading && warnings.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (session.Error is not null || (session.Loading && session.Presented?.Quality != PreviewQuality.Thumbnail)) return;
+        if (session.PresentedSpreadsheet is { } sheet) {
+            if (ReferenceEquals(displayedSpreadsheet, sheet)) return;
+            displayedSpreadsheet = sheet; displayedText = null; displayedTextViewModel = null; displayed = null;
+            image.Source = previous.Source = null; image.Visibility = Visibility.Collapsed; textPanel.Visibility = Visibility.Collapsed;
+            scroll.Visibility = Visibility.Collapsed; spreadsheet.ItemsSource = sheet.Rows; spreadsheet.Visibility = Visibility.Visible;
+            title.Text = Path.GetFileName(session.Path) + " · " + sheet.SheetName;
+            spreadsheet.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1)));
+            return;
+        }
+        spreadsheet.Visibility = Visibility.Collapsed; scroll.Visibility = Visibility.Visible;
         if (session.PresentedText is { } text) {
             if (ReferenceEquals(displayedText, text) && ReferenceEquals(displayedTextViewModel, session.PresentedTextViewModel)) return;
-            scroll.CancelWheelMotion(); image.Visibility = Visibility.Collapsed; image.Source = previous.Source = null; displayed = null;
+            scroll.CancelWheelMotion(); image.Visibility = Visibility.Collapsed; image.Source = previous.Source = null; displayed = null; displayedSpreadsheet = null;
             displayedTextViewModel = session.PresentedTextViewModel; textContent.Text = text.Text; textContent.Visibility = textPanel.Visibility = Visibility.Visible; displayedText = text;
             textNotice.Text = text.Notice.Length > 0 ? text.Notice : text.Truncated ? "文字较长，快速预览仅显示当前安全范围；原记录内容完整保留。" : text.Text.Length == 0 ? (text.IsFile ? "文件为空。" : "这条文字记录没有内容。") : "";
             textNotice.Visibility = textNotice.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -263,7 +296,7 @@ public sealed class PreviewWindow : Window
         image.Width = previous.Width = Math.Max(240, ActualWidth - 70) * visualZoom;
         scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
         if (changedPage) scroll.ScrollToTop();
-        displayedText = null; displayedTextViewModel = null; textPanel.Visibility = Visibility.Collapsed; textContent.Clear(); image.Visibility = Visibility.Visible;
+        displayedText = null; displayedTextViewModel = null; displayedSpreadsheet = null; textPanel.Visibility = Visibility.Collapsed; textContent.Clear(); image.Visibility = Visibility.Visible;
         var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1));
         fade.Completed += (_, _) => { if (ReferenceEquals(displayed, page)) previous.Source = null; };
         image.BeginAnimation(OpacityProperty, fade, HandoffBehavior.SnapshotAndReplace);

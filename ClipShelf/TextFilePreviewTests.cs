@@ -80,7 +80,7 @@ internal static class TextFilePreviewTests
             Check(view.Find(false, true) && view.MatchStart == 0 && view.Find(false) && view.MatchStart == 11 && view.Find(true) && view.MatchStart == 0, "Search moves forward, wraps and moves backward");
             view.WordWrap = false; view.ShowLineNumbers = true; Check(!view.WordWrap && view.ShowLineNumbers && view.Lines.Numbers(1).StartsWith("1\n2"), "Wrap and line-number states are independent");
 
-            var records = new[] { FilePreviewTests.Item(large), FilePreviewTests.Item(Path.Combine(root, "unsupported.xlsx")), FilePreviewTests.Item(utf8) };
+            var records = new[] { FilePreviewTests.Item(large), FilePreviewTests.Item(Path.Combine(root, "unsupported.mp3")), FilePreviewTests.Item(utf8) };
             await using (var session = new PreviewSession(records, 0, cache)) {
                 session.Start(); session.NavigateRecord(1); session.NavigateRecord(1); await session.Pending;
                 Check(session.Index == 2 && session.PresentedText?.Text.Contains("中文") == true && session.Error is null, "Rapid Down navigation commits only the latest text file");

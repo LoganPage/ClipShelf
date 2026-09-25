@@ -42,7 +42,7 @@ internal static class TextImagePreviewTests
         var huge = new ClipItem { Kind = ClipKind.Text, Text = new string('文', TextImagePreviewService.TextLimit - 1) + "🌿尾部" };
         var bounded = await TextImagePreviewService.ReadTextAsync(huge, default);
         check(bounded.Truncated && bounded.Text.Length < TextImagePreviewService.TextLimit && !char.IsHighSurrogate(bounded.Text[^1]) && huge.Text.EndsWith("尾部"), "Long text preview is bounded without splitting Unicode or modifying original");
-        var items = new[] { text, FilePreviewTests.Item(Path.Combine(root, "unsupported.xlsx")), picture, FilePreviewTests.Item(Path.Combine(root, "small.pdf")) };
+        var items = new[] { text, FilePreviewTests.Item(Path.Combine(root, "unsupported.mp3")), picture, FilePreviewTests.Item(Path.Combine(root, "small.pdf")) };
         await using (var session = new PreviewSession(items, 0, cache)) {
             session.Start(); await session.Pending;
             check(session.PresentedText?.Text == text.Text && session.Error is null && session.Presented is null, "Text session presents original text without PDF conversion");
@@ -78,7 +78,7 @@ internal static class TextImagePreviewTests
             Capture(window, Path.Combine(root, "restored-text-light.png"));
             void Key(Key key) => window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
             Key(System.Windows.Input.Key.Down); await window.PendingRender; await Task.Delay(160); window.UpdateLayout();
-            check(window.RecordIndex == 1 && window.Session.Error?.Code == "Unsupported" && window.DisplayedLocation.Contains("unsupported.xlsx"), "Routed Down opens the adjacent unsupported preview page");
+            check(window.RecordIndex == 1 && window.Session.Error?.Code == "Unsupported" && window.DisplayedLocation.Contains("unsupported.mp3"), "Routed Down opens the adjacent unsupported preview page");
             Key(System.Windows.Input.Key.Down); await window.PendingRender; await Task.Delay(160); window.UpdateLayout();
             check(window.RecordIndex == 2 && window.PresentedContent is Image { Source: not null }, "A second routed Down continues from unsupported to image");
             Capture(window, Path.Combine(root, "restored-image-light.png"));
