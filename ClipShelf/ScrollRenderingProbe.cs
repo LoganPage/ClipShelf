@@ -25,7 +25,7 @@ public static class ScrollRenderingProbe
         MainWindow? window = null; HistoryListBox? list = null; EventHandler? handler = null;
         string? error = null; int frames = 0, movedFrames = 0, packets = 0, handledPackets = 0, resets = 0, realized = 0;
         int tier = RenderCapability.Tier >> 16; bool animations = SystemParameters.ClientAreaAnimation;
-        double distance = 0; long lastTick = 0; TimeSpan previousRendering = TimeSpan.MinValue;
+        double distance = 0, layoutDpiX = 0, layoutDpiY = 0; long lastTick = 0; TimeSpan previousRendering = TimeSpan.MinValue;
         PreviewCacheService? previewCache = null; PreviewSession? previewSession = null; using var previewCancel = new CancellationTokenSource(); Task previewWork = Task.CompletedTask;
         void Check(bool ok, string name) { if (!ok) throw new InvalidOperationException(name); checks.Add(name); }
         try
@@ -44,6 +44,8 @@ public static class ScrollRenderingProbe
             window.Show();
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             await Task.Delay(700);
+            var dpi = VisualTreeHelper.GetDpi(window);
+            layoutDpiX = dpi.PixelsPerInchX; layoutDpiY = dpi.PixelsPerInchY;
             if (previewStress) {
                 string document = Path.Combine(fixture, "scroll-preview-load.docx"); NativePreviewTests.Docx(document, 3000);
                 string before = Path.Combine(fixture, "scroll-preview-before.pptx"); NativePreviewTests.Pptx(before, 10);
@@ -67,7 +69,13 @@ public static class ScrollRenderingProbe
             double gripCenter = grip.TranslatePoint(new Point(grip.ActualWidth / 2, 0), scroll).X;
             Check(Math.Abs(gripCenter - (gapStart + scroll.ActualWidth) / 2) <= 1,
                 "Scrollbar grip is centered in the gap between row content and the right edge");
-            Check(scrollbar.ActualWidth == 13 && grip.ActualWidth == 5, "Scrollbar hit area and visible width are unchanged");
+            Check(LayoutTestTolerance.Near(scrollbar.ActualWidth, 13, scrollbar)
+                && LayoutTestTolerance.Near(grip.ActualWidth, 5, grip),
+                "Scrollbar hit area and visible width are unchanged");
+            Check(thumb.MinHeight == 0
+                && LayoutTestTolerance.Near(thumb.ActualHeight, 24, thumb)
+                && LayoutTestTolerance.Near(grip.ActualHeight, thumb.ActualHeight, grip),
+                "Track owns the 24 DIP minimum and the rounded grip paints its complete height");
             ((INotifyCollectionChanged)list.ItemsSource).CollectionChanged += (_, args) => { if (args.Action == NotifyCollectionChangedAction.Reset) resets++; };
             void Packet(int delta)
             {
@@ -133,7 +141,7 @@ public static class ScrollRenderingProbe
             if (previewSession is not null) await previewSession.DisposeAsync(); previewCache?.Dispose();
             list?.CancelWheelMotion();
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(reportPath))!);
-            File.WriteAllText(reportPath, JsonSerializer.Serialize(new { passed = error is null, checks, error, renderTier = tier, clientAreaAnimation = animations,
+            File.WriteAllText(reportPath, JsonSerializer.Serialize(new { passed = error is null, checks, error, layoutDpiX, layoutDpiY, renderTier = tier, clientAreaAnimation = animations,
                 previewStress, multiSelection, fineWheel, frames, movedFrames, offsetChangedRatio = frames > 0 ? (double)movedFrames / frames : 0, packets, handledPackets, traveledDip = distance,
                 realizedContainers = realized, collectionResets = resets,
                 callbackIntervalMs = Summary(intervals), scheduledRenderIntervalMs = Summary(renderIntervals),

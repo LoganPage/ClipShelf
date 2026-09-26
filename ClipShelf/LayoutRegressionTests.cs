@@ -299,6 +299,11 @@ public static class LayoutRegressionTests
                     Math.Abs(grip.ActualWidth - 5) < 0.1 && thumb.ActualWidth >= grip.ActualWidth + 4,
                     "Visible scrollbar grip clears row action by at least 2 DIP without hit-area overlap: " + label,
                     $"hit={hitClearance:F3}, visible={visualClearance:F3}; thumb={thumbBounds}; grip={gripBounds}; delete={buttonBounds}");
+                check(Application.Current.TryFindResource(SystemParameters.VerticalScrollBarButtonHeightKey) is double { } buttonHeight
+                    && Math.Abs(buttonHeight - 48) < 0.001 && thumb.MinHeight == 0
+                    && Math.Abs(grip.ActualHeight - thumb.ActualHeight) <= tolerance,
+                    "Track owns the shared 24 DIP minimum without clipping the rounded grip: " + label,
+                    $"buttonHeight={Application.Current.TryFindResource(SystemParameters.VerticalScrollBarButtonHeightKey)}; thumbMin={thumb.MinHeight:F3}; thumbH={thumb.ActualHeight:F3}; gripH={grip.ActualHeight:F3}");
             }
         }
     }
