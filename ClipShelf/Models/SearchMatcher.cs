@@ -19,7 +19,8 @@ internal static class SearchMatcher
     public static bool Matches(ClipItem item, string? query) => Prepare(query).Matches(item);
 
     /// <summary>Filter a stable snapshot in original order. Safe for worker threads.</summary>
-    public static List<ClipItem> Filter(IReadOnlyList<ClipItem> items, string? query, CancellationToken cancellationToken = default)
+    public static List<ClipItem> Filter(IReadOnlyList<ClipItem> items, string? query, CancellationToken cancellationToken = default,
+        Func<ClipItem, bool>? include = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         var prepared = Prepare(query, cancellationToken);
@@ -27,7 +28,7 @@ internal static class SearchMatcher
         for (int i = 0; i < items.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (prepared.Matches(items[i], cancellationToken)) result.Add(items[i]);
+            if ((include is null || include(items[i])) && prepared.Matches(items[i], cancellationToken)) result.Add(items[i]);
         }
         return result;
     }

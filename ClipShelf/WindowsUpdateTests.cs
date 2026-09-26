@@ -26,19 +26,63 @@ internal static class WindowsUpdateTests
     {
         Directory.CreateDirectory(directory); Application.Current.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         var checks = new List<string>(); string? error = null; MainWindow? window = null;
+        string? packagedAssetName = null, deviatedAssetName = null;
         void Check(bool success, string name) { if (!success) throw new Exception(name); checks.Add(name); }
-        string Release(string version = "1.2.0", bool draft = false, string? hash = null, string? url = null, string? tag = null) => JsonSerializer.Serialize(new {
-            tag_name = tag ?? "windows-v" + version, draft, prerelease = true,
-            assets = new[] { new { name = $"ClipShelf-Windows-v{version}-public-x64.zip", size = 100,
-                digest = hash ?? "sha256:" + new string('a', 64), browser_download_url = url ?? $"https://github.com/LoganPage/ClipShelf/releases/download/windows-v{version}/ClipShelf-Windows-v{version}-public-x64.zip" } } });
+        string Release(string version = "1.2.0", bool draft = false, string? hash = null, string? url = null, string? tag = null, long size = 100)
+        {
+            string name = WindowsUpdateService.AssetName(new Version(version));
+            return JsonSerializer.Serialize(new { tag_name = tag ?? "windows-v" + version, draft, prerelease = true,
+                assets = new[] { new { name, size, digest = hash ?? "sha256:" + new string('a', 64),
+                    browser_download_url = url ?? $"https://github.com/LoganPage/ClipShelf/releases/download/windows-v{version}/{name}" } } });
+        }
         WindowsRelease? Parse(string json) { using var document = JsonDocument.Parse(json); return WindowsUpdateService.ParseRelease(document.RootElement); }
+        async Task<string> PackageAssetName(string script, string version)
+        {
+            var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")) {
+                UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
+                RedirectStandardError = true, RedirectStandardOutput = true
+            };
+            foreach (string argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Version", version, "-AssetNameOnly" })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Unable to run package naming probe.");
+            string output = await process.StandardOutput.ReadToEndAsync(); string stderr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            if (process.ExitCode != 0) throw new InvalidOperationException(stderr);
+            return output.Trim();
+        }
         try
         {
+            static string? FindUp(string start, string name)
+            {
+                for (var folder = new DirectoryInfo(Path.GetFullPath(start)); folder is not null; folder = folder.Parent)
+                {
+                    string candidate = Path.Combine(folder.FullName, name);
+                    if (File.Exists(candidate)) return candidate;
+                }
+                return null;
+            }
+            string? packageScript = FindUp(Directory.GetCurrentDirectory(), "package.ps1") ?? FindUp(AppContext.BaseDirectory, "package.ps1");
+            Check(File.Exists(packageScript), "Package naming script is available to the update regression test");
+            packagedAssetName = await PackageAssetName(packageScript!, "9.8.7");
+            Check(packagedAssetName == WindowsUpdateService.AssetName(new Version(9, 8, 7)), "Package output name exactly matches the updater asset name");
+            string deviatedScript = Path.Combine(directory, "package-name-deviation.ps1");
+            File.WriteAllText(deviatedScript, File.ReadAllText(packageScript!).Replace("-public-x64.zip", "-x64.zip", StringComparison.Ordinal));
+            deviatedAssetName = await PackageAssetName(deviatedScript, "9.8.7");
+            Check(deviatedAssetName != WindowsUpdateService.AssetName(new Version(9, 8, 7)), "Naming regression probe rejects the former non-public asset name");
+            const string real137 = """
+                {"tag_name":"windows-v1.3.7","draft":false,"prerelease":false,"assets":[{"name":"ClipShelf-Windows-v1.3.7-public-x64.zip","size":79926775,"digest":"sha256:55247b0ea1de195d3d899507b0313d3abcc98515bc76c9d39d967e1181f0499f","browser_download_url":"https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.3.7/ClipShelf-Windows-v1.3.7-public-x64.zip"}]}
+                """;
+            const string real136 = """
+                {"tag_name":"windows-v1.3.6","draft":false,"prerelease":true,"assets":[{"name":"ClipShelf-Windows-v1.3.6-x64.zip","size":79913540,"digest":"sha256:0a548e0f5a9b1dcef6d6ed18de9b5dfff3f0511fa8c93c0880121572c6cab473","browser_download_url":"https://github.com/LoganPage/ClipShelf/releases/download/windows-v1.3.6/ClipShelf-Windows-v1.3.6-x64.zip"}]}
+                """;
+            Check(Parse(real137)?.Version == new Version(1, 3, 7), "Real windows-v1.3.7 public asset is accepted");
+            Check(Parse(real136) is null, "Real windows-v1.3.6 legacy-named asset remains outside the strict update channel");
             Check(Parse(Release())?.Version == new Version(1, 2, 0), "Windows prerelease with SHA256 is accepted");
             Check(Parse(Release(tag: "v9.0.0")) is null, "Mac release is excluded");
             Check(Parse(Release(draft: true)) is null, "Draft release is excluded");
             Check(Parse(Release(hash: "sha256:bad")) is null, "Malformed digest is excluded");
             Check(Parse(Release(hash: "")) is null, "Missing integrity digest is excluded");
+            Check(Parse(Release(size: 256L * 1024 * 1024 + 1)) is null, "Oversized release asset is excluded");
             Check(Parse(Release(url: "https://example.com/update.zip")) is null, "Foreign repository package is excluded");
             Check(Parse(Release("1.2.0.1")) is null && Parse(Release("1.2")) is null, "Release tag must have three version components");
             Check(WindowsUpdateService.TrustedDownloadHost(new Uri("https://release-assets.githubusercontent.com/package")), "GitHub asset redirect is allowed");
@@ -103,7 +147,7 @@ internal static class WindowsUpdateTests
             var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(screenshot)); using (var file = File.Create(Path.Combine(directory, "settings-updates.png"))) encoder.Save(file);
         }
         catch (Exception ex) { error = ex.ToString(); }
-        File.WriteAllText(Path.Combine(directory, "update-tests.json"), JsonSerializer.Serialize(new { passed = error is null, checks, error }, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(Path.Combine(directory, "update-tests.json"), JsonSerializer.Serialize(new { passed = error is null, checks, packagedAssetName, deviatedAssetName, error }, new JsonSerializerOptions { WriteIndented = true }));
         if (window is not null) window.Quit(); else Application.Current.Shutdown(error is null ? 0 : 1);
     }
     private static IEnumerable<DependencyObject> Find(DependencyObject root)

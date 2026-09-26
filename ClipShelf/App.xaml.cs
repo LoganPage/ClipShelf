@@ -31,6 +31,9 @@ public partial class App : Application
         if (e.Args.Length == 2 && e.Args[0] == "--update-test") { await WindowsUpdateTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--native-preview-test") { await NativePreviewTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--text-preview-test") { await TextFilePreviewTests.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--ocr-test") { await ImageOcrTests.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--window-position-test") { await WindowPositionTests.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--type-filter-test") { await HistoryTypeFilterTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--native-preview-benchmark") { await NativePreviewBenchmark.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--theme-transition-test") { await ThemeTransitionTests.Run(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--preview-interaction-test") { await PreviewInteractionTests.Run(e.Args[1]); return; }
@@ -145,7 +148,8 @@ public partial class App : Application
         {
             "--cleanup-test" => "cleanup-tests.json", "--tooltip-test" => "results.json",
             "--update-test" => "update-tests.json", "--native-preview-test" or "--preview-interaction-test" => "native-preview-results.json",
-            "--text-preview-test" => "text-preview-results.json", "--native-preview-benchmark" => "benchmark.json",
+            "--text-preview-test" => "text-preview-results.json", "--ocr-test" => "ocr-results.json", "--window-position-test" => "window-position-results.json", "--native-preview-benchmark" => "benchmark.json",
+            "--type-filter-test" => "type-filter-results.json",
             "--common-preview-test" or "--file-preview-test" => "file-preview-results.json",
             "--file-record-test" => "file-record-results.json", "--copy-only-test" => "copy-only-results.json",
             "--layout-test" => "layout-regression-results.json", "--presentation-test" => "presentation-results.json",

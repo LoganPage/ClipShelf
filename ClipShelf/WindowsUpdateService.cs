@@ -21,13 +21,14 @@ internal sealed class WindowsUpdateService : IDisposable
     private const long MaxArchive = 256L * 1024 * 1024;
     private readonly HttpClient client;
     internal WindowsUpdateService(HttpMessageHandler? handler = null) { client = new HttpClient(handler ?? new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(5) }; client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipShelf-Windows/" + CurrentVersion); }
+    internal static string AssetName(Version version) => $"ClipShelf-Windows-v{version}-public-x64.zip";
     internal static WindowsRelease? ParseRelease(JsonElement release)
     {
         if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) return null;
         if (!release.TryGetProperty("tag_name", out var tagValue)) return null;
         string tag = tagValue.GetString() ?? "";
         if (!tag.StartsWith("windows-v", StringComparison.Ordinal) || !Version.TryParse(tag[9..], out var version) || version.Build < 0 || version.Revision >= 0) return null;
-        string name = $"ClipShelf-Windows-v{version}-public-x64.zip";
+        string name = AssetName(version);
         if (!release.TryGetProperty("assets", out var assets)) return null;
         foreach (var asset in assets.EnumerateArray())
         {

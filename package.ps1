@@ -1,8 +1,10 @@
-param([string]$Version)
+param([string]$Version,[switch]$AssetNameOnly)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression
 $clipPackageRoot = [IO.Path]::GetFullPath($PSScriptRoot)
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = ([xml](Get-Content -LiteralPath (Join-Path $clipPackageRoot 'ClipShelf\ClipShelf.csproj') -Raw)).Project.PropertyGroup.Version }
+$clipRuntimeAssetName = "ClipShelf-Windows-v$Version-public-x64.zip"
+if ($AssetNameOnly) { Write-Output $clipRuntimeAssetName; return }
 $clipDistribution = Join-Path $clipPackageRoot 'dist'
 $clipBinary = Join-Path $clipDistribution 'ClipShelf\ClipShelf.exe'
 if (-not (Test-Path -LiteralPath $clipBinary)) { throw 'Build the self-contained application first.' }
@@ -19,7 +21,7 @@ function Write-ClipArchive([string]$Destination, [string]$Root, [IO.FileInfo[]]$
         }
     } finally { $clipArchive.Dispose(); $clipStream.Dispose() }
 }
-$clipRuntimeArchive = Join-Path $clipPackageRoot "ClipShelf-Windows-v$Version-x64.zip"
+$clipRuntimeArchive = Join-Path $clipPackageRoot $clipRuntimeAssetName
 $clipRuntimeFiles = @(Get-ChildItem -LiteralPath (Join-Path $clipDistribution 'ClipShelf') -File -Recurse | Where-Object { $_.Extension -ne '.pdb' })
 $clipRuntimeFiles += @(Get-ChildItem -LiteralPath $clipDistribution -File | Where-Object { $_.Name -in 'README.md','PARITY.md','PERFORMANCE.md','LICENSE','install.ps1' })
 Write-ClipArchive $clipRuntimeArchive $clipDistribution $clipRuntimeFiles

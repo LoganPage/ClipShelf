@@ -52,6 +52,7 @@ public static class SettingsExperienceTests
         var checks = new List<string>(); var offsets = new List<double>();
         var openMilliseconds = new List<double>();
         string? error = null; MainWindow? window = null; SmoothScrollViewer? scroll = null;
+        double layoutDpiX = 0, layoutDpiY = 0;
         void Check(bool passed, string name) { if (!passed) throw new InvalidOperationException(name); checks.Add(name); }
         try
         {
@@ -66,10 +67,17 @@ public static class SettingsExperienceTests
             window.Show();
             async Task Idle() { await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle); window.UpdateLayout(); }
             await Idle();
+            var layoutDpi = VisualTreeHelper.GetDpi(window); layoutDpiX = layoutDpi.PixelsPerInchX; layoutDpiY = layoutDpi.PixelsPerInchY;
             Check(window.Integration is null, "Fixture never connects to the user's clipboard or native services");
             var list = (HistoryListBox)window.FindName("HistoryList");
             var toolbar = (Button)window.FindName("PinButton");
-            Button Pin(ClipItem item) => FindAll<Button>((ListBoxItem)list.ItemContainerGenerator.ContainerFromItem(item)).Single(b => b.Name == "RowPinButton");
+            Button Pin(ClipItem item)
+            {
+                list.ScrollIntoView(item); list.UpdateLayout();
+                var container = (ListBoxItem?)list.ItemContainerGenerator.ContainerFromItem(item)
+                    ?? throw new InvalidOperationException("Pinned-row fixture was not realized");
+                return FindAll<Button>(container).Single(b => b.Name == "RowPinButton");
+            }
             Check(ReferenceEquals(Pin(restoredPin).Foreground, window.FindResource("AccentBrush")), "Previously pinned record is accented on initial realization");
             foreach (var theme in new[] { "Light", "Dark" })
             {
@@ -95,7 +103,19 @@ public static class SettingsExperienceTests
                 var content = (ContentControl)window.FindName("SettingsContent");
                 var settings = new SettingsPanel(window); content.Content = settings; overlay.Visibility = Visibility.Visible;
                 await Idle(); scroll = FindAll<SmoothScrollViewer>(settings).Single();
-                Check(scroll.Template.FindName("PART_VerticalScrollBar", scroll) is System.Windows.Controls.Primitives.ScrollBar { ActualWidth: 13 }, theme + ": settings scrollbar has a 13 DIP hit target");
+                var historyLimit = FindAll<TextBox>(settings).Single(box => box.Name == "HistoryLimitInput");
+                historyLimit.Text = "2";
+                historyLimit.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, Environment.TickCount, Key.Enter)
+                    { RoutedEvent = Keyboard.KeyDownEvent });
+                await Idle();
+                Check(store.Settings.MaxItems == 2 && store.Items.Count <= 2, theme + ": editable history limit applies and trims immediately");
+                store.SetMaxItems(100);
+                if (!store.Items.Any(item => item.Id == first.Id)) store.Add(first);
+                if (!store.Items.Any(item => item.Id == second.Id)) store.Add(second);
+                settings.RefreshFromSettings(); await Idle();
+                Check(historyLimit.Text == "100", theme + ": history limit control refreshes without rebuilding settings");
+                Check(scroll.Template.FindName("PART_VerticalScrollBar", scroll) is System.Windows.Controls.Primitives.ScrollBar settingsBar
+                    && LayoutTestTolerance.Near(settingsBar.ActualWidth, 13, settingsBar), theme + ": settings scrollbar has a 13 DIP hit target");
                 Check(scroll.ScrollableHeight > 500 && !scroll.CanContentScroll, theme + ": settings uses physical continuous scrolling");
                 DependencyObject? ancestor = scroll; bool noEffect = true;
                 while (ancestor is not null) { if (ancestor is UIElement element && element.Effect is not null) noEffect = false; ancestor = VisualTreeHelper.GetParent(ancestor); }
@@ -264,7 +284,7 @@ public static class SettingsExperienceTests
         finally
         {
             scroll?.CancelWheelMotion();
-            File.WriteAllText(Path.Combine(directory, "settings-results.json"), JsonSerializer.Serialize(new { passed = error is null, checks, error, offsets, openMilliseconds,
+            File.WriteAllText(Path.Combine(directory, "settings-results.json"), JsonSerializer.Serialize(new { passed = error is null, checks, error, layoutDpiX, layoutDpiY, offsets, openMilliseconds,
                 scope = "Synthetic isolated WPF settings and pin tests. Offset observations are not displayed frame-rate measurements. No real user history, clipboard or injected desktop input." }, new JsonSerializerOptions { WriteIndented = true }));
             window?.Quit(); Application.Current.Shutdown(error is null ? 0 : 1);
         }

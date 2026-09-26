@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -19,6 +20,8 @@ public sealed class PreviewWindow : Window
 {
     private readonly PreviewSession session;
     private readonly PreviewCacheService cache;
+    private readonly IImageOcrService ocrService;
+    private readonly IOcrClipboard ocrClipboard;
     private readonly bool ownsCache;
     private readonly Border card = new() { CornerRadius = new(12), Margin = new(12), RenderTransformOrigin = new(.5, .35), RenderTransform = new ScaleTransform(1, 1) };
     private readonly TextBlock title = new() { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold };
@@ -26,6 +29,7 @@ public sealed class PreviewWindow : Window
     private readonly RecordTypeIcon icon = new() { Width = 32, Height = 28, Margin = new(0, 0, 10, 0) };
     private readonly Image image = new() { Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Top };
     private readonly Image previous = new() { Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false };
+    private readonly OcrSelectionOverlay ocrSelection = new();
     private readonly TextBox textContent = new() { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, FontSize = 16,
         BorderThickness = new(0), Background = Brushes.Transparent, Padding = new(14), VerticalAlignment = VerticalAlignment.Top,
         VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -35,6 +39,12 @@ public sealed class PreviewWindow : Window
     private readonly Grid textPanel = new() { Visibility = Visibility.Collapsed };
     private readonly StackPanel segmentControls = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new(0, 4, 0, 12) };
     private readonly Border searchPanel = new() { Padding = new(8), CornerRadius = new(8), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new(18), Visibility = Visibility.Collapsed };
+    private readonly Border ocrLayer = new() { Padding = new(12), CornerRadius = new(8), Visibility = Visibility.Collapsed,
+        HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(16, 16, 192, 16), MaxWidth = 620 };
+    private readonly TextBlock ocrStatus = new() { TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Left, Margin = new(4, 0, 4, 6) };
+    private readonly TextBox ocrText = new() { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, AcceptsReturn = true, FontSize = 16,
+        BorderThickness = new(0), Padding = new(10), MinWidth = 340, MaxWidth = 620, MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        Visibility = Visibility.Collapsed };
     private readonly TextBox previewSearch = new() { Width = 280, Height = 34, Padding = new(10, 5, 10, 5), VerticalContentAlignment = VerticalAlignment.Center };
     private readonly TextBlock searchStatus = new() { Width = 74, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly SmoothScrollViewer scroll = new();
@@ -53,18 +63,25 @@ public sealed class PreviewWindow : Window
     private readonly TextBlock warnings = new() { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(16), MaxWidth = 400, TextTrimming = TextTrimming.CharacterEllipsis, IsHitTestVisible = false };
     private readonly TextBlock zoomLabel = new() { Width = 52, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly StackPanel zoomControls = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom, Margin = new(16) };
-    private readonly Button back, next, retry, searchToggle, wrapToggle, linesToggle, previousSegment, nextSegment;
+    private readonly Button back, next, retry, searchToggle, wrapToggle, linesToggle, ocrToggle, ocrCopy, ocrCopyAll, ocrSelectAll, previousSegment, nextSegment;
     private RenderedPage? displayed;
     private TextPreviewResult? displayedText;
     private SpreadsheetPreview? displayedSpreadsheet;
     private TextPreviewViewModel? displayedTextViewModel;
     private bool updatingSearch;
+    private bool ocrActive;
+    private string ocrAllText = "";
+    private string ocrSelectedText = "";
+    private string ocrSummary = "";
+    private long ocrVersion;
+    private CancellationTokenSource? ocrCancellation;
     private int lastRecordIndex;
     private bool closing, finishedClose;
     private readonly DispatcherTimer resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly DispatcherTimer zoomTimer = new() { Interval = TimeSpan.FromMilliseconds(220) };
     private double visualZoom = 1;
     internal Task Cleanup { get; private set; } = Task.CompletedTask;
+    internal Task PendingOcr { get; private set; } = Task.CompletedTask;
     internal object? PresentedContent => session.Error is not null ? errorText : displayedSpreadsheet is not null ? spreadsheet : displayedText is not null ? textContent : image;
     internal Task PendingRender => session.Pending;
     internal int FileIndex => 0;
@@ -74,15 +91,31 @@ public sealed class PreviewWindow : Window
     internal string DisplayedLocation => fileLocation.Text;
     internal TextBox TextContent => textContent;
     internal TextBox PreviewSearch => previewSearch;
+    internal string OcrText => ocrSelectedText.Length > 0 ? ocrSelectedText : ocrAllText;
+    internal string OcrSelectedText => ocrSelectedText;
+    internal int OcrWordCount => ocrSelection.WordCount;
+    internal string OcrStatus => ocrStatus.Text;
+    internal bool OcrButtonVisible => ocrToggle.Visibility == Visibility.Visible;
+    internal TextBox OcrTextBox => ocrText;
+    internal bool OcrSelectionActive => ocrActive;
+    internal int OcrSelectedCount => ocrSelection.SelectedCount;
+    internal void CopyOcrResult() { if (ocrSelectedText.Length > 0) CopyOcrText(); else CopyAllOcrText(); }
+    internal void SelectOcrRegion(Rect normalizedRegion) => ocrSelection.SelectNormalized(normalizedRegion);
+    internal void FocusOcrSurfaceForTest() => ocrSelection.Focus();
+    internal bool HandleOcrShortcutForTest(Key key, ModifierKeys modifiers) => HandleOcrShortcut(key, modifiers);
+    internal Rect OcrPanelBounds => BoundsInWindow(ocrLayer);
+    internal Rect ZoomControlBounds => BoundsInWindow(zoomControls);
     internal void ZoomTo(double factor) => SetVisualZoom(factor);
     internal event Action<ClipItem>? RecordChanged;
     private string? ActionPath => session.Path ?? session.Current.SourcePath ?? (session.Current.FilePaths.Count > 0 ? session.Current.FilePaths[0] : null);
     internal void SetAnimationOrigin(double rowFraction) => card.RenderTransformOrigin = new Point(.5, Math.Clamp(rowFraction, .1, .9));
     public PreviewWindow(IReadOnlyList<ClipItem> items, int index) : this(items, index, null) { }
-    internal PreviewWindow(IReadOnlyList<ClipItem> items, int index, PreviewCacheService? sharedCache, bool prewarmAdjacent = false)
+    internal PreviewWindow(IReadOnlyList<ClipItem> items, int index, PreviewCacheService? sharedCache, bool prewarmAdjacent = false,
+        IImageOcrService? ocrService = null, IOcrClipboard? ocrClipboard = null)
     {
         if (items.Count == 0) throw new ArgumentException("No preview items", nameof(items));
-        cache = sharedCache ?? new(); ownsCache = sharedCache is null; session = new(items, index, cache, prewarmAdjacent: prewarmAdjacent); lastRecordIndex = session.Index;
+        cache = sharedCache ?? new(); ownsCache = sharedCache is null; this.ocrService = ocrService ?? new ImageOcrService(); this.ocrClipboard = ocrClipboard ?? new OcrClipboard();
+        session = new(items, index, cache, prewarmAdjacent: prewarmAdjacent); lastRecordIndex = session.Index;
         Width = 900; Height = 720; MinWidth = 620; MinHeight = 420; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Title = "快速预览 · ClipShelf";
         SetResourceReference(BackgroundProperty, "BackgroundBrush"); SetResourceReference(ForegroundProperty, "TextBrush");
@@ -97,6 +130,8 @@ public sealed class PreviewWindow : Window
         wrapToggle = Button("\uE8E9", "切换自动换行", ToggleTextWrap);
         linesToggle = Button("\uE8FD", "切换行号", ToggleLineNumbers);
         controls.Children.Add(searchToggle); controls.Children.Add(wrapToggle); controls.Children.Add(linesToggle);
+        ocrToggle = Button("\uE8C8", "框选图片文字", () => PendingOcr = RunOcrAsync());
+        controls.Children.Add(ocrToggle);
         back = Button("\uE76B", "上一页（←）", () => NavigatePage(-1)); next = Button("\uE76C", "下一页（→）", () => NavigatePage(1));
         controls.Children.Add(back); controls.Children.Add(next); controls.Children.Add(Button("\uE838", "在资源管理器中显示", Reveal)); controls.Children.Add(Button("\uE8BB", "关闭（Space / Esc）", Close));
         DockPanel.SetDock(controls, Dock.Right); toolbar.Children.Add(controls); toolbar.Children.Add(icon); toolbar.Children.Add(title); layout.Children.Add(toolbar);
@@ -104,6 +139,7 @@ public sealed class PreviewWindow : Window
         var pageLayers = new Grid { Margin = new(12) };
         var retained = new Canvas { IsHitTestVisible = false, ClipToBounds = true };
         retained.Children.Add(previous); pageLayers.Children.Add(retained); pageLayers.Children.Add(image);
+        Panel.SetZIndex(ocrSelection, 6); pageLayers.Children.Add(ocrSelection);
         textContent.SetResourceReference(ForegroundProperty, "TextBrush"); textNotice.SetResourceReference(ForegroundProperty, "MutedBrush");
         lineNumbers.SetResourceReference(ForegroundProperty, "MutedBrush");
         textPanel.RowDefinitions.Add(new() { Height = GridLength.Auto }); textPanel.RowDefinitions.Add(new() { Height = GridLength.Auto }); textPanel.RowDefinitions.Add(new() { Height = GridLength.Auto });
@@ -119,6 +155,15 @@ public sealed class PreviewWindow : Window
         for (int i = 0; i < 50; i++) spreadsheet.Columns.Add(new DataGridTextColumn { Header = ColumnName(i), Width = new DataGridLength(136),
             Binding = new Binding($"Cells[{i}]") { Mode = BindingMode.OneWay } });
         content.Children.Add(spreadsheet);
+        var ocrStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch, MaxWidth = 580 };
+        ocrStatus.SetResourceReference(ForegroundProperty, "MutedBrush"); ocrStack.Children.Add(ocrStatus);
+        ocrText.SetResourceReference(ForegroundProperty, "TextBrush"); ocrText.SetResourceReference(BackgroundProperty, "SettingsCanvasBrush"); ocrStack.Children.Add(ocrText);
+        var ocrButtons = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, Margin = new(0, 4, 0, 0) };
+        ocrSelectAll = TextButton("全选", () => ocrSelection.SelectAll()); ocrButtons.Children.Add(ocrSelectAll);
+        ocrCopy = TextButton("复制所选", CopyOcrText); ocrButtons.Children.Add(ocrCopy);
+        ocrCopyAll = TextButton("复制全部", CopyAllOcrText); ocrButtons.Children.Add(ocrCopyAll);
+        ocrButtons.Children.Add(TextButton("退出文字选择", CloseOcr)); ocrStack.Children.Add(ocrButtons);
+        ocrLayer.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush"); ocrLayer.Child = ocrStack; Panel.SetZIndex(ocrLayer, 18); content.Children.Add(ocrLayer);
         zoomControls.Children.Add(Button("\uE738", "缩小预览", () => SetVisualZoom(visualZoom / 1.2)));
         zoomControls.Children.Add(zoomLabel);
         zoomControls.Children.Add(Button("\uE710", "放大预览", () => SetVisualZoom(visualZoom * 1.2)));
@@ -154,8 +199,10 @@ public sealed class PreviewWindow : Window
         previewSearch.TextChanged += (_, _) => { if (!updatingSearch && displayedTextViewModel is { } view) { view.SearchText = previewSearch.Text; FindText(false, true); } };
         previewSearch.KeyDown += (_, e) => { if (e.Key == Key.Enter) { FindText(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)); e.Handled = true; } };
         scroll.ScrollChanged += (_, _) => { if (displayedTextViewModel is { } view && textPanel.IsVisible) view.ScrollOffset = scroll.VerticalOffset; };
+        image.SizeChanged += (_, _) => ocrSelection.InvalidateVisual();
+        ocrSelection.SelectionChanged += OnOcrSelectionChanged;
         Closing += OnClosing;
-        Closed += (_, _) => { resizeTimer.Stop(); zoomTimer.Stop(); scroll.CancelWheelMotion(); session.Changed -= Update; PreviewKeyDown -= OnPreviewKey; PreviewMouseWheel -= OnPreviewWheel; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); spreadsheet.ItemsSource = null; Cleanup = ReleaseAsync(); };
+        Closed += (_, _) => { ResetOcrState(); resizeTimer.Stop(); zoomTimer.Stop(); scroll.CancelWheelMotion(); session.Changed -= Update; ocrSelection.SelectionChanged -= OnOcrSelectionChanged; PreviewKeyDown -= OnPreviewKey; PreviewMouseWheel -= OnPreviewWheel; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); ocrText.Clear(); spreadsheet.ItemsSource = null; Cleanup = ReleaseAsync(); };
     }
     private static string ColumnName(int index) { string name = ""; for (int n = index + 1; n > 0; n = (n - 1) / 26) name = (char)('A' + (n - 1) % 26) + name; return name; }
     private static Button Button(string glyph, string tooltip, Action action)
@@ -170,6 +217,7 @@ public sealed class PreviewWindow : Window
     private void OnPreviewKey(object sender, KeyEventArgs e)
     {
         scroll.CancelWheelMotion();
+        if (HandleOcrShortcut(e.Key, Keyboard.Modifiers)) { e.Handled = true; return; }
         if (PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Spreadsheet && session.PresentedSpreadsheet is not null && Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.PageDown or Key.PageUp or Key.Home or Key.End) {
             var viewer = FindScrollViewer(spreadsheet);
             if (viewer is not null) { if (e.Key == Key.PageDown) viewer.PageDown(); else if (e.Key == Key.PageUp) viewer.PageUp(); else if (e.Key == Key.Home) viewer.ScrollToTop(); else viewer.ScrollToBottom(); }
@@ -186,9 +234,25 @@ public sealed class PreviewWindow : Window
         if (Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.Up or Key.Down) { RememberTextViewState(); session.HandleKey(e.Key); e.Handled = true; return; }
         if (Keyboard.Modifiers == ModifierKeys.None && session.HandleKey(e.Key)) { e.Handled = true; return; }
         // Selection/copy stay local to the read-only text control; never dispatch the shelf's copy command.
-        if ((textContent.IsKeyboardFocusWithin || fileLocation.IsKeyboardFocusWithin || previewSearch.IsKeyboardFocusWithin) && Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.C or Key.A) return;
+        if ((textContent.IsKeyboardFocusWithin || ocrText.IsKeyboardFocusWithin || fileLocation.IsKeyboardFocusWithin || previewSearch.IsKeyboardFocusWithin) && Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.C or Key.A) return;
         // A separate top-level window plus this boundary prevents owner shortcuts firing.
         if (e.Key is not (Key.Tab or Key.Enter or Key.LeftAlt or Key.RightAlt or Key.System)) e.Handled = true;
+    }
+    private bool HandleOcrShortcut(Key key, ModifierKeys modifiers)
+    {
+        if (!ocrActive) return false;
+        if (key == Key.Escape) { CloseOcr(); return true; }
+        if (modifiers != ModifierKeys.Control || key is not (Key.C or Key.A)) return false;
+        if (ocrText.IsKeyboardFocusWithin)
+        {
+            if (key == Key.A) ocrText.SelectAll();
+            else if (ocrText.SelectionLength > 0)
+                ocrStatus.Text = ocrClipboard.TrySetText(ocrText.SelectedText) ? "所选文字已复制。" : "剪贴板正被其他程序占用，请稍后重试。";
+            return true;
+        }
+        if (key == Key.A) ocrSelection.SelectAll();
+        else CopyOcrText();
+        return true;
     }
     private static ScrollViewer? FindScrollViewer(DependencyObject root) {
         if (root is ScrollViewer viewer) return viewer;
@@ -238,16 +302,106 @@ public sealed class PreviewWindow : Window
         return found;
     }
     private void RememberTextViewState() { if (displayedTextViewModel is { } view && textPanel.IsVisible) view.ScrollOffset = scroll.VerticalOffset; }
+    internal async Task RunOcrAsync()
+    {
+        if (PreviewFormatRegistry.FormatOf(session.Current) != PreviewFormat.Image || session.Error is not null) return;
+        string? path = session.Path;
+        ResetOcrState();
+        ocrActive = true; long request = ++ocrVersion; Guid record = session.Current.Id;
+        ocrCancellation = new CancellationTokenSource(); CancellationToken token = ocrCancellation.Token;
+        ocrLayer.Visibility = Visibility.Visible; ocrText.Clear(); ocrText.Visibility = Visibility.Collapsed;
+        ocrStatus.Text = "正在使用 Windows 本地识别引擎定位图片文字…";
+        ocrCopy.IsEnabled = ocrCopyAll.IsEnabled = ocrSelectAll.IsEnabled = false; ocrToggle.IsEnabled = false;
+        zoomControls.Visibility = Visibility.Visible;
+        try
+        {
+            if (path is null) throw new PreviewException("MissingFile", "图片文件已移动或删除，无法提取文字。");
+            ImageOcrResult result = await ocrService.RecognizeAsync(path, token);
+            if (token.IsCancellationRequested || closing || request != ocrVersion || session.Current.Id != record) return;
+            ocrAllText = result.Text;
+            ocrSummary = result.Text.Length == 0
+                ? $"未在图片中识别到文字 · {result.LanguageTag}"
+                : result.WordRegions.Count > 0
+                    ? $"拖动鼠标框选图片文字 · 已定位 {result.WordRegions.Count} 处 · {result.LanguageTag} · {result.Duration.TotalMilliseconds:F0} ms" + (result.Downscaled ? " · 大图已缩小后识别" : "")
+                    : $"已识别文字，但当前引擎未返回文字位置 · {result.LanguageTag}";
+            ocrStatus.Text = ocrSummary;
+            ocrCopyAll.IsEnabled = result.Text.Length > 0;
+            ocrSelectAll.IsEnabled = result.WordRegions.Count > 0;
+            ocrSelection.SetWords(result.WordRegions, GetOcrImageBounds);
+            if (result.Text.Length > 0 && result.WordRegions.Count == 0)
+            {
+                ocrSelectedText = result.Text; ocrText.Text = result.Text; ocrText.Visibility = Visibility.Visible; ocrCopy.IsEnabled = true;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (PreviewException error)
+        {
+            if (!token.IsCancellationRequested && !closing && request == ocrVersion && session.Current.Id == record)
+                ocrStatus.Text = error.Message;
+        }
+        catch (Exception)
+        {
+            if (!token.IsCancellationRequested && !closing && request == ocrVersion && session.Current.Id == record)
+                ocrStatus.Text = "文字提取没有完成，请重试。";
+        }
+        finally
+        {
+            if (request == ocrVersion) ocrToggle.IsEnabled = true;
+        }
+    }
+    private void CopyOcrText()
+    {
+        if (ocrSelectedText.Length == 0) return;
+        ocrStatus.Text = ocrClipboard.TrySetText(ocrSelectedText) ? "所选文字已复制。" : "剪贴板正被其他程序占用，请稍后重试。";
+    }
+    private void CopyAllOcrText()
+    {
+        if (ocrAllText.Length == 0) return;
+        ocrStatus.Text = ocrClipboard.TrySetText(ocrAllText) ? "全部识别文字已复制。" : "剪贴板正被其他程序占用，请稍后重试。";
+    }
+    private void OnOcrSelectionChanged(string text)
+    {
+        ocrSelectedText = text;
+        ocrText.Text = text;
+        ocrText.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ocrCopy.IsEnabled = text.Length > 0;
+        if (!ocrActive) return;
+        ocrStatus.Text = text.Length > 0 ? $"已选中 {ocrSelection.SelectedCount} 处文字 · 可按 Ctrl+C 复制" : ocrSummary;
+    }
+    private Rect GetOcrImageBounds()
+    {
+        if (image.Source is not { } source || image.ActualWidth <= 0 || image.ActualHeight <= 0 || source.Width <= 0 || source.Height <= 0)
+            return Rect.Empty;
+        Point origin = image.TranslatePoint(new Point(0, 0), ocrSelection);
+        double scale = Math.Min(image.ActualWidth / source.Width, image.ActualHeight / source.Height);
+        double width = source.Width * scale, height = source.Height * scale;
+        return new Rect(origin.X + (image.ActualWidth - width) / 2, origin.Y + (image.ActualHeight - height) / 2, width, height);
+    }
+    private Rect BoundsInWindow(FrameworkElement element)
+    {
+        if (!element.IsVisible || element.ActualWidth <= 0 || element.ActualHeight <= 0) return Rect.Empty;
+        try { return element.TransformToAncestor(this).TransformBounds(new Rect(element.RenderSize)); }
+        catch (InvalidOperationException) { return Rect.Empty; }
+    }
+    private void CloseOcr() { ResetOcrState(); Update(); }
+    private void ResetOcrState()
+    {
+        ocrVersion++; ocrCancellation?.Cancel(); ocrCancellation?.Dispose(); ocrCancellation = null;
+        ocrActive = false; ocrAllText = ocrSelectedText = ocrSummary = ""; ocrSelection.Clear();
+        ocrLayer.Visibility = Visibility.Collapsed; ocrText.Clear(); ocrCopy.IsEnabled = ocrCopyAll.IsEnabled = ocrSelectAll.IsEnabled = false; ocrToggle.IsEnabled = true;
+    }
     private void Update()
     {
         using var timing = PreviewMetrics.Measure("bitmap-submit");
         if (closing) return;
-        if (lastRecordIndex != session.Index) { lastRecordIndex = session.Index; visualZoom = 1; zoomTimer.Stop(); RecordChanged?.Invoke(session.Current); }
+        if (lastRecordIndex != session.Index) { ResetOcrState(); lastRecordIndex = session.Index; visualZoom = 1; zoomTimer.Stop(); RecordChanged?.Invoke(session.Current); }
         title.Text = session.Current.Kind == ClipKind.File && session.Path is { } path ? Path.GetFileName(path) : session.Current.DisplayTitle;
         icon.Item = session.Current; icon.SetResourceReference(RecordTypeIcon.PaletteProperty, "TextBrush");
         back.IsEnabled = session.Count > 0 && session.Page > 0; next.IsEnabled = session.Count > 0 && (!session.CountFinal || session.Page < session.Count - 1);
         bool textMode = session.Error is null && PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Text;
         bool sheetMode = session.Error is null && PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Spreadsheet;
+        bool imageMode = session.Error is null && PreviewFormatRegistry.FormatOf(session.Current) == PreviewFormat.Image;
+        ocrToggle.Visibility = imageMode ? Visibility.Visible : Visibility.Hidden;
         zoomControls.Visibility = session.Error is null && !textMode && !sheetMode && PreviewFormatRegistry.Supports(session.Current) ? Visibility.Visible : Visibility.Collapsed;
         zoomLabel.Text = $"{visualZoom:P0}";
         searchToggle.Visibility = wrapToggle.Visibility = linesToggle.Visibility = textMode ? Visibility.Visible : Visibility.Hidden;
@@ -341,10 +495,10 @@ public sealed class PreviewWindow : Window
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
         if (finishedClose) return;
-        e.Cancel = true; if (closing) return; closing = true; session.Cancel(); AnimateCard(false);
+        e.Cancel = true; if (closing) return; closing = true; ResetOcrState(); session.Cancel(); AnimateCard(false);
         await Task.Delay(SystemParameters.ClientAreaAnimation ? 160 : 1); finishedClose = true; Close();
     }
-    private async Task ReleaseAsync() { await session.DisposeAsync(); displayed = null; displayedText = null; if (ownsCache) cache.Dispose(); }
+    private async Task ReleaseAsync() { try { await PendingOcr; } catch (OperationCanceledException) { } await session.DisposeAsync(); displayed = null; displayedText = null; if (ownsCache) cache.Dispose(); }
     internal async Task CloseAndReleaseAsync()
     {
         session.Cancel(); closing = finishedClose = true; Close(); await Cleanup;

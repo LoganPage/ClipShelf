@@ -70,7 +70,8 @@ internal static class TextImagePreviewTests
         }
         // Exercise the actual controls and routed keyboard boundary with read-only clipboard observation.
         uint sequence = NativeMethods.GetClipboardSequenceNumber();
-        var window = new PreviewWindow(items, 0, cache) { ShowActivated = false, ShowInTaskbar = false };
+        var fakeOcr = new FakeOcrService(); var fakeClipboard = new FakeOcrClipboard();
+        var window = new PreviewWindow(items, 0, cache, ocrService: fakeOcr, ocrClipboard: fakeClipboard) { ShowActivated = false, ShowInTaskbar = false };
         try {
             window.Show(); await FilePreviewTests.Idle(); await window.PendingRender; window.UpdateLayout();
             check(window.PresentedContent is TextBox { IsReadOnly: true } box && box.Text == text.Text, "Text is selectable in a read-only preview control");
@@ -81,6 +82,35 @@ internal static class TextImagePreviewTests
             check(window.RecordIndex == 1 && window.Session.Error?.Code == "Unsupported" && window.DisplayedLocation.Contains("unsupported.mp3"), "Routed Down opens the adjacent unsupported preview page");
             Key(System.Windows.Input.Key.Down); await window.PendingRender; await Task.Delay(160); window.UpdateLayout();
             check(window.RecordIndex == 2 && window.PresentedContent is Image { Source: not null }, "A second routed Down continues from unsupported to image");
+            check(window.OcrButtonVisible && fakeOcr.InvocationCount == 0, "Image preview exposes OCR without running it automatically");
+            await window.RunOcrAsync();
+            check(window.OcrText == "ClipShelf OCR 测试" && window.OcrWordCount == 3 && fakeOcr.InvocationCount == 1, "On-demand OCR keeps spatial word regions on the image");
+            window.CopyOcrResult();
+            check(fakeClipboard.Text == window.OcrText, "OCR copy action sends exactly the displayed text to the clipboard boundary");
+            window.SelectOcrRegion(new Rect(.05, .05, .38, .18));
+            check(window.OcrSelectedText == "ClipShelf" && window.OcrStatus.Contains("已选中 1 处"), "Pointer selection maps an image rectangle to the intersecting OCR word");
+            window.OcrTextBox.Focus(); window.OcrTextBox.Select(0, 4);
+            check(window.HandleOcrShortcutForTest(System.Windows.Input.Key.C, ModifierKeys.Control) && fakeClipboard.Text == "Clip", "Ctrl+C inside the OCR result box copies only its manually selected substring");
+            window.HandleOcrShortcutForTest(System.Windows.Input.Key.A, ModifierKeys.Control);
+            check(window.OcrTextBox.SelectionLength == window.OcrTextBox.Text.Length, "Ctrl+A inside the OCR result box selects its displayed text locally");
+            window.FocusOcrSurfaceForTest(); window.HandleOcrShortcutForTest(System.Windows.Input.Key.A, ModifierKeys.Control);
+            check(window.OcrSelectedCount == window.OcrWordCount, "Ctrl+A outside the result box selects every word region on the image");
+            window.Width = window.MinWidth; window.UpdateLayout(); await FilePreviewTests.Idle();
+            Rect ocrBounds = window.OcrPanelBounds, zoomBounds = window.ZoomControlBounds;
+            check(!ocrBounds.IsEmpty && !zoomBounds.IsEmpty && !ocrBounds.IntersectsWith(zoomBounds),
+                $"Minimum-width OCR panel leaves zoom controls unobstructed (OCR={ocrBounds}; zoom={zoomBounds})");
+            Capture(window, Path.Combine(root, "ocr-selection-narrow.png"));
+            window.Width = width; window.UpdateLayout(); await FilePreviewTests.Idle();
+            window.SelectOcrRegion(new Rect(.05, .05, .38, .18));
+            window.UpdateLayout(); await FilePreviewTests.Idle();
+            Capture(window, Path.Combine(root, "ocr-selection-light.png"));
+            window.CopyOcrResult();
+            check(fakeClipboard.Text == "ClipShelf", "OCR copy sends only the spatially selected text when a region is selected");
+            fakeOcr.Block = true;
+            Task pendingOcr = window.RunOcrAsync();
+            Key(System.Windows.Input.Key.Up); await pendingOcr; await window.PendingRender;
+            check(fakeOcr.Cancelled && window.RecordIndex == 1 && window.OcrText.Length == 0, "Switching records cancels in-flight OCR and clears its result");
+            Key(System.Windows.Input.Key.Down); await window.PendingRender;
             Capture(window, Path.Combine(root, "restored-image-light.png"));
             var scroll = FilePreviewTests.All<ScrollViewer>(window).First();
             scroll.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -120) { RoutedEvent = Mouse.MouseWheelEvent });
@@ -92,9 +122,35 @@ internal static class TextImagePreviewTests
             Capture(window, Path.Combine(root, "restored-text-dark.png"));
             check(window.ActualWidth == width && window.ActualHeight == height && window.PresentedContent is TextBox, "Mixed previews keep fixed window layout across theme and content changes");
             check(sequence == NativeMethods.GetClipboardSequenceNumber(), "Text/image opening and navigation never touch clipboard");
-            Key(System.Windows.Input.Key.Space); await Task.Delay(210); await window.Cleanup;
-            check(!window.IsVisible, "Space closes restored text preview and releases session");
+            Key(System.Windows.Input.Key.Down); await window.PendingRender; Key(System.Windows.Input.Key.Down); await window.PendingRender;
+            Task closingOcr = window.RunOcrAsync();
+            Key(System.Windows.Input.Key.Escape); await closingOcr; await Task.Delay(30);
+            check(window.IsVisible && !window.OcrSelectionActive, "First Escape exits OCR selection mode without closing the preview");
+            Key(System.Windows.Input.Key.Escape); await Task.Delay(210); await window.Cleanup;
+            check(!window.IsVisible && fakeOcr.CancelCount >= 2, "Second Escape closes preview after OCR work has been cancelled and released");
         } finally { if (window.IsVisible) await window.CloseAndReleaseAsync(); ThemeManager.Apply(new AppSettings { Theme = "Light" }); }
+    }
+    private sealed class FakeOcrService : IImageOcrService
+    {
+        public int InvocationCount { get; private set; }
+        public bool Block { get; set; }
+        public bool Cancelled => CancelCount > 0;
+        public int CancelCount { get; private set; }
+        public async Task<ImageOcrResult> RecognizeAsync(string path, CancellationToken token)
+        {
+            InvocationCount++; token.ThrowIfCancellationRequested();
+            if (Block) try { await Task.Delay(Timeout.Infinite, token); } catch (OperationCanceledException) { CancelCount++; throw; }
+            return new ImageOcrResult("ClipShelf OCR 测试", "zh-Hans-CN", false, TimeSpan.FromMilliseconds(8), new[] {
+                new OcrWordRegion("ClipShelf", new Rect(.08, .08, .30, .12), 0, 0),
+                new OcrWordRegion("OCR", new Rect(.46, .08, .18, .12), 0, 1),
+                new OcrWordRegion("测试", new Rect(.08, .30, .20, .12), 1, 0)
+            });
+        }
+    }
+    private sealed class FakeOcrClipboard : IOcrClipboard
+    {
+        public string Text { get; private set; } = "";
+        public bool TrySetText(string text) { Text = text; return true; }
     }
     private static void WriteImage(string path, int width, int height)
     {

@@ -26,6 +26,7 @@ public static class FocusCueTests
     {
         directory = Path.GetFullPath(directory); Directory.CreateDirectory(directory);
         var checks = new List<string>(); string? error = null; MainWindow? window = null;
+        double layoutDpiX = 0, layoutDpiY = 0;
         void Check(bool passed, string name) { if (!passed) throw new InvalidOperationException(name); checks.Add(name); }
         async Task Idle() => await Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         try
@@ -33,6 +34,7 @@ public static class FocusCueTests
             window = Fixture(directory); window.Left = window.Top = -12000;
             window.WindowStartupLocation = WindowStartupLocation.Manual; window.ShowInTaskbar = false;
             window.Show(); window.Activate(); await Idle();
+            var layoutDpi = VisualTreeHelper.GetDpi(window); layoutDpiX = layoutDpi.PixelsPerInchX; layoutDpiY = layoutDpi.PixelsPerInchY;
             var list = (HistoryListBox)window.FindName("HistoryList");
             var settings = (ContentControl)window.FindName("SettingsContent");
             var row = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(0);
@@ -108,7 +110,7 @@ public static class FocusCueTests
             Check(fourth.IsKeyboardFocused && !fourth.IsSelected
                 && selectedBeforeControlNavigation.SetEquals(list.SelectedItems.Cast<ClipItem>().Select(item => item.Id)),
                 "Ctrl+Down moves focus to an unselected row without changing the selected range");
-            Check(fourthMarker.Visibility == Visibility.Visible && fourthMarker.ActualWidth == 2
+            Check(fourthMarker.Visibility == Visibility.Visible && LayoutTestTolerance.Near(fourthMarker.ActualWidth, 2, fourthMarker)
                 && fourthMarker.HorizontalAlignment == HorizontalAlignment.Left
                 && fourthMarker.ActualHeight < fourth.ActualHeight
                 && fourthMarker.BorderThickness == new Thickness(0) && fourthMarker.BorderBrush is null,
@@ -167,7 +169,7 @@ public static class FocusCueTests
         catch (Exception ex) { error = ex.ToString(); }
         finally
         {
-            File.WriteAllText(Path.Combine(directory, "focus-results.json"), JsonSerializer.Serialize(new { passed = error is null, checks, error,
+            File.WriteAllText(Path.Combine(directory, "focus-results.json"), JsonSerializer.Serialize(new { passed = error is null, checks, error, layoutDpiX, layoutDpiY,
                 scope = "Synthetic own-app WPF focus and adorner checks, including production arrow/Shift/Ctrl selection handlers; no clipboard access or system input. Shortcut lifecycle is simulated at policy level, not real Win+Shift+S." }, new JsonSerializerOptions { WriteIndented = true }));
             window?.Quit(); if (window is null) Application.Current.Shutdown(error is null ? 0 : 1);
         }

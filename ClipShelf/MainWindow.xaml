@@ -19,6 +19,10 @@
     <ScrollBar x:Name="PART_VerticalScrollBar" Orientation="Vertical" HorizontalAlignment="Right" Margin="0,3,0,3" Width="13" MinWidth="0" Minimum="0" Maximum="{TemplateBinding ScrollableHeight}" ViewportSize="{TemplateBinding ViewportHeight}" Value="{Binding VerticalOffset, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}" Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}" Focusable="False"/>
    </Grid>
   </ControlTemplate>
+  <Style x:Key="TypeFilterButton" TargetType="Button" BasedOn="{StaticResource SoftButton}">
+   <Setter Property="MinWidth" Value="58"/><Setter Property="Height" Value="28"/><Setter Property="Padding" Value="11,4"/><Setter Property="Background" Value="Transparent"/><Setter Property="FontSize" Value="12"/>
+   <Style.Triggers><Trigger Property="Tag" Value="Selected"><Setter Property="Background" Value="{DynamicResource SearchBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger></Style.Triggers>
+  </Style>
  </Window.Resources>
  <!-- DWM owns the only outer contour. Never stack an unrelated client-side radius over it. -->
  <Border x:Name="WindowFrame" BorderThickness="0" CornerRadius="0" Padding="1" Background="{DynamicResource BackgroundBrush}">
@@ -60,6 +64,14 @@
       <Button Grid.Column="3" Style="{StaticResource ToolbarButton}" Width="24" Height="20" Content="&#xE894;" FontSize="10" ToolTip="清除搜索" AutomationProperties.Name="清除搜索" Click="ClearSearch_Click"/>
      </Grid>
     </local:RoundedClipBorder>
+    <Border x:Name="TypeFilterBar" Margin="0,8,0,0" Padding="2" HorizontalAlignment="Left" Background="{DynamicResource ActionBrush}" CornerRadius="{DynamicResource ControlCorners}" AutomationProperties.Name="按记录类型筛选">
+     <UniformGrid Columns="4">
+      <Button x:Name="FilterAllButton" Style="{StaticResource TypeFilterButton}" Content="全部" CommandParameter="All" ToolTip="显示全部记录" Click="TypeFilter_Click"/>
+      <Button x:Name="FilterTextButton" Style="{StaticResource TypeFilterButton}" Content="文字" CommandParameter="Text" ToolTip="只显示文字记录" Click="TypeFilter_Click"/>
+      <Button x:Name="FilterFileButton" Style="{StaticResource TypeFilterButton}" Content="文件" CommandParameter="File" ToolTip="只显示文件记录" Click="TypeFilter_Click"/>
+      <Button x:Name="FilterImageButton" Style="{StaticResource TypeFilterButton}" Content="图片" CommandParameter="Image" ToolTip="只显示图片记录" Click="TypeFilter_Click"/>
+     </UniformGrid>
+    </Border>
    </StackPanel>
    <Grid Grid.Row="1" Margin="18,8,18,18">
     <local:RoundedClipBorder x:Name="HistoryBorder" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource ControlCorners}" PreviewMouseLeftButtonDown="History_MouseDown" PreviewMouseMove="History_MouseMove" PreviewMouseLeftButtonUp="History_MouseUp" LostMouseCapture="History_LostCapture" PreviewMouseWheel="History_DragMouseWheel">

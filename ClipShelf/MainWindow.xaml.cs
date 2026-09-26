@@ -71,12 +71,13 @@ public partial class MainWindow : Window
         UpdateIcon();
         store.Changed += StoreChanged;
         toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; toastTimer.Stop(); };
-        SourceInitialized += (_, _) => InitializeNative();
+        SourceInitialized += (_, _) => { InitializeNative(); RestoreSavedPosition(); };
         Closing += OnClosing;
         SystemEvents.UserPreferenceChanged += SystemAppearanceChanged;
         ContentRendered += (_, _) => Dispatcher.BeginInvoke(() => {
             if (!quitting && SettingsContent.Content is null) SettingsContent.Content = new SettingsPanel(this);
         }, DispatcherPriority.ContextIdle);
+        UpdateTypeFilterButtons();
         Refresh();
     }
     private void InitializeNative()
@@ -87,6 +88,35 @@ public partial class MainWindow : Window
             ConnectIntegration();
         } else { StatusText.Text = "界面预览 · 示例记录"; return; }
         InitializeTray();
+    }
+    private void RestoreSavedPosition()
+    {
+        if (demo || Store.Settings.WindowLeft is not double savedLeft || Store.Settings.WindowTop is not double savedTop) return;
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        if (!GetWindowRect(handle, out NativeRect current)) return;
+        var workAreas = Forms.Screen.AllScreens.Select(screen => new Rect(screen.WorkingArea.Left, screen.WorkingArea.Top,
+            screen.WorkingArea.Width, screen.WorkingArea.Height)).ToArray();
+        if (!WindowPositionPolicy.IsReachable(savedLeft, savedTop, Math.Max(1, current.Right - current.Left), workAreas)) return;
+        // CenterScreen has already selected a safe initial monitor by SourceInitialized; this final native move
+        // overrides only the position and leaves the deliberately fixed startup size untouched.
+        SetWindowPos(handle, IntPtr.Zero, (int)Math.Round(savedLeft), (int)Math.Round(savedTop), 0, 0,
+            0x0001 | 0x0004 | 0x0010); // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+    }
+
+    private void SaveWindowPosition()
+    {
+        if (demo) return;
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        if (WindowState == WindowState.Normal && GetWindowRect(handle, out NativeRect current))
+        {
+            Store.Settings.WindowLeft = current.Left;
+            Store.Settings.WindowTop = current.Top;
+            return;
+        }
+        if (PresentationSource.FromVisual(this)?.CompositionTarget is not { } target) return;
+        Point device = target.TransformToDevice.Transform(new Point(RestoreBounds.Left, RestoreBounds.Top));
+        Store.Settings.WindowLeft = device.X;
+        Store.Settings.WindowTop = device.Y;
     }
     internal void ConnectIntegration(bool manageStartup = true)
     {
@@ -138,17 +168,19 @@ public partial class MainWindow : Window
         searchCancellation?.Cancel(); searchCancellation?.Dispose(); searchCancellation = null;
         RestoreSearchStatus();
         string query = SearchBox.Text;
-        if (string.IsNullOrWhiteSpace(query)) { ApplyVisible(Store.Items.ToList(), query); PendingSearch = Task.CompletedTask; return; }
+        string typeFilter = HistoryTypeFilter.Normalize(Store.Settings.HistoryTypeFilter);
+        if (string.IsNullOrWhiteSpace(query)) { ApplyVisible(HistoryTypeFilter.Filter(Store.Items, typeFilter), query); PendingSearch = Task.CompletedTask; return; }
         searchCancellation = new CancellationTokenSource();
-        PendingSearch = SearchAsync(Store.Items.ToArray(), query, searchCancellation.Token);
+        PendingSearch = SearchAsync(Store.Items.ToArray(), query, typeFilter, searchCancellation.Token);
     }
-    private async Task SearchAsync(ClipItem[] snapshot, string query, CancellationToken cancellation)
+    private async Task SearchAsync(ClipItem[] snapshot, string query, string typeFilter, CancellationToken cancellation)
     {
         try
         {
             // A short, cancellable coalescing window avoids indexing each intermediate keystroke.
             await Task.Delay(60, cancellation);
-            var work = Task.Run(() => SearchMatcher.Filter(snapshot, query, cancellation), cancellation);
+            var work = Task.Run(() => SearchMatcher.Filter(snapshot, query, cancellation,
+                item => HistoryTypeFilter.Matches(item, typeFilter)), cancellation);
             _ = ShowSearchProgressAsync(work, cancellation);
             var matches = await work;
             if (cancellation.IsCancellationRequested || quitting) return;
@@ -208,8 +240,23 @@ public partial class MainWindow : Window
         bool empty = visible.Count == 0;
         EmptyPanel.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
         HistoryBorder.Visibility = empty ? Visibility.Hidden : Visibility.Visible;
-        EmptyTitle.Text = string.IsNullOrWhiteSpace(query) ? "还没有历史记录" : "没有匹配的记录";
-        EmptyDetail.Text = string.IsNullOrWhiteSpace(query) ? "复制文字、文件或图片后，会显示在这里。" : "换个关键词，试试文字、文件名或拼音。";
+        bool hasHistory = Store.Items.Count > 0;
+        bool filtered = HistoryTypeFilter.Normalize(Store.Settings.HistoryTypeFilter) != HistoryTypeFilter.All;
+        if (!hasHistory)
+        {
+            EmptyTitle.Text = "还没有历史记录";
+            EmptyDetail.Text = "复制文字、文件或图片后，会显示在这里。";
+        }
+        else if (!string.IsNullOrWhiteSpace(query))
+        {
+            EmptyTitle.Text = "没有匹配的记录";
+            EmptyDetail.Text = filtered ? "当前关键词与类型筛选没有共同匹配的记录。" : "换个关键词，试试文字、文件名或拼音。";
+        }
+        else
+        {
+            EmptyTitle.Text = "没有此类型的记录";
+            EmptyDetail.Text = "切换到“全部”，或复制一条该类型的内容。";
+        }
         UpdateActions();
         if (hadRowFocus && IsActive && !pointerDown && !dragging
             && SettingsOverlay.Visibility != Visibility.Visible) RestoreHistoryFocus(scrollIntoView: false);
@@ -247,6 +294,28 @@ public partial class MainWindow : Window
     private void History_SelectionChanged(object sender, SelectionChangedEventArgs e) { ResetRangeCache(); if (!refreshing) UpdateActions(); }
     private void Search_Changed(object sender, TextChangedEventArgs e) { if (HistoryList is null) return; ClearSelectionState(); resetScroll = true; SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; Refresh(); }
     private void ClearSearch_Click(object sender, RoutedEventArgs e) { SearchBox.Clear(); RestoreHistoryFocus(); }
+    private void TypeFilter_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { CommandParameter: string requested }) return;
+        string filter = HistoryTypeFilter.Normalize(requested);
+        if (filter == Store.Settings.HistoryTypeFilter) return;
+        Store.Settings.HistoryTypeFilter = filter;
+        Store.SaveSettings();
+        UpdateTypeFilterButtons();
+        resetScroll = true;
+        Refresh();
+    }
+    private void UpdateTypeFilterButtons()
+    {
+        string selected = HistoryTypeFilter.Normalize(Store.Settings.HistoryTypeFilter);
+        foreach (var (button, value, label) in new[] { (FilterAllButton, HistoryTypeFilter.All, "全部"), (FilterTextButton, HistoryTypeFilter.Text, "文字"),
+            (FilterFileButton, HistoryTypeFilter.File, "文件"), (FilterImageButton, HistoryTypeFilter.Image, "图片") })
+        {
+            bool active = selected == value;
+            button.Tag = active ? "Selected" : null;
+            AutomationProperties.SetName(button, active ? $"{label}记录，已选择" : $"筛选{label}记录");
+        }
+    }
     private async void Copy_Click(object sender, RoutedEventArgs e) => await CopyItems(Selected());
     private void Pin_Click(object sender, RoutedEventArgs e) => Store.TogglePinned(Selected().Select(x => x.Id));
     private void Delete_Click(object sender, RoutedEventArgs e) => DeleteSelection();
@@ -492,7 +561,8 @@ public partial class MainWindow : Window
         CloseTrayContextMenu();
         searchCancellation?.Cancel(); searchCancellation?.Dispose(); searchCancellation = null;
         Integration?.Dispose(); Integration = null;
-        Store.Settings.WindowWidth = RestoreBounds.Width; Store.Settings.WindowHeight = RestoreBounds.Height - 30; Store.SaveSettings();
+        Store.Settings.WindowWidth = RestoreBounds.Width; Store.Settings.WindowHeight = RestoreBounds.Height - 30;
+        SaveWindowPosition(); Store.SaveSettings();
         bool saved = await Store.FlushAsync();
         if (saved) saved = Store.Flush();
         if (!saved)
@@ -515,4 +585,7 @@ public partial class MainWindow : Window
     }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int RegisterWindowMessage(string name);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rectangle);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
+    [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left, Top, Right, Bottom; }
 }

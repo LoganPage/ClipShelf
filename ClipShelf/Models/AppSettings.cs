@@ -23,6 +23,7 @@ public sealed class AppSettings
     public string MultiUnselectedClick { get; set; } = "Collapse";
     public int ClickRecoveryMilliseconds { get; set; } = 600;
     public int MaxItems { get; set; } = 100;
+    public string HistoryTypeFilter { get; set; } = "All";
     public bool LaunchAtLogin { get; set; }
     public bool CloseToTray { get; set; } = true;
     public bool PrewarmAdjacentPreview { get; set; }
@@ -30,6 +31,8 @@ public sealed class AppSettings
     public const double DefaultWindowHeight = 552;
     public double WindowWidth { get; set; } = DefaultWindowWidth;
     public double WindowHeight { get; set; } = DefaultWindowHeight - 30;
+    public double? WindowLeft { get; set; }
+    public double? WindowTop { get; set; }
 
     private static string DefaultScreenshotFolder()
     {

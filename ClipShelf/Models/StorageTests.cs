@@ -31,6 +31,30 @@ public static class StorageTests
         var reopened = new HistoryStore(testDirectory);
         Assert(reopened.Items.Count == 3 && reopened.Settings.Theme == "Dark" && reopened.Settings.MaxItems == 3,
             "History and settings survive restart", results);
+        var adjustable = new HistoryStore(Path.Combine(testDirectory, "adjustable-limit"));
+        var protectedItem = new ClipItem { Text = "Pinned limit record", Title = "Pinned limit record", IsPinned = true, CreatedAt = DateTimeOffset.Now.AddDays(-5) };
+        adjustable.Add(protectedItem);
+        for (int index = 0; index < 5; index++) adjustable.Add(new ClipItem { Text = "Limit record " + index, Title = "Limit record " + index, CreatedAt = DateTimeOffset.Now.AddMinutes(index) });
+        int trimmed = adjustable.SetMaxItems(3);
+        Assert(trimmed == 3 && adjustable.Items.Count == 3 && adjustable.Items.Any(item => item.Id == protectedItem.Id),
+            "Changing the history limit immediately trims old unpinned records and preserves pinned records", results);
+        Assert(new HistoryStore(adjustable.DirectoryPath).Settings.MaxItems == 3 && new HistoryStore(adjustable.DirectoryPath).Items.Count == 3,
+            "Changed history limit and trimmed history persist together", results);
+        var legacySettings = new HistoryStore(Path.Combine(testDirectory, "legacy-settings"));
+        File.WriteAllText(legacySettings.SettingsPath, "{\"Theme\":\"Light\"}");
+        Assert(new HistoryStore(legacySettings.DirectoryPath).Settings.MaxItems == 100,
+            "Settings without MaxItems retain the historical default of 100", results);
+        adjustable.Settings.WindowLeft = 1840;
+        adjustable.Settings.WindowTop = 160;
+        adjustable.SaveSettings();
+        var positioned = new HistoryStore(adjustable.DirectoryPath);
+        Assert(positioned.Settings.WindowLeft == 1840 && positioned.Settings.WindowTop == 160,
+            "Window position survives a settings round trip", results);
+        var screens = new[] { new System.Windows.Rect(0, 0, 1920, 1040), new System.Windows.Rect(1920, 0, 2560, 1400) };
+        Assert(WindowPositionPolicy.IsReachable(2100, 80, 680, screens), "A reachable secondary-monitor position is restored", results);
+        Assert(!WindowPositionPolicy.IsReachable(9000, 9000, 680, screens)
+            && !WindowPositionPolicy.IsReachable(double.NaN, 0, 680, screens),
+            "Off-screen and non-finite window positions fall back to centering", results);
         Assert(new ClipItem { Title = "Résumé ＣＡＦÉ", Text = "Project notes" }.Search("resume cafe"),
             "Search folds case, diacritics, width and tokens", results);
         Assert(new ClipItem { Title = "clipboard history" }.Search("clipbord"), "Search tolerates a typo", results);
@@ -87,16 +111,21 @@ public static class StorageTests
         file.FilePaths.Add("unsaved-second-file.txt");
         snapshots.Settings.Theme = "Dark";
         snapshots.Settings.WindowWidth = 888;
+        snapshots.Settings.WindowLeft = 240;
+        snapshots.Settings.WindowTop = 160;
         snapshots.Settings.PrewarmAdjacentPreview = true;
         snapshots.SaveSettings();
         snapshots.Settings.Theme = "Light";
         snapshots.Settings.WindowWidth = 999;
+        snapshots.Settings.WindowLeft = 480;
+        snapshots.Settings.WindowTop = 320;
         snapshots.Settings.PrewarmAdjacentPreview = false;
         Assert(await snapshots.FlushAsync(), "Deferred snapshots flush successfully", results);
         var snapshotReload = new HistoryStore(snapshots.DirectoryPath);
         Assert(snapshotReload.Items.Single().Title == "Saved title" && snapshotReload.Items.Single().FilePaths.SequenceEqual(["first-file.txt"]),
             "Writer uses an independent item and file-list snapshot", results);
-        Assert(snapshotReload.Settings.Theme == "Dark" && snapshotReload.Settings.WindowWidth == 888,
+        Assert(snapshotReload.Settings.Theme == "Dark" && snapshotReload.Settings.WindowWidth == 888
+            && snapshotReload.Settings.WindowLeft == 240 && snapshotReload.Settings.WindowTop == 160,
             "Writer uses an independent settings snapshot", results);
         Assert(snapshotReload.Settings.PrewarmAdjacentPreview,
             "Adjacent preview prewarm survives deferred save and restart", results);

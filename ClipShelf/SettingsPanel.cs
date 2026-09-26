@@ -110,7 +110,26 @@ public sealed class SettingsPanel : UserControl
         startup.Children.Add(ChoiceRow("点击关闭按钮时", new[] { "最小化到托盘", "退出程序" }, new[] { "Tray", "Exit" }, () => S.CloseToTray ? "Tray" : "Exit", value => { S.CloseToTray = value == "Tray"; Changed(); }));
         startup.Children.Add(Note("托盘模式下继续记录；退出程序会停止记录。左键托盘图标可重新打开窗口。"));
         var data = Card(Section("数据管理"));
-        data.Children.Add(Label("本地历史", $"最多保留 {S.MaxItems} 条，优先保留置顶记录。"));
+        var historyLimit = new TextBox { Name = "HistoryLimitInput", Text = S.MaxItems.ToString(), Width = 92, MaxLength = 5,
+            HorizontalContentAlignment = HorizontalAlignment.Right, VerticalContentAlignment = VerticalAlignment.Center };
+        var historyLimitNote = Note("允许 1–10000 条；调低后立即移除超出上限的最旧未置顶记录，不删除任何原文件。");
+        void RefreshHistoryLimit() { if (!historyLimit.IsKeyboardFocusWithin) historyLimit.Text = S.MaxItems.ToString(); }
+        void CommitHistoryLimit()
+        {
+            if (refreshingControls) return;
+            if (!int.TryParse(historyLimit.Text, out int requested)) { historyLimit.Text = S.MaxItems.ToString(); return; }
+            int removed = owner.Store.SetMaxItems(requested);
+            historyLimit.Text = S.MaxItems.ToString();
+            historyLimitNote.Text = removed > 0
+                ? $"已移除 {removed} 条超出上限的旧记录；置顶记录和原文件保留。"
+                : "允许 1–10000 条；置顶记录优先保留，不删除任何原文件。";
+        }
+        historyLimit.PreviewTextInput += (_, e) => e.Handled = e.Text.Any(character => !char.IsDigit(character));
+        historyLimit.LostKeyboardFocus += (_, _) => CommitHistoryLimit();
+        historyLimit.KeyDown += (_, e) => { if (e.Key == Key.Enter) { CommitHistoryLimit(); e.Handled = true; } };
+        refreshControls.Add(RefreshHistoryLimit);
+        data.Children.Add(Row("本地历史上限", historyLimit));
+        data.Children.Add(historyLimitNote);
         data.Children.Add(historyButtons);
         data.Children.Add(Note("Ctrl+Z 可撤销本次运行中最近 10 批删除。清空全部或退出后不再可撤销。"));
         var cleanup = Card(Section("缓存清理"));

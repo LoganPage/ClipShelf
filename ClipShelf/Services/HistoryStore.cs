@@ -64,9 +64,17 @@ public sealed class HistoryStore
         Directory.CreateDirectory(Path.Combine(DirectoryPath, "images"));
         Settings = ReadWithRecovery<AppSettings>(SettingsPath) ?? new AppSettings();
         Settings.MaxItems = Math.Clamp(Settings.MaxItems, 1, 10000);
+        Settings.HistoryTypeFilter = ClipShelf.HistoryTypeFilter.Normalize(Settings.HistoryTypeFilter);
         Settings.ClickRecoveryMilliseconds = Math.Clamp(Settings.ClickRecoveryMilliseconds, 0, 1000);
         Settings.WindowWidth = double.IsFinite(Settings.WindowWidth) ? Math.Clamp(Settings.WindowWidth, 480, 4000) : 720;
         Settings.WindowHeight = double.IsFinite(Settings.WindowHeight) ? Math.Clamp(Settings.WindowHeight, 320, 3000) : 540;
+        if (Settings.WindowLeft is not double left || Settings.WindowTop is not double top || !double.IsFinite(left) || !double.IsFinite(top))
+            Settings.WindowLeft = Settings.WindowTop = null;
+        else
+        {
+            Settings.WindowLeft = Math.Clamp(left, -100000, 100000);
+            Settings.WindowTop = Math.Clamp(top, -100000, 100000);
+        }
         foreach (var item in ReadWithRecovery<List<ClipItem>>(HistoryPath) ?? [])
         {
             if (item is null || !Enum.IsDefined(item.Kind)) continue;
@@ -194,6 +202,14 @@ public sealed class HistoryStore
     public void SaveSettings()
     {
         Settings.MaxItems = Math.Clamp(Settings.MaxItems, 1, 10000);
+        Settings.HistoryTypeFilter = ClipShelf.HistoryTypeFilter.Normalize(Settings.HistoryTypeFilter);
+        if (Settings.WindowLeft is not double left || Settings.WindowTop is not double top || !double.IsFinite(left) || !double.IsFinite(top))
+            Settings.WindowLeft = Settings.WindowTop = null;
+        else
+        {
+            Settings.WindowLeft = Math.Clamp(left, -100000, 100000);
+            Settings.WindowTop = Math.Clamp(top, -100000, 100000);
+        }
         if (!deferredPersistence)
         {
             Persist(SettingsPath, Settings);
@@ -205,6 +221,19 @@ public sealed class HistoryStore
             pendingSettings = snapshot;
             StartWriterLocked();
         }
+    }
+
+    public int SetMaxItems(int value)
+    {
+        int limit = Math.Clamp(value, 1, 10000);
+        bool changed = Settings.MaxItems != limit;
+        int before = items.Count;
+        Settings.MaxItems = limit;
+        SortAndTrim();
+        SaveSettings();
+        if (items.Count != before) Save();
+        if (changed || items.Count != before) Changed?.Invoke();
+        return before - items.Count;
     }
 
     public void Save()
@@ -361,11 +390,14 @@ public sealed class HistoryStore
         MultiUnselectedClick = source.MultiUnselectedClick,
         ClickRecoveryMilliseconds = source.ClickRecoveryMilliseconds,
         MaxItems = source.MaxItems,
+        HistoryTypeFilter = source.HistoryTypeFilter,
         LaunchAtLogin = source.LaunchAtLogin,
         CloseToTray = source.CloseToTray,
         PrewarmAdjacentPreview = source.PrewarmAdjacentPreview,
         WindowWidth = source.WindowWidth,
-        WindowHeight = source.WindowHeight
+        WindowHeight = source.WindowHeight,
+        WindowLeft = source.WindowLeft,
+        WindowTop = source.WindowTop
     };
 
     private void SortAndTrim()
