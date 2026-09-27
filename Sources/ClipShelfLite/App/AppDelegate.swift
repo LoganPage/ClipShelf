@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let watcher = ScreenshotFolderWatcher.shared
     private var window: NSWindow?
     private var statusItem: NSStatusItem?
+    private var controlServer: RuntimeControlServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -18,6 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.showWindow()
         }
         HotKeyManager.shared.register()
+        do {
+            controlServer = try RuntimeControlServer.startIfConfigured(store: store)
+        } catch {
+            NSLog("ClipShelf control server did not start: \(error.localizedDescription)")
+        }
 
         NotificationCenter.default.addObserver(
             self,
@@ -49,6 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NotificationCenter.default.removeObserver(self)
         DistributedNotificationCenter.default.removeObserver(self)
         HotKeyManager.shared.unregister()
+        controlServer?.stop()
+        controlServer = nil
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

@@ -20,6 +20,8 @@ struct SettingsView: View {
     @State private var hostWindow: NSWindow?
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
+    @State private var historyLimitText = ""
+    @FocusState private var historyLimitIsFocused: Bool
 
     private var resolvedColorScheme: ColorScheme {
         appearanceMode == .system ? systemColorScheme : (appearanceMode.colorScheme ?? .light)
@@ -46,6 +48,7 @@ struct SettingsView: View {
             HStack {
                 Spacer()
                 Button("完成") {
+                    commitHistoryLimit()
                     onClose()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -89,6 +92,9 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: DragSelectionPreferences.changedNotification)) { notification in
             clickRecoveryDuration = notification.object as? TimeInterval ?? DragSelectionPreferences.clickRecoveryDuration
+        }
+        .onAppear {
+            historyLimitText = String(store.maxItems)
         }
     }
 
@@ -157,6 +163,32 @@ struct SettingsView: View {
     private var historySection: some View {
         settingsSection("历史") {
             Toggle("记录文字、文件和图片复制历史", isOn: $store.isClipboardHistoryEnabled)
+
+            HStack {
+                Text("最多保留记录")
+                Spacer()
+                TextField("100", text: $historyLimitText)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 82)
+                    .focused($historyLimitIsFocused)
+                    .onSubmit(commitHistoryLimit)
+                    .onChange(of: historyLimitIsFocused) { isFocused in
+                        if !isFocused {
+                            commitHistoryLimit()
+                        }
+                    }
+
+                Stepper("", value: Binding(
+                    get: { store.maxItems },
+                    set: updateHistoryLimit
+                ), in: HistoryLimitPreferences.allowedRange)
+                .labelsHidden()
+            }
+
+            Text("可设置 1–10000 条。调低后会立即删除最旧的未置顶记录，只影响 ClipShelf 历史，不删除任何原文件。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Toggle("单选后点击其它记录改选该记录", isOn: Binding(
                 get: { switchToClickedRecord },
@@ -367,6 +399,19 @@ struct SettingsView: View {
     private func updateClickRecoveryDuration(_ duration: TimeInterval) {
         clickRecoveryDuration = duration
         DragSelectionPreferences.clickRecoveryDuration = duration
+    }
+
+    private func updateHistoryLimit(_ value: Int) {
+        store.setHistoryLimit(value)
+        historyLimitText = String(store.maxItems)
+    }
+
+    private func commitHistoryLimit() {
+        let normalizedValue = HistoryLimitPreferences.normalized(
+            text: historyLimitText,
+            fallback: store.maxItems
+        )
+        updateHistoryLimit(normalizedValue)
     }
 
     private func updateAppIcon(_ choice: AppIconChoice) {

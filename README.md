@@ -8,6 +8,7 @@ ClipShelf 是一个简洁的 macOS 剪贴板历史工具，支持文字、文件
 
 - 记录文字、文件和图片剪贴板历史
 - 自动排除密码管理器等标记为敏感或临时的剪贴板内容，不写入历史
+- 历史记录上限可在 1–10000 条之间调整，调低后优先保留置顶记录
 - 监听截图文件夹，新截图自动复制到剪贴板并加入历史
 - 清空历史时只删除 ClipShelf 记录，不删除截图文件夹或访达里的原文件
 - 支持搜索、键盘上下选择、回车粘贴、空格预览
@@ -51,6 +52,24 @@ swift build
 ./script/install_app.sh
 ```
 
+### 隔离运行时控制（测试）
+
+默认运行不会开启控制端点。测试脚本可以同时设置独立数据目录、独立偏好域、具名剪贴板和位于数据目录内的 Unix socket，从而驱动隔离实例而不触碰日常剪贴板与历史：
+
+```bash
+export CLIPSHELF_DATA_DIR=/tmp/clipshelf-test/data
+export CLIPSHELF_DEFAULTS_SUITE=local.codex.ClipShelf.test
+export CLIPSHELF_PASTEBOARD_NAME=local.codex.ClipShelf.test
+export CLIPSHELF_CONTROL_SOCKET=/tmp/clipshelf-test/data/control.sock
+.build/debug/ClipShelf &
+.build/debug/ClipShelf --ctl ping
+.build/debug/ClipShelf --ctl inject-text "hello"
+.build/debug/ClipShelf --ctl status
+.build/debug/ClipShelf --ctl quit
+```
+
+可用命令：`ping`、`status`、`export <路径>`、`inject-text <文字> [--type <类型>]`、`set-limit <数量>`、`clear`、`quit`。所有结果均以 JSON 输出。
+
 ### 生成下载包
 
 ```bash
@@ -91,6 +110,7 @@ ClipShelf is a lightweight clipboard history app for macOS. It records text, fil
 
 - Records clipboard history for text, files, and images
 - Excludes clipboard content marked as sensitive or transient, including entries from password managers
+- Configurable history limit from 1–10,000 items, preserving pinned records first when trimming
 - Watches a screenshot folder and automatically copies new screenshots to the clipboard
 - Clearing history only removes ClipShelf records, not the original files in Finder or the screenshot folder
 - Search, keyboard navigation, Enter to paste, and Space to preview
@@ -133,6 +153,24 @@ Install to `~/Applications` and launch:
 ```bash
 ./script/install_app.sh
 ```
+
+### Isolated Runtime Control (Testing)
+
+The control endpoint is disabled by default. Test scripts can opt into an isolated data directory, preferences suite, named pasteboard, and Unix socket inside the data directory, allowing a second instance to be driven without touching the daily clipboard or history:
+
+```bash
+export CLIPSHELF_DATA_DIR=/tmp/clipshelf-test/data
+export CLIPSHELF_DEFAULTS_SUITE=local.codex.ClipShelf.test
+export CLIPSHELF_PASTEBOARD_NAME=local.codex.ClipShelf.test
+export CLIPSHELF_CONTROL_SOCKET=/tmp/clipshelf-test/data/control.sock
+.build/debug/ClipShelf &
+.build/debug/ClipShelf --ctl ping
+.build/debug/ClipShelf --ctl inject-text "hello"
+.build/debug/ClipShelf --ctl status
+.build/debug/ClipShelf --ctl quit
+```
+
+Available commands: `ping`, `status`, `export <path>`, `inject-text <text> [--type <type>]`, `set-limit <count>`, `clear`, and `quit`. Every response is JSON.
 
 ### Create a Download Package
 

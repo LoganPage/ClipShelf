@@ -6,6 +6,7 @@ final class ClipStore: ObservableObject {
     static let shared = ClipStore()
 
     @Published private(set) var items: [ClipItem] = []
+    @Published private(set) var maxItems: Int
     @Published var isClipboardHistoryEnabled: Bool {
         didSet {
             AppEnvironment.userDefaults.set(isClipboardHistoryEnabled, forKey: Self.historyEnabledKey)
@@ -15,17 +16,22 @@ final class ClipStore: ObservableObject {
     let storageURL: URL
 
     private static let historyEnabledKey = "clipboardHistory.enabled"
-    private let pasteboard = NSPasteboard.general
-    private let maxItems = 100
+    private let pasteboard: NSPasteboard
     private var changeCount: Int
     private var timer: Timer?
 
     private init() {
+        let pasteboard = AppEnvironment.pasteboard
+        self.pasteboard = pasteboard
+        maxItems = HistoryLimitPreferences.value
         changeCount = pasteboard.changeCount
         isClipboardHistoryEnabled = AppEnvironment.userDefaults.object(forKey: Self.historyEnabledKey) as? Bool ?? true
         storageURL = AppEnvironment.historyURL
 
         load()
+        if HistoryTrimmer.trim(&items, maxItems: maxItems) {
+            save()
+        }
         start()
     }
 
@@ -100,6 +106,29 @@ final class ClipStore: ObservableObject {
 
     func clearHistory() {
         items.removeAll()
+        save()
+    }
+
+    @discardableResult
+    func injectControlText(_ text: String, additionalTypeName: String?) -> Bool {
+        pasteboard.clearContents()
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setString(text, forType: .string)
+        if let additionalTypeName,
+           !additionalTypeName.isEmpty,
+           additionalTypeName != NSPasteboard.PasteboardType.string.rawValue {
+            pasteboardItem.setString(
+                text,
+                forType: NSPasteboard.PasteboardType(additionalTypeName)
+            )
+        }
+        return pasteboard.writeObjects([pasteboardItem])
+    }
+
+    func setHistoryLimit(_ value: Int) {
+        let normalizedValue = HistoryLimitPreferences.save(value, to: AppEnvironment.userDefaults)
+        maxItems = normalizedValue
+        HistoryTrimmer.trim(&items, maxItems: normalizedValue)
         save()
     }
 
@@ -301,9 +330,7 @@ final class ClipStore: ObservableObject {
         items.insert(item, at: 0)
         sortItems()
 
-        if items.count > maxItems {
-            trimToMaxItems()
-        }
+        HistoryTrimmer.trim(&items, maxItems: maxItems)
 
         save()
     }
@@ -315,16 +342,6 @@ final class ClipStore: ObservableObject {
             }
 
             return first.createdAt > second.createdAt
-        }
-    }
-
-    private func trimToMaxItems() {
-        while items.count > maxItems {
-            if let lastUnpinnedIndex = items.lastIndex(where: { !$0.isPinned }) {
-                items.remove(at: lastUnpinnedIndex)
-            } else {
-                items.removeLast()
-            }
         }
     }
 
