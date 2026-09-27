@@ -233,15 +233,15 @@ final class ScreenshotFolderWatcher: ObservableObject {
 
     private func saveFolder(_ url: URL, bookmark: Data? = nil) {
         folderURL = url
-        UserDefaults.standard.set(url.path, forKey: pathKey)
+        AppEnvironment.userDefaults.set(url.path, forKey: pathKey)
 
         if let data = bookmark {
-            UserDefaults.standard.set(data, forKey: bookmarkKey)
+            AppEnvironment.userDefaults.set(data, forKey: bookmarkKey)
         }
     }
 
     private func loadFolderURL() -> URL? {
-        if let data = UserDefaults.standard.data(forKey: bookmarkKey) {
+        if let data = AppEnvironment.userDefaults.data(forKey: bookmarkKey) {
             var isStale = false
             if let url = try? URL(
                 resolvingBookmarkData: data,
@@ -257,7 +257,7 @@ final class ScreenshotFolderWatcher: ObservableObject {
             }
         }
 
-        if let path = UserDefaults.standard.string(forKey: pathKey) {
+        if let path = AppEnvironment.userDefaults.string(forKey: pathKey) {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
 

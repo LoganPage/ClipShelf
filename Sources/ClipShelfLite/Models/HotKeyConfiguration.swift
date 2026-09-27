@@ -89,7 +89,7 @@ enum ClearSelectionHotKeyDefaults {
     private static let key = "clearSelectionHotKey.configuration"
 
     static func load() -> HotKeyConfiguration {
-        guard let data = UserDefaults.standard.data(forKey: key),
+        guard let data = AppEnvironment.userDefaults.data(forKey: key),
               let configuration = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) else {
             return .defaultClearSelectionValue
         }
@@ -98,7 +98,7 @@ enum ClearSelectionHotKeyDefaults {
 
     static func save(_ configuration: HotKeyConfiguration) {
         if let data = try? JSONEncoder().encode(configuration) {
-            UserDefaults.standard.set(data, forKey: key)
+            AppEnvironment.userDefaults.set(data, forKey: key)
             NotificationCenter.default.post(name: changedNotification, object: configuration)
         }
     }
@@ -109,7 +109,7 @@ enum PinHotKeyDefaults {
     private static let key = "pinHotKey.configuration"
 
     static func load() -> HotKeyConfiguration {
-        guard let data = UserDefaults.standard.data(forKey: key),
+        guard let data = AppEnvironment.userDefaults.data(forKey: key),
               let configuration = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) else {
             return .defaultPinValue
         }
@@ -118,7 +118,7 @@ enum PinHotKeyDefaults {
 
     static func save(_ configuration: HotKeyConfiguration) {
         if let data = try? JSONEncoder().encode(configuration) {
-            UserDefaults.standard.set(data, forKey: key)
+            AppEnvironment.userDefaults.set(data, forKey: key)
             NotificationCenter.default.post(name: changedNotification, object: configuration)
         }
     }
@@ -129,7 +129,7 @@ enum HotKeyDefaults {
     private static let key = "globalHotKey.configuration"
 
     static func load() -> HotKeyConfiguration {
-        guard let data = UserDefaults.standard.data(forKey: key),
+        guard let data = AppEnvironment.userDefaults.data(forKey: key),
               let configuration = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) else {
             return .defaultValue
         }
@@ -138,7 +138,7 @@ enum HotKeyDefaults {
 
     static func save(_ configuration: HotKeyConfiguration) {
         if let data = try? JSONEncoder().encode(configuration) {
-            UserDefaults.standard.set(data, forKey: key)
+            AppEnvironment.userDefaults.set(data, forKey: key)
             NotificationCenter.default.post(name: changedNotification, object: configuration)
         }
     }

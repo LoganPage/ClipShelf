@@ -8,7 +8,7 @@ final class ClipStore: ObservableObject {
     @Published private(set) var items: [ClipItem] = []
     @Published var isClipboardHistoryEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(isClipboardHistoryEnabled, forKey: Self.historyEnabledKey)
+            AppEnvironment.userDefaults.set(isClipboardHistoryEnabled, forKey: Self.historyEnabledKey)
         }
     }
 
@@ -22,13 +22,8 @@ final class ClipStore: ObservableObject {
 
     private init() {
         changeCount = pasteboard.changeCount
-        isClipboardHistoryEnabled = UserDefaults.standard.object(forKey: Self.historyEnabledKey) as? Bool ?? true
-
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        storageURL = support
-            .appendingPathComponent("ClipShelf", isDirectory: true)
-            .appendingPathComponent("history.json")
+        isClipboardHistoryEnabled = AppEnvironment.userDefaults.object(forKey: Self.historyEnabledKey) as? Bool ?? true
+        storageURL = AppEnvironment.historyURL
 
         load()
         start()
@@ -113,9 +108,12 @@ final class ClipStore: ObservableObject {
     }
 
     private func pollPasteboard() {
-        guard isClipboardHistoryEnabled else { return }
-        guard pasteboard.changeCount != changeCount else { return }
-        changeCount = pasteboard.changeCount
+        guard ClipboardHistoryPolicy.shouldCapture(
+            historyEnabled: isClipboardHistoryEnabled,
+            observedChangeCount: pasteboard.changeCount,
+            previousChangeCount: &changeCount,
+            typeNames: pasteboard.types?.map(\.rawValue)
+        ) else { return }
 
         if let fileItem = currentFileItem() {
             add(fileItem)

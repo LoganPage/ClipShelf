@@ -28,10 +28,10 @@ enum AppIconPreferences {
 
     static var selected: AppIconChoice {
         get {
-            AppIconChoice(rawValue: UserDefaults.standard.integer(forKey: selectedKey)) ?? .clipboardHistory
+            AppIconChoice(rawValue: AppEnvironment.userDefaults.integer(forKey: selectedKey)) ?? .clipboardHistory
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: selectedKey)
+            AppEnvironment.userDefaults.set(newValue.rawValue, forKey: selectedKey)
             apply(newValue)
             NotificationCenter.default.post(name: changedNotification, object: newValue)
         }

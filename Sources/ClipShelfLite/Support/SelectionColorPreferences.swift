@@ -73,11 +73,11 @@ enum SelectionColorPreferences {
     private static let blueKey = "selectionColor.blue"
 
     static var selectedPreset: SelectionColorPreset? {
-        if let rawValue = UserDefaults.standard.string(forKey: presetKey) {
+        if let rawValue = AppEnvironment.userDefaults.string(forKey: presetKey) {
             return SelectionColorPreset(rawValue: rawValue)
         }
 
-        guard UserDefaults.standard.object(forKey: redKey) == nil else { return nil }
+        guard AppEnvironment.userDefaults.object(forKey: redKey) == nil else { return nil }
         return .coolGrayBlue
     }
 
@@ -87,34 +87,34 @@ enum SelectionColorPreferences {
                 return selectedPreset.color
             }
 
-            guard UserDefaults.standard.object(forKey: redKey) != nil else {
+            guard AppEnvironment.userDefaults.object(forKey: redKey) != nil else {
                 return SelectionColorPreset.coolGrayBlue.color
             }
 
             return Color(
-                red: UserDefaults.standard.double(forKey: redKey),
-                green: UserDefaults.standard.double(forKey: greenKey),
-                blue: UserDefaults.standard.double(forKey: blueKey)
+                red: AppEnvironment.userDefaults.double(forKey: redKey),
+                green: AppEnvironment.userDefaults.double(forKey: greenKey),
+                blue: AppEnvironment.userDefaults.double(forKey: blueKey)
             )
         }
         set {
-            UserDefaults.standard.removeObject(forKey: presetKey)
+            AppEnvironment.userDefaults.removeObject(forKey: presetKey)
             let nsColor = NSColor(newValue)
                 .usingColorSpace(.deviceRGB)
                 ?? NSColor.labelColor
 
-            UserDefaults.standard.set(nsColor.redComponent, forKey: redKey)
-            UserDefaults.standard.set(nsColor.greenComponent, forKey: greenKey)
-            UserDefaults.standard.set(nsColor.blueComponent, forKey: blueKey)
+            AppEnvironment.userDefaults.set(nsColor.redComponent, forKey: redKey)
+            AppEnvironment.userDefaults.set(nsColor.greenComponent, forKey: greenKey)
+            AppEnvironment.userDefaults.set(nsColor.blueComponent, forKey: blueKey)
             NotificationCenter.default.post(name: changedNotification, object: nil)
         }
     }
 
     static func select(_ preset: SelectionColorPreset) {
-        UserDefaults.standard.set(preset.rawValue, forKey: presetKey)
-        UserDefaults.standard.removeObject(forKey: redKey)
-        UserDefaults.standard.removeObject(forKey: greenKey)
-        UserDefaults.standard.removeObject(forKey: blueKey)
+        AppEnvironment.userDefaults.set(preset.rawValue, forKey: presetKey)
+        AppEnvironment.userDefaults.removeObject(forKey: redKey)
+        AppEnvironment.userDefaults.removeObject(forKey: greenKey)
+        AppEnvironment.userDefaults.removeObject(forKey: blueKey)
         NotificationCenter.default.post(name: changedNotification, object: preset)
     }
 

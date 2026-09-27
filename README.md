@@ -7,6 +7,7 @@ ClipShelf 是一个简洁的 macOS 剪贴板历史工具，支持文字、文件
 ### 功能
 
 - 记录文字、文件和图片剪贴板历史
+- 自动排除密码管理器等标记为敏感或临时的剪贴板内容，不写入历史
 - 监听截图文件夹，新截图自动复制到剪贴板并加入历史
 - 清空历史时只删除 ClipShelf 记录，不删除截图文件夹或访达里的原文件
 - 支持搜索、键盘上下选择、回车粘贴、空格预览
@@ -89,6 +90,7 @@ ClipShelf is a lightweight clipboard history app for macOS. It records text, fil
 ### Features
 
 - Records clipboard history for text, files, and images
+- Excludes clipboard content marked as sensitive or transient, including entries from password managers
 - Watches a screenshot folder and automatically copies new screenshots to the clipboard
 - Clearing history only removes ClipShelf records, not the original files in Finder or the screenshot folder
 - Search, keyboard navigation, Enter to paste, and Space to preview

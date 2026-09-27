@@ -10,22 +10,22 @@ enum SelectionClickBehaviorPreferences {
 
     static var switchToClickedRecord: Bool {
         get {
-            UserDefaults.standard.bool(forKey: switchToClickedRecordKey)
+            AppEnvironment.userDefaults.bool(forKey: switchToClickedRecordKey)
         }
         set {
-            UserDefaults.standard.set(newValue, forKey: switchToClickedRecordKey)
+            AppEnvironment.userDefaults.set(newValue, forKey: switchToClickedRecordKey)
             NotificationCenter.default.post(name: changedNotification, object: newValue)
         }
     }
 
     static var multiSelectionClickSelectedBehavior: MultiSelectionClickSelectedBehavior {
         get {
-            if let rawValue = UserDefaults.standard.string(forKey: multiSelectionClickSelectedBehaviorKey),
+            if let rawValue = AppEnvironment.userDefaults.string(forKey: multiSelectionClickSelectedBehaviorKey),
                let behavior = MultiSelectionClickSelectedBehavior(rawValue: rawValue) {
                 return behavior
             }
 
-            guard let rawValue = UserDefaults.standard.string(forKey: legacyMultiSelectionClickBehaviorKey),
+            guard let rawValue = AppEnvironment.userDefaults.string(forKey: legacyMultiSelectionClickBehaviorKey),
                   let behavior = MultiSelectionClickSelectedBehavior(rawValue: rawValue) else {
                 return .collapseToClicked
             }
@@ -33,14 +33,14 @@ enum SelectionClickBehaviorPreferences {
             return behavior
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: multiSelectionClickSelectedBehaviorKey)
+            AppEnvironment.userDefaults.set(newValue.rawValue, forKey: multiSelectionClickSelectedBehaviorKey)
             NotificationCenter.default.post(name: changedNotification, object: nil)
         }
     }
 
     static var multiSelectionClickUnselectedBehavior: MultiSelectionClickUnselectedBehavior {
         get {
-            guard let rawValue = UserDefaults.standard.string(forKey: multiSelectionClickUnselectedBehaviorKey),
+            guard let rawValue = AppEnvironment.userDefaults.string(forKey: multiSelectionClickUnselectedBehaviorKey),
                   let behavior = MultiSelectionClickUnselectedBehavior(rawValue: rawValue) else {
                 return .collapseToClicked
             }
@@ -48,7 +48,7 @@ enum SelectionClickBehaviorPreferences {
             return behavior
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: multiSelectionClickUnselectedBehaviorKey)
+            AppEnvironment.userDefaults.set(newValue.rawValue, forKey: multiSelectionClickUnselectedBehaviorKey)
             NotificationCenter.default.post(name: changedNotification, object: nil)
         }
     }
@@ -97,15 +97,15 @@ enum DragSelectionPreferences {
 
     static var clickRecoveryDuration: TimeInterval {
         get {
-            guard UserDefaults.standard.object(forKey: clickRecoveryDurationKey) != nil else {
+            guard AppEnvironment.userDefaults.object(forKey: clickRecoveryDurationKey) != nil else {
                 return defaultClickRecoveryDuration
             }
 
-            return clampedAndRounded(UserDefaults.standard.double(forKey: clickRecoveryDurationKey))
+            return clampedAndRounded(AppEnvironment.userDefaults.double(forKey: clickRecoveryDurationKey))
         }
         set {
             let duration = clampedAndRounded(newValue)
-            UserDefaults.standard.set(duration, forKey: clickRecoveryDurationKey)
+            AppEnvironment.userDefaults.set(duration, forKey: clickRecoveryDurationKey)
             NotificationCenter.default.post(name: changedNotification, object: duration)
         }
     }

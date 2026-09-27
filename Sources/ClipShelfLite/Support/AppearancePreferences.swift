@@ -32,10 +32,10 @@ enum AppearancePreferences {
 
     static var mode: AppearanceMode {
         get {
-            AppearanceMode(rawValue: UserDefaults.standard.string(forKey: modeKey) ?? "system") ?? .system
+            AppearanceMode(rawValue: AppEnvironment.userDefaults.string(forKey: modeKey) ?? "system") ?? .system
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: modeKey)
+            AppEnvironment.userDefaults.set(newValue.rawValue, forKey: modeKey)
             NotificationCenter.default.post(name: changedNotification, object: newValue)
         }
     }

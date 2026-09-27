@@ -13,6 +13,11 @@ let package = Package(
         .executableTarget(
             name: "ClipShelfLite",
             path: "Sources/ClipShelfLite"
+        ),
+        .testTarget(
+            name: "ClipShelfLiteTests",
+            dependencies: ["ClipShelfLite"],
+            path: "MacTests/ClipShelfLiteTests"
         )
     ]
 )
