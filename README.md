@@ -7,12 +7,14 @@ ClipShelf 是一个简洁的 macOS 剪贴板历史工具，支持文字、文件
 ### 功能
 
 - 记录文字、文件和图片剪贴板历史
+- 一次复制多个文件时按文件拆成独立记录，可分别操作并按路径去重
 - 自动排除密码管理器等标记为敏感或临时的剪贴板内容，不写入历史
 - 历史记录上限可在 1–10000 条之间调整，调低后优先保留置顶记录
 - 监听截图文件夹，新截图自动复制到剪贴板并加入历史
 - 清空历史时只删除 ClipShelf 记录，不删除截图文件夹或访达里的原文件
 - 支持搜索、键盘上下选择、回车粘贴、空格预览
 - 支持单选、多选、批量删除、Command-A/C/V
+- 删除或清空历史后可用 Command-Z 或工具栏按钮撤销最近 10 批操作
 - 支持多选后的点击行为自定义
 - 支持三指拖移多选，并可调整点击恢复期
 - 支持记录置顶，置顶记录会固定显示在普通记录前面
@@ -109,12 +111,14 @@ ClipShelf is a lightweight clipboard history app for macOS. It records text, fil
 ### Features
 
 - Records clipboard history for text, files, and images
+- Splits multi-file clipboard copies into individual records with path-based deduplication
 - Excludes clipboard content marked as sensitive or transient, including entries from password managers
 - Configurable history limit from 1–10,000 items, preserving pinned records first when trimming
 - Watches a screenshot folder and automatically copies new screenshots to the clipboard
 - Clearing history only removes ClipShelf records, not the original files in Finder or the screenshot folder
 - Search, keyboard navigation, Enter to paste, and Space to preview
 - Single selection, multi-selection, batch deletion, and Command-A/C/V support
+- Undo the last 10 deletion or clear-history batches with Command-Z or the toolbar button
 - Customizable click behavior after multi-selection
 - Three-finger drag multi-selection with an adjustable click recovery delay
 - Pin records so important clips stay above normal history

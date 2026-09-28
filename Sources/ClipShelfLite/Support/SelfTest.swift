@@ -246,6 +246,198 @@ enum ClipShelfSelfTest {
             failure: "Named pasteboard content escaped its isolated pasteboard"
         ))
 
+        let undoDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let undoPinned = ClipItem(
+            kind: .text,
+            title: "undo-pinned",
+            text: "undo-pinned",
+            createdAt: undoDate,
+            isPinned: true
+        )
+        let undoMiddle = ClipItem(
+            kind: .text,
+            title: "undo-middle",
+            text: "undo-middle",
+            createdAt: undoDate.addingTimeInterval(-1)
+        )
+        let undoLast = ClipItem(
+            kind: .text,
+            title: "undo-last",
+            text: "undo-last",
+            createdAt: undoDate.addingTimeInterval(-2)
+        )
+        let undoOriginalItems = [undoPinned, undoMiddle, undoLast]
+        var undoItems = [undoMiddle]
+        var undoStack = HistoryDeletionUndoStack()
+        undoStack.record([
+            HistoryDeletionEntry(item: undoPinned, originalIndex: 0),
+            HistoryDeletionEntry(item: undoLast, originalIndex: 2)
+        ])
+        let undoRestored = undoStack.undo(into: &undoItems, maxItems: 100)
+        results.append(check(
+            name: "undo deletion restores order and metadata",
+            condition: undoItems == undoOriginalItems
+                && undoRestored.map(\.id) == [undoPinned.id, undoLast.id]
+                && undoItems.first?.isPinned == true
+                && undoItems.first?.createdAt == undoDate,
+            success: "Undo restores original IDs, order, timestamps, and pinned state",
+            failure: "Undo changed the deleted records or their original order"
+        ))
+
+        var cappedUndoStack = HistoryDeletionUndoStack()
+        for index in 0..<11 {
+            let item = ClipItem(kind: .text, title: "batch-\(index)", text: "batch-\(index)")
+            cappedUndoStack.record([HistoryDeletionEntry(item: item, originalIndex: 0)])
+        }
+        var cappedUndoItems = [ClipItem]()
+        var undoneBatchTitles = [String]()
+        while cappedUndoStack.canUndo {
+            undoneBatchTitles.append(contentsOf: cappedUndoStack.undo(
+                into: &cappedUndoItems,
+                maxItems: 100
+            ).map(\.title))
+        }
+        results.append(check(
+            name: "undo deletion keeps the latest ten batches",
+            condition: undoneBatchTitles.count == 10
+                && undoneBatchTitles.first == "batch-10"
+                && !undoneBatchTitles.contains("batch-0"),
+            success: "The in-memory undo stack drops batches older than the latest ten",
+            failure: "The undo stack did not enforce its ten-batch capacity"
+        ))
+
+        let newerOne = ClipItem(kind: .text, title: "newer-one", text: "newer-one")
+        let newerTwo = ClipItem(kind: .text, title: "newer-two", text: "newer-two")
+        var capacityItems = [newerOne, newerTwo]
+        var capacityUndoStack = HistoryDeletionUndoStack()
+        capacityUndoStack.record(undoOriginalItems.enumerated().map { index, item in
+            HistoryDeletionEntry(item: item, originalIndex: index)
+        })
+        let capacityRestored = capacityUndoStack.undo(into: &capacityItems, maxItems: 3)
+        results.append(check(
+            name: "undo deletion respects current history capacity",
+            condition: capacityItems.count == 3
+                && capacityItems.contains(newerOne)
+                && capacityItems.contains(newerTwo)
+                && capacityRestored.count == 1,
+            success: "Undo fills only free slots and never evicts newer records",
+            failure: "Undo displaced records added after the deletion"
+        ))
+
+        var clearUndoItems = [ClipItem]()
+        var clearUndoStack = HistoryDeletionUndoStack()
+        clearUndoStack.record(undoOriginalItems.enumerated().map { index, item in
+            HistoryDeletionEntry(item: item, originalIndex: index)
+        })
+        _ = clearUndoStack.undo(into: &clearUndoItems, maxItems: 100)
+        results.append(check(
+            name: "clear history is undoable",
+            condition: clearUndoItems == undoOriginalItems
+                && !HistoryDeletionUndoStack().canUndo,
+            success: "A clear-history batch restores in full and a new session starts empty",
+            failure: "Clear-history undo or fresh-session state is incorrect"
+        ))
+
+        let fileBatchDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let filePaths = [
+            "/tmp/clipshelf-batch/one.txt",
+            "/tmp/clipshelf-batch/two.pdf",
+            "/tmp/clipshelf-batch/three.png"
+        ]
+        let splitFileItems = FileHistoryBatchPlanner.newItems(
+            for: filePaths,
+            existingItems: [],
+            createdAt: fileBatchDate
+        )
+        results.append(check(
+            name: "multi-file import splits into individual records",
+            condition: splitFileItems.count == 3
+                && splitFileItems.allSatisfy { $0.kind == .file && $0.filePaths.count == 1 }
+                && splitFileItems.map(\.title) == ["one.txt", "two.pdf", "three.png"]
+                && splitFileItems.map { $0.filePaths[0] } == filePaths,
+            success: "Each copied file becomes one independently addressable history record",
+            failure: "A multi-file batch was not split at single-file granularity"
+        ))
+
+        let duplicatePlan = FileHistoryBatchPlanner.newItems(
+            for: filePaths + [filePaths[0]],
+            existingItems: splitFileItems,
+            createdAt: fileBatchDate.addingTimeInterval(10)
+        )
+        results.append(check(
+            name: "multi-file import deduplicates by path",
+            condition: duplicatePlan.isEmpty,
+            success: "Repeated paths do not create additional file records",
+            failure: "An existing file path was imported again"
+        ))
+
+        let preservedFile = ClipItem(
+            id: UUID(),
+            kind: .file,
+            title: "one.txt",
+            filePaths: [filePaths[0]],
+            createdAt: fileBatchDate.addingTimeInterval(-100),
+            isPinned: true
+        )
+        let preservedSnapshot = preservedFile
+        let mixedFilePlan = FileHistoryBatchPlanner.newItems(
+            for: [filePaths[0], "/tmp/clipshelf-batch/four.txt"],
+            existingItems: [preservedFile],
+            createdAt: fileBatchDate
+        )
+        results.append(check(
+            name: "file path dedup preserves existing metadata",
+            condition: preservedFile == preservedSnapshot
+                && mixedFilePlan.count == 1
+                && mixedFilePlan[0].title == "four.txt"
+                && preservedFile.isPinned
+                && preservedFile.createdAt == preservedSnapshot.createdAt,
+            success: "Path dedup leaves the existing ID, timestamp, and pinned state untouched",
+            failure: "Deduplication replaced or modified an existing file record"
+        ))
+
+        let legacyCombinedItem = ClipItem(
+            kind: .file,
+            title: "2 个文件",
+            filePaths: [filePaths[0], filePaths[1]],
+            createdAt: fileBatchDate
+        )
+        let legacyRoundTrip = try? JSONDecoder().decode(
+            [ClipItem].self,
+            from: JSONEncoder().encode([legacyCombinedItem])
+        )
+        let legacyAdditionalItems = FileHistoryBatchPlanner.newItems(
+            for: [filePaths[0], filePaths[1]],
+            existingItems: legacyRoundTrip ?? [],
+            createdAt: fileBatchDate
+        )
+        results.append(check(
+            name: "legacy combined file records remain compatible",
+            condition: legacyRoundTrip?.count == 1
+                && legacyRoundTrip?.first?.filePaths.count == 2
+                && legacyAdditionalItems.isEmpty,
+            success: "Old multi-path records decode unchanged and participate in path dedup",
+            failure: "A legacy file record was split or could not be decoded"
+        ))
+
+        var limitedFileItems = [
+            ClipItem(
+                kind: .text,
+                title: "pinned-history",
+                text: "pinned-history",
+                createdAt: fileBatchDate.addingTimeInterval(-200),
+                isPinned: true
+            )
+        ] + splitFileItems
+        _ = HistoryTrimmer.trim(&limitedFileItems, maxItems: 2)
+        results.append(check(
+            name: "multi-file import obeys the history limit",
+            condition: limitedFileItems.count == 2
+                && limitedFileItems.contains { $0.title == "pinned-history" && $0.isPinned },
+            success: "Batch file records use the existing pinned-first history trimming rule",
+            failure: "Batch import exceeded the limit or removed a pinned record first"
+        ))
+
         return results
     }
 

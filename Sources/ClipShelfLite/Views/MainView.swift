@@ -29,6 +29,7 @@ struct MainView: View {
     @State private var hostWindow: NSWindow?
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
+    @FocusState private var isSearchFocused: Bool
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = 10
     private let historyListVerticalInset: CGFloat = 8
@@ -319,6 +320,16 @@ struct MainView: View {
                 .foregroundStyle(actionItems.isEmpty ? Color.secondary.opacity(0.38) : Color.secondary)
                 .floatingTooltip("置顶选中的记录")
 
+                Button {
+                    undoLastDeletion()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!store.canUndoDeletion)
+                .foregroundStyle(store.canUndoDeletion ? Color.secondary : Color.secondary.opacity(0.38))
+                .floatingTooltip("撤销最近一批删除")
+
                 Button(role: .destructive) {
                     deleteSelectedOrClear()
                 } label: {
@@ -333,6 +344,7 @@ struct MainView: View {
                     .foregroundStyle(.secondary)
                 TextField("搜索文字、文件名、截图名", text: $searchText)
                     .textFieldStyle(.plain)
+                    .focused($isSearchFocused)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -376,6 +388,12 @@ struct MainView: View {
         dragAnchorID = nil
         isDragSelecting = false
         dragSnapshotItems = nil
+    }
+
+    private func undoLastDeletion() {
+        let restored = store.undoLastDeletion()
+        guard !restored.isEmpty else { return }
+        clearSelection()
     }
 
     private func handleKey(_ event: NSEvent, scrollProxy: ScrollViewProxy? = nil) {
@@ -438,7 +456,13 @@ struct MainView: View {
             }
 
             if event.modifierFlags.contains(.command),
-               ["a", "c", "v"].contains(event.charactersIgnoringModifiers?.lowercased()) {
+               event.charactersIgnoringModifiers?.lowercased() == "z",
+               isSearchFocused {
+                return event
+            }
+
+            if event.modifierFlags.contains(.command),
+               ["a", "c", "v", "z"].contains(event.charactersIgnoringModifiers?.lowercased()) {
                 handleCommandKey(event)
                 return nil
             }
@@ -473,6 +497,9 @@ struct MainView: View {
             store.copy(actionItems)
         case "v":
             store.paste(actionItems)
+        case "z":
+            guard !isSearchFocused else { return }
+            undoLastDeletion()
         default:
             break
         }

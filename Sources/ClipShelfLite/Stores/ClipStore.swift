@@ -7,6 +7,7 @@ final class ClipStore: ObservableObject {
 
     @Published private(set) var items: [ClipItem] = []
     @Published private(set) var maxItems: Int
+    @Published private(set) var canUndoDeletion = false
     @Published var isClipboardHistoryEnabled: Bool {
         didSet {
             AppEnvironment.userDefaults.set(isClipboardHistoryEnabled, forKey: Self.historyEnabledKey)
@@ -19,6 +20,7 @@ final class ClipStore: ObservableObject {
     private let pasteboard: NSPasteboard
     private var changeCount: Int
     private var timer: Timer?
+    private var deletionUndoStack = HistoryDeletionUndoStack()
 
     private init() {
         let pasteboard = AppEnvironment.pasteboard
@@ -75,12 +77,19 @@ final class ClipStore: ObservableObject {
     }
 
     func remove(_ item: ClipItem) {
-        items.removeAll { $0.id == item.id }
-        save()
+        remove(ids: [item.id])
     }
 
     func remove(ids: Set<ClipItem.ID>) {
         guard !ids.isEmpty else { return }
+        let entries = items.enumerated().compactMap { index, item in
+            ids.contains(item.id)
+                ? HistoryDeletionEntry(item: item, originalIndex: index)
+                : nil
+        }
+        guard !entries.isEmpty else { return }
+        deletionUndoStack.record(entries)
+        updateUndoAvailability()
         items.removeAll { ids.contains($0.id) }
         save()
     }
@@ -105,8 +114,23 @@ final class ClipStore: ObservableObject {
     }
 
     func clearHistory() {
+        guard !items.isEmpty else { return }
+        deletionUndoStack.record(items.enumerated().map { index, item in
+            HistoryDeletionEntry(item: item, originalIndex: index)
+        })
+        updateUndoAvailability()
         items.removeAll()
         save()
+    }
+
+    @discardableResult
+    func undoLastDeletion() -> [ClipItem] {
+        let restored = deletionUndoStack.undo(into: &items, maxItems: maxItems)
+        updateUndoAvailability()
+        guard !restored.isEmpty else { return [] }
+        sortItems()
+        save()
+        return restored
     }
 
     @discardableResult
@@ -144,8 +168,8 @@ final class ClipStore: ObservableObject {
             typeNames: pasteboard.types?.map(\.rawValue)
         ) else { return }
 
-        if let fileItem = currentFileItem() {
-            add(fileItem)
+        if let filePaths = currentFilePaths() {
+            addFilePaths(filePaths)
             return
         }
 
@@ -160,7 +184,7 @@ final class ClipStore: ObservableObject {
         }
     }
 
-    private func currentFileItem() -> ClipItem? {
+    private func currentFilePaths() -> [String]? {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         guard let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] else {
             return nil
@@ -172,12 +196,7 @@ final class ClipStore: ObservableObject {
             .filter { FileManager.default.fileExists(atPath: $0) }
 
         guard !paths.isEmpty else { return nil }
-
-        let title = paths.count == 1
-            ? URL(fileURLWithPath: paths[0]).lastPathComponent
-            : "\(paths.count) 个文件"
-
-        return ClipItem(kind: .file, title: title, filePaths: paths)
+        return paths
     }
 
     private func currentImageData() -> Data? {
@@ -335,6 +354,19 @@ final class ClipStore: ObservableObject {
         save()
     }
 
+    private func addFilePaths(_ paths: [String]) {
+        let newItems = FileHistoryBatchPlanner.newItems(
+            for: paths,
+            existingItems: items
+        )
+        guard !newItems.isEmpty else { return }
+
+        items.append(contentsOf: newItems)
+        sortItems()
+        HistoryTrimmer.trim(&items, maxItems: maxItems)
+        save()
+    }
+
     private func sortItems() {
         items.sort { first, second in
             if first.isPinned != second.isPinned {
@@ -356,7 +388,7 @@ final class ClipStore: ObservableObject {
         case .text:
             return lhs.text == rhs.text
         case .file:
-            return lhs.filePaths == rhs.filePaths
+            return FileHistoryBatchPlanner.sharesPath(lhs, rhs)
         case .image:
             if let leftPath = lhs.sourcePath, let rightPath = rhs.sourcePath {
                 return leftPath == rightPath
@@ -386,6 +418,10 @@ final class ClipStore: ObservableObject {
         } catch {
             NSLog("ClipShelf save failed: \(error.localizedDescription)")
         }
+    }
+
+    private func updateUndoAvailability() {
+        canUndoDeletion = deletionUndoStack.canUndo
     }
 
     private func runOnMain(_ action: @escaping () -> Void) {
