@@ -5,6 +5,7 @@ struct MainView: View {
     @ObservedObject var store: ClipStore
     @ObservedObject var watcher: ScreenshotFolderWatcher
     @State private var searchText = ""
+    @State private var kindFilter: ClipKindFilter = .all
     @State private var showingSettings = false
     @State private var selectedIDs = Set<ClipItem.ID>()
     @State private var focusedID: ClipItem.ID?
@@ -35,10 +36,7 @@ struct MainView: View {
     private let historyListVerticalInset: CGFloat = 8
 
     private var liveFilteredItems: [ClipItem] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return store.items }
-
-        return store.items.filter { SearchMatcher.matches($0, query: query) }
+        ClipHistoryFilter.items(store.items, kind: kindFilter, query: searchText)
     }
 
     private var filteredItems: [ClipItem] {
@@ -208,6 +206,17 @@ struct MainView: View {
             .onChange(of: searchText) { _ in
                 clearSelection()
             }
+            .onChange(of: kindFilter) { _ in
+                clearSelection()
+                DispatchQueue.main.async {
+                    guard let firstID = liveFilteredItems.first?.id else { return }
+                    var transaction = Transaction()
+                    transaction.animation = nil
+                    withTransaction(transaction) {
+                        proxy.scrollTo(firstID, anchor: .top)
+                    }
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
                 clearSelection()
             }
@@ -348,6 +357,41 @@ struct MainView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
+            .background(AppTheme.searchBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(AppTheme.subtleBorder, lineWidth: 1)
+            )
+            .overlay(alignment: .trailing) {
+                if let selectionCountText = SelectionCountLabel.text(for: selectedIDs.count) {
+                    Text(selectionCountText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(width: 92, alignment: .trailing)
+                        .padding(.trailing, 12)
+                        .padding(.vertical, 9)
+                        .background(AppTheme.searchBackground)
+                        .allowsHitTesting(false)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Text("记录类型")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("记录类型", selection: $kindFilter) {
+                    ForEach(ClipKindFilter.allCases) { filter in
+                        Text(filter.title).tag(filter)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(AppTheme.searchBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
@@ -926,12 +970,12 @@ struct MainView: View {
 
     private var emptyView: some View {
         VStack(spacing: 10) {
-            Image(systemName: "tray")
+            Image(systemName: store.items.isEmpty ? "tray" : "line.3.horizontal.decrease.circle")
                 .font(.system(size: 42))
                 .foregroundStyle(.secondary)
-            Text("还没有记录")
+            Text(store.items.isEmpty ? "还没有记录" : "没有匹配的记录")
                 .font(.system(size: 17, weight: .semibold))
-            Text("复制文字或文件，或者截一张图。")
+            Text(store.items.isEmpty ? "复制文字或文件，或者截一张图。" : "试试其它记录类型或搜索内容。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -1057,9 +1101,7 @@ private struct ClipRow: View {
                 .fill(AppTheme.textPreviewBackground)
                 .overlay(Image(systemName: "text.alignleft").foregroundStyle(AppTheme.textPreviewForeground))
         case .file:
-            RoundedRectangle(cornerRadius: 10)
-                .fill(AppTheme.filePreviewBackground)
-                .overlay(Image(systemName: "doc").foregroundStyle(AppTheme.filePreviewForeground))
+            FileTypePreview(path: item.filePaths.first)
         case .image:
             if let data = item.imageData, let image = NSImage(data: data) {
                 ZStack {
@@ -1085,6 +1127,30 @@ private struct ClipRow: View {
         case .file: item.filePaths.count > 1 ? "\(item.filePaths.count) 个文件" : "文件"
         case .image: item.sourcePath == nil ? "图片" : "截图"
         }
+    }
+}
+
+private struct FileTypePreview: View {
+    let path: String?
+    @State private var category: FileTypeIconCategory
+
+    init(path: String?) {
+        self.path = path
+        _category = State(initialValue: FileTypeIconResolver.initialCategory(for: path))
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(AppTheme.fileTypeBackground(category))
+            .overlay(
+                Image(systemName: category.symbolName)
+                    .foregroundStyle(AppTheme.fileTypeForeground(category))
+            )
+            .task(id: path) {
+                let resolved = await FileTypeIconResolver.resolvedCategory(for: path)
+                guard !Task.isCancelled else { return }
+                category = resolved
+            }
     }
 }
 

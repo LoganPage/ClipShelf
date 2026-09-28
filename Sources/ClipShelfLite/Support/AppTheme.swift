@@ -58,6 +58,54 @@ enum AppTheme {
         light: color(red: 0.12, green: 0.38, blue: 0.20),
         dark: color(red: 0.45, green: 0.86, blue: 0.67)
     )
+    static let pdfPreviewBackground = adaptive(
+        light: color(red: 1.0, green: 0.91, blue: 0.91),
+        dark: color(red: 0.30, green: 0.13, blue: 0.15)
+    )
+    static let pdfPreviewForeground = adaptive(
+        light: color(red: 0.72, green: 0.13, blue: 0.16),
+        dark: color(red: 1.0, green: 0.52, blue: 0.54)
+    )
+    static let spreadsheetPreviewBackground = adaptive(
+        light: color(red: 0.89, green: 0.97, blue: 0.91),
+        dark: color(red: 0.12, green: 0.25, blue: 0.17)
+    )
+    static let spreadsheetPreviewForeground = adaptive(
+        light: color(red: 0.08, green: 0.43, blue: 0.20),
+        dark: color(red: 0.43, green: 0.87, blue: 0.59)
+    )
+    static let wordPreviewBackground = adaptive(
+        light: color(red: 0.89, green: 0.94, blue: 1.0),
+        dark: color(red: 0.11, green: 0.21, blue: 0.34)
+    )
+    static let wordPreviewForeground = adaptive(
+        light: color(red: 0.10, green: 0.36, blue: 0.70),
+        dark: color(red: 0.45, green: 0.72, blue: 1.0)
+    )
+    static let presentationPreviewBackground = adaptive(
+        light: color(red: 1.0, green: 0.93, blue: 0.86),
+        dark: color(red: 0.31, green: 0.19, blue: 0.10)
+    )
+    static let presentationPreviewForeground = adaptive(
+        light: color(red: 0.76, green: 0.34, blue: 0.06),
+        dark: color(red: 1.0, green: 0.67, blue: 0.34)
+    )
+    static let archivePreviewBackground = adaptive(
+        light: color(red: 0.95, green: 0.90, blue: 0.99),
+        dark: color(red: 0.24, green: 0.16, blue: 0.31)
+    )
+    static let archivePreviewForeground = adaptive(
+        light: color(red: 0.47, green: 0.20, blue: 0.67),
+        dark: color(red: 0.78, green: 0.57, blue: 1.0)
+    )
+    static let folderPreviewBackground = adaptive(
+        light: color(red: 1.0, green: 0.96, blue: 0.82),
+        dark: color(red: 0.30, green: 0.24, blue: 0.11)
+    )
+    static let folderPreviewForeground = adaptive(
+        light: color(red: 0.67, green: 0.45, blue: 0.04),
+        dark: color(red: 0.96, green: 0.76, blue: 0.31)
+    )
     static let imagePreviewBackground = adaptive(
         light: color(red: 0.98, green: 0.94, blue: 0.88),
         dark: color(red: 0.26, green: 0.20, blue: 0.14)
@@ -82,6 +130,30 @@ enum AppTheme {
         light: color(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.16),
         dark: color(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.46)
     )
+
+    static func fileTypeBackground(_ category: FileTypeIconCategory) -> Color {
+        switch category {
+        case .pdf: pdfPreviewBackground
+        case .spreadsheet: spreadsheetPreviewBackground
+        case .word: wordPreviewBackground
+        case .presentation: presentationPreviewBackground
+        case .archive: archivePreviewBackground
+        case .folder: folderPreviewBackground
+        case .generic: filePreviewBackground
+        }
+    }
+
+    static func fileTypeForeground(_ category: FileTypeIconCategory) -> Color {
+        switch category {
+        case .pdf: pdfPreviewForeground
+        case .spreadsheet: spreadsheetPreviewForeground
+        case .word: wordPreviewForeground
+        case .presentation: presentationPreviewForeground
+        case .archive: archivePreviewForeground
+        case .folder: folderPreviewForeground
+        case .generic: filePreviewForeground
+        }
+    }
 
     private static func color(red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat = 1) -> NSColor {
         NSColor(calibratedRed: red, green: green, blue: blue, alpha: alpha)

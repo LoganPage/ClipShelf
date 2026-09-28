@@ -438,6 +438,94 @@ enum ClipShelfSelfTest {
             failure: "Batch import exceeded the limit or removed a pinned record first"
         ))
 
+        let filterItems = [
+            ClipItem(kind: .text, title: "Meeting notes", text: "project nebula"),
+            ClipItem(kind: .file, title: "nebula.pdf", filePaths: ["/tmp/nebula.pdf"]),
+            ClipItem(kind: .image, title: "diagram.png", sourcePath: "/tmp/diagram.png")
+        ]
+        let expectedKinds: [(ClipKindFilter, [ClipItem.Kind])] = [
+            (.all, [.text, .file, .image]),
+            (.text, [.text]),
+            (.file, [.file]),
+            (.image, [.image])
+        ]
+        results.append(check(
+            name: "record type filter covers every option",
+            condition: expectedKinds.allSatisfy { filter, kinds in
+                ClipHistoryFilter.items(filterItems, kind: filter, query: "").map(\.kind) == kinds
+            },
+            success: "All, text, file, and image filters return only their intended records",
+            failure: "At least one record type filter returned the wrong kinds"
+        ))
+        results.append(check(
+            name: "record type filter composes with search",
+            condition: ClipHistoryFilter.items(filterItems, kind: .file, query: "nebula").map(\.kind) == [.file]
+                && ClipHistoryFilter.items(filterItems, kind: .text, query: "nebula").map(\.kind) == [.text]
+                && ClipHistoryFilter.items(filterItems, kind: .image, query: "nebula").isEmpty,
+            success: "Type filtering and text search are applied through one combined funnel",
+            failure: "Type filtering replaced search or search bypassed the selected type"
+        ))
+        results.append(check(
+            name: "record type filter reports an empty result",
+            condition: !filterItems.isEmpty
+                && ClipHistoryFilter.items(filterItems, kind: .image, query: "missing").isEmpty,
+            success: "A nonempty history can produce a distinct empty filtered result",
+            failure: "The empty filtered-result state could not be distinguished"
+        ))
+        results.append(check(
+            name: "selection count label follows the selected set size",
+            condition: SelectionCountLabel.text(for: 0) == nil
+                && SelectionCountLabel.text(for: -1) == nil
+                && SelectionCountLabel.text(for: 1) == "已选 1 条"
+                && SelectionCountLabel.text(for: 3) == "已选 3 条"
+                && SelectionCountLabel.text(for: 300) == "已选 300 条",
+            success: "The label is hidden at zero and formats one-, two-, or three-digit counts directly",
+            failure: "The selection count label visibility or text is incorrect"
+        ))
+
+        let fileTypeCases: [(String?, Bool, FileTypeIconCategory)] = [
+            ("/tmp/report.pdf", false, .pdf),
+            ("/tmp/table.XLSX", false, .spreadsheet),
+            ("/tmp/letter.docx", false, .word),
+            ("/tmp/deck.pptx", false, .presentation),
+            ("/tmp/archive.zip", false, .archive),
+            ("/tmp/folder", true, .folder),
+            ("/tmp/unknown.bin", false, .generic),
+            ("/tmp/no-extension", false, .generic),
+            (nil, false, .generic)
+        ]
+        results.append(check(
+            name: "file type icon maps supported extensions and fallbacks",
+            condition: fileTypeCases.allSatisfy { path, isDirectory, expected in
+                FileTypeIcon.category(forPath: path, isDirectory: isDirectory) == expected
+            },
+            success: "PDF, spreadsheet, Word, presentation, archive, folder, and generic records map correctly",
+            failure: "At least one file type mapped to the wrong icon category"
+        ))
+        results.append(check(
+            name: "file type icons remain visually distinct",
+            condition: Set(FileTypeIconCategory.allCases.map(\.symbolName)).count == FileTypeIconCategory.allCases.count,
+            success: "Every file category uses a distinct SF Symbol",
+            failure: "Two or more file categories share the same symbol"
+        ))
+
+        let directoryCache = FileTypeIconDirectoryCache()
+        var directoryLoadCount = 0
+        let firstDirectoryValue = directoryCache.resolve(path: "/tmp/cached-folder") { _ in
+            directoryLoadCount += 1
+            return true
+        }
+        let secondDirectoryValue = directoryCache.resolve(path: "/tmp/cached-folder") { _ in
+            directoryLoadCount += 1
+            return false
+        }
+        results.append(check(
+            name: "file type directory metadata is cached per path",
+            condition: firstDirectoryValue && secondDirectoryValue && directoryLoadCount == 1,
+            success: "The same path performs at most one directory metadata lookup",
+            failure: "Directory detection repeated I/O for an already cached path"
+        ))
+
         return results
     }
 
