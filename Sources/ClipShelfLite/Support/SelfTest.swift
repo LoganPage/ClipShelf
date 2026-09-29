@@ -80,6 +80,27 @@ enum ClipShelfSelfTest {
             failure: "Unavailable type information caused content loss"
         ))
 
+        var pausedChangeCount = 40
+        let pausedShouldCapture = ClipboardHistoryPolicy.shouldCapture(
+            historyEnabled: false,
+            observedChangeCount: 41,
+            previousChangeCount: &pausedChangeCount,
+            typeNames: [NSPasteboard.PasteboardType.string.rawValue]
+        )
+        results.append(check(
+            name: "paused clipboard history rejects capture",
+            condition: !pausedShouldCapture && pausedChangeCount == 40,
+            success: "Disabled clipboard history does not capture pasteboard changes",
+            failure: "Clipboard content was accepted while history recording was paused"
+        ))
+        results.append(check(
+            name: "status menu recording title follows history state",
+            condition: StatusMenuText.recordingToggleTitle(isEnabled: true) == "暂停记录"
+                && StatusMenuText.recordingToggleTitle(isEnabled: false) == "继续记录",
+            success: "The status menu title maps directly from the shared history-enabled state",
+            failure: "The status menu title does not match the recording state"
+        ))
+
         let historyURL = AppEnvironment.dataDirectory(environment: environment, fileManager: fileManager)
             .appendingPathComponent("history.json")
         do {
@@ -524,6 +545,77 @@ enum ClipShelfSelfTest {
             condition: firstDirectoryValue && secondDirectoryValue && directoryLoadCount == 1,
             success: "The same path performs at most one directory metadata lookup",
             failure: "Directory detection repeated I/O for an already cached path"
+        ))
+        results.append(check(
+            name: "image preview zoom clamps and resets",
+            condition: ImagePreviewZoom.clamped(0.1) == 0.5
+                && ImagePreviewZoom.clamped(0.5) == 0.5
+                && ImagePreviewZoom.clamped(2.0) == 2.0
+                && ImagePreviewZoom.clamped(4.0) == 4.0
+                && ImagePreviewZoom.clamped(8.0) == 4.0
+                && ImagePreviewZoom.stepped(from: 3.9, direction: 1) == 4.0
+                && ImagePreviewZoom.stepped(from: 0.6, direction: -1) == 0.5
+                && ImagePreviewZoom.resetValue == 1.0,
+            success: "Image zoom stays within 50%-400% and reset returns to fit-window 100%",
+            failure: "Image zoom exceeded its bounds or reset did not return 100%"
+        ))
+        results.append(check(
+            name: "image OCR language configuration is local and corrected",
+            condition: ImageTextRecognitionRules.recognitionLanguages == ["zh-Hans", "en-US"]
+                && ImageTextRecognitionRules.usesLanguageCorrection,
+            success: "OCR uses Simplified Chinese and English with language correction",
+            failure: "OCR language or correction configuration is incomplete"
+        ))
+
+        let repeatedBox = CGRect(x: 0.1, y: 0.7, width: 0.3, height: 0.1)
+        let aggregatedOCR = ImageTextRecognitionRules.aggregate([
+            ImageRecognizedTextRegion(text: "  第一行  ", boundingBox: repeatedBox, confidence: 0.7),
+            ImageRecognizedTextRegion(text: "第一行", boundingBox: repeatedBox, confidence: 0.95),
+            ImageRecognizedTextRegion(text: "第二行", boundingBox: CGRect(x: 0.1, y: 0.4, width: 0.3, height: 0.1), confidence: 0.9),
+            ImageRecognizedTextRegion(text: "   ", boundingBox: .zero, confidence: 1)
+        ])
+        results.append(check(
+            name: "image OCR aggregates, orders, and deduplicates text",
+            condition: aggregatedOCR.count == 2
+                && aggregatedOCR.map(\.text) == ["第一行", "第二行"]
+                && aggregatedOCR.first?.confidence == 0.95,
+            success: "OCR removes blank and duplicate regions while preserving reading order and best confidence",
+            failure: "OCR text aggregation produced duplicates, blanks, or the wrong reading order"
+        ))
+
+        let utf8BOMText = "UTF-8 中文"
+        let utf8BOMData = Data([0xEF, 0xBB, 0xBF]) + (utf8BOMText.data(using: .utf8) ?? Data())
+        let utf16LEText = "UTF-16 中文"
+        let utf16LEData = Data([0xFF, 0xFE]) + (utf16LEText.data(using: .utf16LittleEndian) ?? Data())
+        let utf16BEText = "大端文本"
+        let utf16BEData = Data([0xFE, 0xFF]) + (utf16BEText.data(using: .utf16BigEndian) ?? Data())
+        let gb18030Data = Data([0xD6, 0xD0, 0xCE, 0xC4])
+        results.append(check(
+            name: "text encoding detector covers BOM UTF-8 UTF-16 and GB18030",
+            condition: TextEncodingDetector.decode(utf8BOMData) == DecodedTextContent(
+                text: utf8BOMText,
+                encodingName: "UTF-8 BOM",
+                usedFallback: false
+            )
+                && TextEncodingDetector.decode(utf16LEData).text == utf16LEText
+                && TextEncodingDetector.decode(utf16LEData).encodingName == "UTF-16 LE"
+                && TextEncodingDetector.decode(utf16BEData).text == utf16BEText
+                && TextEncodingDetector.decode(utf16BEData).encodingName == "UTF-16 BE"
+                && TextEncodingDetector.decode(gb18030Data).text == "中文"
+                && TextEncodingDetector.decode(gb18030Data).encodingName == "GB18030",
+            success: "Text decoding recognizes UTF-8 BOM, both UTF-16 byte orders, and GB18030 Chinese",
+            failure: "At least one required text encoding decoded incorrectly"
+        ))
+        results.append(check(
+            name: "built-in text preview extension routing is narrow",
+            condition: ["txt", "md", "log", "json", "xml", "csv", "ini", "yaml", "swift", "py"].allSatisfy {
+                TextEncodingDetector.isTextFile(URL(fileURLWithPath: "/tmp/file.\($0)"))
+            }
+                && !["pdf", "docx", "pptx", "xlsx", "png"].contains {
+                    TextEncodingDetector.isTextFile(URL(fileURLWithPath: "/tmp/file.\($0)"))
+                },
+            success: "Common plain-text files use the built-in preview while documents and images retain existing routes",
+            failure: "Text preview routing captured an unsupported document type or missed a required text extension"
         ))
 
         return results

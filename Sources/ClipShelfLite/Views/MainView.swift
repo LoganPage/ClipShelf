@@ -93,6 +93,9 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: AppearancePreferences.systemChangedNotification)) { _ in
             systemColorScheme = AppearancePreferences.systemColorScheme
         }
+        .onReceive(NotificationCenter.default.publisher(for: .clipShelfOpenSettings)) { _ in
+            openSettings()
+        }
     }
 
     private var settingsOverlay: some View {

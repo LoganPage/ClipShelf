@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    static let clipShelfOpenSettings = Notification.Name("ClipShelfOpenSettings")
+}
+
+enum StatusMenuText {
+    static func recordingToggleTitle(isEnabled: Bool) -> String {
+        isEnabled ? "暂停记录" : "继续记录"
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let store = ClipStore.shared
     private let watcher = ScreenshotFolderWatcher.shared
@@ -89,6 +99,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watcher.chooseFolder()
     }
 
+    @objc func toggleClipboardHistory() {
+        store.isClipboardHistoryEnabled.toggle()
+    }
+
+    @objc func showSettings() {
+        showWindow()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .clipShelfOpenSettings, object: nil)
+        }
+    }
+
     @objc func clearHistory() {
         store.clearHistory()
     }
@@ -150,6 +171,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         menu.addItem(menuItem(title: "显示 ClipShelf", action: #selector(showWindow)))
         menu.addItem(menuItem(title: "选择截图文件夹", action: #selector(chooseFolder)))
+        menu.addItem(menuItem(
+            title: StatusMenuText.recordingToggleTitle(isEnabled: store.isClipboardHistoryEnabled),
+            action: #selector(toggleClipboardHistory)
+        ))
+        menu.addItem(menuItem(title: "设置", action: #selector(showSettings)))
         menu.addItem(.separator())
 
         if store.items.isEmpty {

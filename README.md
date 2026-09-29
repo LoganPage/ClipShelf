@@ -25,6 +25,10 @@ ClipShelf 是一个简洁的 macOS 剪贴板历史工具，支持文字、文件
 - 支持开机自启动
 - 支持四种 App 图标方案
 - GitHub Releases 有新版本时，主界面会显示更新按钮
+- 菜单栏可暂停或继续记录，并可直接打开设置
+- 图片预览支持 50%–400% 缩放、快捷键和视口中心定位
+- 图片预览可按需使用本地 OCR，拖框选择并复制识别文字
+- 文本预览支持行号、自动换行、查找和常见文件编码检测
 
 ### 系统要求
 
@@ -132,6 +136,10 @@ ClipShelf is a lightweight clipboard history app for macOS. It records text, fil
 - Launch at login
 - Four selectable app icon styles
 - Shows an update button in the main window when a newer GitHub Release is available
+- Pause or resume history capture and open Settings directly from the menu bar
+- Zoom image previews from 50% to 400% with shortcuts and viewport-centered scaling
+- Run local OCR on demand in image previews, then drag-select and copy recognized text
+- Text previews include line numbers, wrapping, find controls, and common file-encoding detection
 
 ### Requirements
 
