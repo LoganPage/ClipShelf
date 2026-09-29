@@ -43,9 +43,12 @@ public static class FluentPresentationTests
             var typeFilterRow = (Grid)window.FindName("TypeFilterRow");
             var typeFilterBar = (Border)window.FindName("TypeFilterBar");
             var primaryToolbar = (StackPanel)window.FindName("PrimaryToolbar");
+            var windowTitle = (TextBlock)window.FindName("WindowTitleText");
             var filterAll = (Button)window.FindName("FilterAllButton");
             var filterText = (Button)window.FindName("FilterTextButton");
             Check(window.Integration is null, "Presentation fixture never connects to the user's clipboard");
+            Check(windowTitle.Text == $"ClipShelf {WindowsUpdateService.CurrentVersion}" && window.Title == windowTitle.Text,
+                "Window caption and centered title expose the running three-part version");
             Check(store.Items.Count == 6 && store.Items.Select(item => item.Kind).Distinct().Count() == 3,
                 "Presentation fixture contains only six independently generated text/file/image records");
             foreach (string theme in new[] { "Light", "Dark" })

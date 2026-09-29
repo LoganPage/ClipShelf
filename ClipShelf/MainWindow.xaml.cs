@@ -60,6 +60,7 @@ public partial class MainWindow : Window
         Store = store; this.demo = demo;
         ThemeManager.Apply(store.Settings);
         InitializeComponent();
+        Title = WindowTitleText.Text = $"ClipShelf {WindowsUpdateService.CurrentVersion}";
         FocusCuePolicy.SetIsEnabled(this, true);
         windowAppearance = new WindowAppearance(this);
         HistoryList.ItemsSource = displayed;

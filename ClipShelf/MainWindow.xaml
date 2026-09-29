@@ -32,7 +32,7 @@
    <Ellipse x:Name="WindowFocusLight" Width="10" Height="10" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="14,0,0,0" AutomationProperties.Name="窗口焦点状态">
     <Ellipse.Style><Style TargetType="Ellipse"><Setter Property="Fill" Value="#92989F"/><Setter Property="ToolTip" Value="窗口未聚焦"/><Style.Triggers><DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"><Setter Property="Fill" Value="#32B96B"/><Setter Property="ToolTip" Value="窗口已聚焦"/></DataTrigger></Style.Triggers></Style></Ellipse.Style>
    </Ellipse>
-   <TextBlock Text="ClipShelf" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+   <TextBlock x:Name="WindowTitleText" Text="ClipShelf" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
     <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" ToolTip="最小化" AutomationProperties.Name="最小化" Click="Minimize_Click"/>
     <Button ToolTip="最大化 / 还原" AutomationProperties.Name="最大化 / 还原" Click="Maximize_Click"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CaptionButton}"><Setter Property="Content" Value="&#xE922;"/><Style.Triggers><DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized"><Setter Property="Content" Value="&#xE923;"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
