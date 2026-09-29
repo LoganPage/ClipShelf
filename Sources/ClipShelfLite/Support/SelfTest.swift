@@ -11,15 +11,35 @@ enum ClipShelfSelfTest {
     static func run(fileManager: FileManager = .default) -> [SelfTestResult] {
         let temporaryRoot = fileManager.temporaryDirectory
             .appendingPathComponent("ClipShelf-SelfTest-\(UUID().uuidString)", isDirectory: true)
-        let suiteName = "ClipShelf.SelfTest.\(UUID().uuidString)"
+        let suiteName = "ClipShelf.SelfTest.Active"
+        let preferencesURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences", isDirectory: true)
+        let suitePlistURL = preferencesURL.appendingPathComponent("\(suiteName).plist")
+        let selfTestDefaultsFileCount = {
+            let contents = (try? fileManager.contentsOfDirectory(
+                at: preferencesURL,
+                includingPropertiesForKeys: nil
+            )) ?? []
+            return contents.filter {
+                $0.lastPathComponent.hasPrefix("ClipShelf.SelfTest.") && $0.pathExtension == "plist"
+            }.count
+        }
+        let defaultsFileCountBeforeRun = selfTestDefaultsFileCount()
+        let clearSelfTestDefaults = {
+            let defaults = UserDefaults(suiteName: suiteName)
+            defaults?.removePersistentDomain(forName: suiteName)
+            defaults?.synchronize()
+            try? fileManager.removeItem(at: suitePlistURL)
+        }
         let environment = [
             "CLIPSHELF_DATA_DIR": temporaryRoot.path,
             "CLIPSHELF_DEFAULTS_SUITE": suiteName
         ]
 
+        clearSelfTestDefaults()
         defer {
             try? fileManager.removeItem(at: temporaryRoot)
-            UserDefaults.standard.removePersistentDomain(forName: suiteName)
+            clearSelfTestDefaults()
         }
 
         var results = [SelfTestResult]()
@@ -529,6 +549,34 @@ enum ClipShelfSelfTest {
             success: "Every file category uses a distinct SF Symbol",
             failure: "Two or more file categories share the same symbol"
         ))
+        let fileTypePalettes = FileTypeIconCategory.allCases.map { ($0, AppTheme.fileTypePalette($0)) }
+        let colorsArePairwiseDistinct = fileTypePalettes.indices.allSatisfy { leftIndex in
+            fileTypePalettes.indices.dropFirst(leftIndex + 1).allSatisfy { rightIndex in
+                let left = fileTypePalettes[leftIndex].1
+                let right = fileTypePalettes[rightIndex].1
+                return (left.lightBackground != right.lightBackground || left.lightForeground != right.lightForeground)
+                    && (left.darkBackground != right.darkBackground || left.darkForeground != right.darkForeground)
+            }
+        }
+        let genericSpreadsheetDistanceIsSufficient: Bool = {
+            let generic = AppTheme.fileTypePalette(.generic)
+            let spreadsheet = AppTheme.fileTypePalette(.spreadsheet)
+            let distance: (SIMD3<Double>, SIMD3<Double>) -> Double = { left, right in
+                max(
+                    abs(left.x - right.x),
+                    abs(left.y - right.y),
+                    abs(left.z - right.z)
+                )
+            }
+            return distance(generic.lightBackground, spreadsheet.lightBackground) >= 0.08
+                && distance(generic.darkBackground, spreadsheet.darkBackground) >= 0.08
+        }()
+        results.append(check(
+            name: "file type icon colors are pairwise distinct",
+            condition: colorsArePairwiseDistinct && genericSpreadsheetDistanceIsSufficient,
+            success: "Every file category has a distinct color pair and generic stays at least 0.08 from spreadsheet",
+            failure: "Two file categories share a color pair or generic is too close to spreadsheet"
+        ))
 
         let directoryCache = FileTypeIconDirectoryCache()
         var directoryLoadCount = 0
@@ -616,6 +664,14 @@ enum ClipShelfSelfTest {
                 },
             success: "Common plain-text files use the built-in preview while documents and images retain existing routes",
             failure: "Text preview routing captured an unsupported document type or missed a required text extension"
+        ))
+
+        clearSelfTestDefaults()
+        results.append(check(
+            name: "self test defaults suite file count does not grow",
+            condition: selfTestDefaultsFileCount() <= defaultsFileCountBeforeRun,
+            success: "The isolated self-test defaults suite does not increase files in Library/Preferences",
+            failure: "The self-test increased its defaults plist count in Library/Preferences"
         ))
 
         return results
