@@ -58,7 +58,7 @@
     </local:RoundedClipBorder>
     <Grid x:Name="TypeFilterRow" Margin="0,8,0,0" Height="32">
      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-     <Border x:Name="TypeFilterBar" Grid.Column="0" Padding="0" HorizontalAlignment="Left" Background="Transparent" CornerRadius="{DynamicResource ControlCorners}" AutomationProperties.Name="按记录类型筛选">
+     <Border x:Name="TypeFilterBar" Grid.Column="0" Padding="0" HorizontalAlignment="Left" Background="{DynamicResource ActionBrush}" CornerRadius="{DynamicResource ControlCorners}" AutomationProperties.Name="按记录类型筛选">
       <UniformGrid Columns="4">
        <Button x:Name="FilterAllButton" Style="{StaticResource TypeFilterButton}" Content="全部" CommandParameter="All" ToolTip="显示全部记录" Click="TypeFilter_Click"/>
        <Button x:Name="FilterTextButton" Style="{StaticResource TypeFilterButton}" Content="文字" CommandParameter="Text" ToolTip="只显示文字记录" Click="TypeFilter_Click"/>

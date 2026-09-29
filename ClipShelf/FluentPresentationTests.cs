@@ -60,8 +60,10 @@ public static class FluentPresentationTests
                         $"{theme}: {resource} resolves to the shared grey hairline colour");
                 filterAll.ApplyTemplate(); filterText.ApplyTemplate();
                 Check(typeFilterBar.Padding == new Thickness(0)
-                    && typeFilterBar.Background is SolidColorBrush { Color.A: 0 },
-                    $"{theme}: type filter container no longer exposes a background ring as a fake border");
+                    && typeFilterBar.Background is SolidColorBrush groupingSurface
+                    && window.FindResource("ActionBrush") is SolidColorBrush action
+                    && groupingSurface.Color == action.Color,
+                    $"{theme}: type filters share the ActionBrush grouping surface without a padded border ring");
                 Check(filterAll.Tag?.ToString() == "Selected" && filterAll.BorderThickness == new Thickness(1)
                     && filterAll.BorderBrush is SolidColorBrush selectedBorder && selectedBorder.Color == hairline,
                     $"{theme}: selected type filter uses the shared one-DIP hairline");
