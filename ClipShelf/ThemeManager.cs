@@ -30,8 +30,8 @@ public static class ThemeManager
             ["ScrollThumbBrush"]=("#C4C7CC","#626872"),["ScrollThumbHoverBrush"]=("#858B94","#959DA9"),["ScrollThumbDragBrush"]=("#555D68","#CBD1D9"),
             ["BackgroundBrush"]=("#F6F7F9","#131519"),["SurfaceBrush"]=("#FFFFFF","#202329"),["SearchBrush"]=("#FFFFFF","#1B1D21"),["SettingsBrush"]=("#FFFFFF","#1E2127"),
             ["TextBrush"]=("#242830","#EEF0F5"),["MutedBrush"]=("#737985","#A4ABB7"),["BorderBrush"]=("#D6D9E0","#383D47"),["ActionBrush"]=("#E9EBEF","#404552"),["HoverBrush"]=("#DCE2EA","#515A69"),["AccentBrush"]=("#2870DB","#82B9FF"),
-            ["MenuSurfaceBrush"]=("#FAFAFA","#282828"),["MenuBorderBrush"]=("#DCDCDC","#454545"),["MenuHoverBrush"]=("#EDEDED","#383838"),["MenuDividerBrush"]=("#E5E5E5","#404040"),
-            ["SettingsCanvasBrush"]=("#F3F3F3","#202020"),["SettingsCardBrush"]=("#FFFFFF","#2B2B2B"),["SettingsStrokeBrush"]=("#E3E3E3","#3B3B3B"),["SettingsControlBrush"]=("#FFFFFF","#353535"),["SettingsHoverBrush"]=("#F4F4F4","#404040"),["SettingsSecondaryBrush"]=("#606060","#BFBFBF"),["ToggleOffBrush"]=("#EFEFEF","#303030"),["ToggleKnobBrush"]=("#606060","#D5D5D5"),["OnAccentBrush"]=("#FFFFFF","#18283A"),
+            ["MenuSurfaceBrush"]=("#FAFAFA","#282828"),["MenuBorderBrush"]=("#D6D9E0","#383D47"),["MenuHoverBrush"]=("#EDEDED","#383838"),["MenuDividerBrush"]=("#D6D9E0","#383D47"),
+            ["SettingsCanvasBrush"]=("#F3F3F3","#202020"),["SettingsCardBrush"]=("#FFFFFF","#2B2B2B"),["SettingsStrokeBrush"]=("#D6D9E0","#383D47"),["SettingsControlBrush"]=("#FFFFFF","#353535"),["SettingsHoverBrush"]=("#F4F4F4","#404040"),["SettingsSecondaryBrush"]=("#606060","#BFBFBF"),["ToggleOffBrush"]=("#EFEFEF","#303030"),["ToggleKnobBrush"]=("#606060","#D5D5D5"),["OnAccentBrush"]=("#FFFFFF","#18283A"),
             ["TextTileBrush"]=("#E6F2FA","#1F3842"),["TextTileForeground"]=("#1A526B","#7AD6E6"),["FileTileBrush"]=("#E8F5EB","#213D2E"),["FileTileForeground"]=("#1F6133","#73DBAB"),["ImageTileBrush"]=("#FAF0E0","#423324"),["ImageTileForeground"]=("#8F4D0A","#F5C26B")
         };
         foreach (var pair in colors) Set(pair.Key, IsDark ? pair.Value.dark : pair.Value.light);

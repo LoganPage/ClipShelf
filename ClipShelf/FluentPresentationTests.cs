@@ -43,12 +43,34 @@ public static class FluentPresentationTests
             var typeFilterRow = (Grid)window.FindName("TypeFilterRow");
             var typeFilterBar = (Border)window.FindName("TypeFilterBar");
             var primaryToolbar = (StackPanel)window.FindName("PrimaryToolbar");
+            var filterAll = (Button)window.FindName("FilterAllButton");
+            var filterText = (Button)window.FindName("FilterTextButton");
             Check(window.Integration is null, "Presentation fixture never connects to the user's clipboard");
             Check(store.Items.Count == 6 && store.Items.Select(item => item.Kind).Distinct().Count() == 3,
                 "Presentation fixture contains only six independently generated text/file/image records");
             foreach (string theme in new[] { "Light", "Dark" })
             {
                 store.Settings.Theme = theme; window.ApplyPreferences();
+                // Theme surfaces intentionally cross-fade for 200 ms. Capture the settled
+                // appearance so the visual evidence never mixes the previous and next theme.
+                await Task.Delay(220); await Idle();
+                Color hairline = ((SolidColorBrush)window.FindResource("BorderBrush")).Color;
+                foreach (string resource in new[] { "MenuBorderBrush", "MenuDividerBrush", "SettingsStrokeBrush" })
+                    Check(window.FindResource(resource) is SolidColorBrush brush && brush.Color == hairline,
+                        $"{theme}: {resource} resolves to the shared grey hairline colour");
+                filterAll.ApplyTemplate(); filterText.ApplyTemplate();
+                Check(typeFilterBar.Padding == new Thickness(0)
+                    && typeFilterBar.Background is SolidColorBrush { Color.A: 0 },
+                    $"{theme}: type filter container no longer exposes a background ring as a fake border");
+                Check(filterAll.Tag?.ToString() == "Selected" && filterAll.BorderThickness == new Thickness(1)
+                    && filterAll.BorderBrush is SolidColorBrush selectedBorder && selectedBorder.Color == hairline,
+                    $"{theme}: selected type filter uses the shared one-DIP hairline");
+                Check(TemplateBorder(filterAll) is Border selectedSurface
+                    && selectedSurface.BorderThickness == new Thickness(1)
+                    && selectedSurface.BorderBrush is SolidColorBrush renderedBorder && renderedBorder.Color == hairline,
+                    $"{theme}: SoftButton template renders the selected type-filter border");
+                Check(filterText.Tag is null && filterText.BorderThickness == new Thickness(0),
+                    $"{theme}: unselected type filters remain borderless");
                 Check(window.FindResource("ControlCorners") is CornerRadius controlCorners && controlCorners == new CornerRadius(4),
                     $"{theme}: global control corner token is 4 DIP");
                 Check(window.FindResource("OverlayCorners") is CornerRadius overlayCorners && overlayCorners == new CornerRadius(8),

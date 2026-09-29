@@ -49,9 +49,10 @@
    <SolidColorBrush x:Key="HoverBrush" Color="#E1E5EB"/>
    <SolidColorBrush x:Key="AccentBrush" Color="#2870DB"/>
    <SolidColorBrush x:Key="MenuSurfaceBrush" Color="#FAFAFA"/>
-   <SolidColorBrush x:Key="MenuBorderBrush" Color="#DCDCDC"/>
+   <SolidColorBrush x:Key="MenuBorderBrush" Color="#D6D9E0"/>
    <SolidColorBrush x:Key="MenuHoverBrush" Color="#EDEDED"/>
-   <SolidColorBrush x:Key="MenuDividerBrush" Color="#E5E5E5"/>
+   <SolidColorBrush x:Key="MenuDividerBrush" Color="#D6D9E0"/>
+   <SolidColorBrush x:Key="SettingsStrokeBrush" Color="#D6D9E0"/>
    <SolidColorBrush x:Key="TextTileBrush" Color="#E6F2FA"/>
    <SolidColorBrush x:Key="TextTileForeground" Color="#1A526B"/>
    <SolidColorBrush x:Key="FileTileBrush" Color="#E8F5EB"/>
@@ -80,7 +81,7 @@
    <Style TargetType="Button" x:Key="SoftButton">
     <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusVisual}"/>
     <Setter Property="Background" Value="{DynamicResource ActionBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextBrush}"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="12,7"/><Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="{DynamicResource ControlCorners}" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="{DynamicResource HoverBrush}"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter TargetName="bd" Property="Opacity" Value="0.65"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="bd" Property="Opacity" Value="0.32"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource ControlCorners}" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="{DynamicResource HoverBrush}"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter TargetName="bd" Property="Opacity" Value="0.65"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="bd" Property="Opacity" Value="0.32"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
    </Style>
    <Style TargetType="Button" x:Key="IconButton" BasedOn="{StaticResource SoftButton}"><Setter Property="Width" Value="36"/><Setter Property="Height" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/><Setter Property="FontSize" Value="15"/><Setter Property="Margin" Value="0,0,6,0"/></Style>
    <Style TargetType="Button" x:Key="ToolbarButton" BasedOn="{StaticResource IconButton}"><Setter Property="Background" Value="Transparent"/><Setter Property="Margin" Value="0"/></Style>

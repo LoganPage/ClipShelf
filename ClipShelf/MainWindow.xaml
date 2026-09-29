@@ -21,7 +21,7 @@
   </ControlTemplate>
   <Style x:Key="TypeFilterButton" TargetType="Button" BasedOn="{StaticResource SoftButton}">
    <Setter Property="MinWidth" Value="58"/><Setter Property="Height" Value="28"/><Setter Property="Padding" Value="11,4"/><Setter Property="Background" Value="Transparent"/><Setter Property="FontSize" Value="12"/>
-   <Style.Triggers><Trigger Property="Tag" Value="Selected"><Setter Property="Background" Value="{DynamicResource SearchBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger></Style.Triggers>
+   <Style.Triggers><Trigger Property="Tag" Value="Selected"><Setter Property="Background" Value="{DynamicResource SearchBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger></Style.Triggers>
   </Style>
  </Window.Resources>
  <!-- DWM owns the only outer contour. Never stack an unrelated client-side radius over it. -->
@@ -58,7 +58,7 @@
     </local:RoundedClipBorder>
     <Grid x:Name="TypeFilterRow" Margin="0,8,0,0" Height="32">
      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-     <Border x:Name="TypeFilterBar" Grid.Column="0" Padding="2" HorizontalAlignment="Left" Background="{DynamicResource ActionBrush}" CornerRadius="{DynamicResource ControlCorners}" AutomationProperties.Name="按记录类型筛选">
+     <Border x:Name="TypeFilterBar" Grid.Column="0" Padding="0" HorizontalAlignment="Left" Background="Transparent" CornerRadius="{DynamicResource ControlCorners}" AutomationProperties.Name="按记录类型筛选">
       <UniformGrid Columns="4">
        <Button x:Name="FilterAllButton" Style="{StaticResource TypeFilterButton}" Content="全部" CommandParameter="All" ToolTip="显示全部记录" Click="TypeFilter_Click"/>
        <Button x:Name="FilterTextButton" Style="{StaticResource TypeFilterButton}" Content="文字" CommandParameter="Text" ToolTip="只显示文字记录" Click="TypeFilter_Click"/>
