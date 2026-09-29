@@ -94,6 +94,11 @@ public static class FluentPresentationTests
                         $"{theme}/{width}: selection badge belongs inside the search surface");
                     Check(search.ActualWidth > 250, $"{theme}/{width}: the search input retains useful width");
                     var filterBounds = typeFilterBar.TransformToAncestor(typeFilterRow).TransformBounds(new Rect(typeFilterBar.RenderSize));
+                    var selectedBounds = filterAll.TransformToAncestor(typeFilterRow).TransformBounds(new Rect(filterAll.RenderSize));
+                    Check(Math.Abs(selectedBounds.Top - filterBounds.Top) < 0.1
+                        && Math.Abs(selectedBounds.Bottom - filterBounds.Bottom) < 0.1
+                        && Math.Abs(selectedBounds.Left - filterBounds.Left) < 0.1,
+                        $"{theme}/{width}: the selected type filter fills the grouping surface on every side");
                     var toolbarBounds = primaryToolbar.TransformToAncestor(typeFilterRow).TransformBounds(new Rect(primaryToolbar.RenderSize));
                     Check(toolbarBounds.Left >= filterBounds.Right + 12 && toolbarBounds.Right <= typeFilterRow.ActualWidth + 0.1,
                         $"{theme}/{width}: record actions occupy the free space to the right of type filters");
