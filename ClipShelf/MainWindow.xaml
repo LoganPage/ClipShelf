@@ -43,17 +43,9 @@
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
    <StackPanel x:Name="HeaderPanel" Margin="18,14,18,6">
     <Grid Height="40">
-     <Grid.ColumnDefinitions><ColumnDefinition Width="48"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="48"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
      <Image x:Name="AppImage" Width="36" Height="36" HorizontalAlignment="Left" RenderOptions.BitmapScalingMode="HighQuality"/>
      <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,8,0"><TextBlock Text="ClipShelf" FontSize="17" FontWeight="SemiBold"/><TextBlock x:Name="StatusText" Text="正在准备剪贴板记录…" Margin="0,2,0,0" FontSize="11" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis"/></StackPanel>
-     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-      <Button Style="{StaticResource ToolbarButton}" Content="&#xE8B7;" ToolTip="选择截图文件夹" AutomationProperties.Name="选择截图文件夹" Click="Folder_Click"/>
-      <Button Style="{StaticResource ToolbarButton}" Content="&#xE713;" ToolTip="设置" AutomationProperties.Name="设置" Click="Settings_Click"/>
-      <Button x:Name="CopyButton" Style="{StaticResource ToolbarButton}" Content="&#xE8C8;" ToolTip="复制当前记录 · Ctrl+C" AutomationProperties.Name="复制选中记录" Click="Copy_Click"/>
-      <Button x:Name="PinButton" Style="{StaticResource ToolbarButton}" Content="&#xE718;" ContentTemplate="{StaticResource PinGlyphTemplate}" ToolTip="置顶选中的记录" AutomationProperties.Name="置顶选中记录" Click="Pin_Click"/>
-      <Button x:Name="DeleteButton" Style="{StaticResource ToolbarButton}" Content="&#xE74D;" ToolTip="删除选中记录 · Delete" AutomationProperties.Name="删除选中记录" Click="Delete_Click"/>
-      <Button x:Name="UndoDeleteButton" Style="{StaticResource ToolbarButton}" Content="&#xE7A7;" ToolTip="撤销删除 · Ctrl+Z" AutomationProperties.Name="撤销删除" Click="UndoDelete_Click"/>
-     </StackPanel>
     </Grid>
     <local:RoundedClipBorder x:Name="SearchBorder" Margin="0,12,0,0" Background="{DynamicResource SearchBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource ControlCorners}" Padding="12,8">
      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition Width="*"/><ColumnDefinition Width="90"/><ColumnDefinition Width="24"/></Grid.ColumnDefinitions>
@@ -64,14 +56,25 @@
       <Button Grid.Column="3" Style="{StaticResource ToolbarButton}" Width="24" Height="20" Content="&#xE894;" FontSize="10" ToolTip="清除搜索" AutomationProperties.Name="清除搜索" Click="ClearSearch_Click"/>
      </Grid>
     </local:RoundedClipBorder>
-    <Border x:Name="TypeFilterBar" Margin="0,8,0,0" Padding="2" HorizontalAlignment="Left" Background="{DynamicResource ActionBrush}" CornerRadius="{DynamicResource ControlCorners}" AutomationProperties.Name="按记录类型筛选">
-     <UniformGrid Columns="4">
-      <Button x:Name="FilterAllButton" Style="{StaticResource TypeFilterButton}" Content="全部" CommandParameter="All" ToolTip="显示全部记录" Click="TypeFilter_Click"/>
-      <Button x:Name="FilterTextButton" Style="{StaticResource TypeFilterButton}" Content="文字" CommandParameter="Text" ToolTip="只显示文字记录" Click="TypeFilter_Click"/>
-      <Button x:Name="FilterFileButton" Style="{StaticResource TypeFilterButton}" Content="文件" CommandParameter="File" ToolTip="只显示文件记录" Click="TypeFilter_Click"/>
-      <Button x:Name="FilterImageButton" Style="{StaticResource TypeFilterButton}" Content="图片" CommandParameter="Image" ToolTip="只显示图片记录" Click="TypeFilter_Click"/>
-     </UniformGrid>
-    </Border>
+    <Grid x:Name="TypeFilterRow" Margin="0,8,0,0" Height="32">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <Border x:Name="TypeFilterBar" Grid.Column="0" Padding="2" HorizontalAlignment="Left" Background="{DynamicResource ActionBrush}" CornerRadius="{DynamicResource ControlCorners}" AutomationProperties.Name="按记录类型筛选">
+      <UniformGrid Columns="4">
+       <Button x:Name="FilterAllButton" Style="{StaticResource TypeFilterButton}" Content="全部" CommandParameter="All" ToolTip="显示全部记录" Click="TypeFilter_Click"/>
+       <Button x:Name="FilterTextButton" Style="{StaticResource TypeFilterButton}" Content="文字" CommandParameter="Text" ToolTip="只显示文字记录" Click="TypeFilter_Click"/>
+       <Button x:Name="FilterFileButton" Style="{StaticResource TypeFilterButton}" Content="文件" CommandParameter="File" ToolTip="只显示文件记录" Click="TypeFilter_Click"/>
+       <Button x:Name="FilterImageButton" Style="{StaticResource TypeFilterButton}" Content="图片" CommandParameter="Image" ToolTip="只显示图片记录" Click="TypeFilter_Click"/>
+      </UniformGrid>
+     </Border>
+     <StackPanel x:Name="PrimaryToolbar" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0" AutomationProperties.Name="记录操作">
+      <Button Style="{StaticResource ToolbarButton}" Content="&#xE8B7;" ToolTip="选择截图文件夹" AutomationProperties.Name="选择截图文件夹" Click="Folder_Click"/>
+      <Button Style="{StaticResource ToolbarButton}" Content="&#xE713;" ToolTip="设置" AutomationProperties.Name="设置" Click="Settings_Click"/>
+      <Button x:Name="CopyButton" Style="{StaticResource ToolbarButton}" Content="&#xE8C8;" ToolTip="复制当前记录 · Ctrl+C" AutomationProperties.Name="复制选中记录" Click="Copy_Click"/>
+      <Button x:Name="PinButton" Style="{StaticResource ToolbarButton}" Content="&#xE718;" ContentTemplate="{StaticResource PinGlyphTemplate}" ToolTip="置顶选中的记录" AutomationProperties.Name="置顶选中记录" Click="Pin_Click"/>
+      <Button x:Name="DeleteButton" Style="{StaticResource ToolbarButton}" Content="&#xE74D;" ToolTip="删除选中记录 · Delete" AutomationProperties.Name="删除选中记录" Click="Delete_Click"/>
+      <Button x:Name="UndoDeleteButton" Style="{StaticResource ToolbarButton}" Content="&#xE7A7;" ToolTip="撤销删除 · Ctrl+Z" AutomationProperties.Name="撤销删除" Click="UndoDelete_Click"/>
+     </StackPanel>
+    </Grid>
    </StackPanel>
    <Grid Grid.Row="1" Margin="18,8,18,18">
     <local:RoundedClipBorder x:Name="HistoryBorder" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource ControlCorners}" PreviewMouseLeftButtonDown="History_MouseDown" PreviewMouseMove="History_MouseMove" PreviewMouseLeftButtonUp="History_MouseUp" LostMouseCapture="History_LostCapture" PreviewMouseWheel="History_DragMouseWheel">

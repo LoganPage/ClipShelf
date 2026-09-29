@@ -40,6 +40,9 @@ public static class FluentPresentationTests
             var historyBorder = (Border)window.FindName("HistoryBorder");
             var badge = (Border)window.FindName("SelectionBadge");
             var count = (TextBlock)window.FindName("SelectionCountText");
+            var typeFilterRow = (Grid)window.FindName("TypeFilterRow");
+            var typeFilterBar = (Border)window.FindName("TypeFilterBar");
+            var primaryToolbar = (StackPanel)window.FindName("PrimaryToolbar");
             Check(window.Integration is null, "Presentation fixture never connects to the user's clipboard");
             Check(store.Items.Count == 6 && store.Items.Select(item => item.Kind).Distinct().Count() == 3,
                 "Presentation fixture contains only six independently generated text/file/image records");
@@ -66,6 +69,12 @@ public static class FluentPresentationTests
                     Check(badgeBounds.Left > 0 && badgeBounds.Right < searchBorder.ActualWidth && badgeBounds.Top > 0 && badgeBounds.Bottom < searchBorder.ActualHeight,
                         $"{theme}/{width}: selection badge belongs inside the search surface");
                     Check(search.ActualWidth > 250, $"{theme}/{width}: the search input retains useful width");
+                    var filterBounds = typeFilterBar.TransformToAncestor(typeFilterRow).TransformBounds(new Rect(typeFilterBar.RenderSize));
+                    var toolbarBounds = primaryToolbar.TransformToAncestor(typeFilterRow).TransformBounds(new Rect(primaryToolbar.RenderSize));
+                    Check(toolbarBounds.Left >= filterBounds.Right + 12 && toolbarBounds.Right <= typeFilterRow.ActualWidth + 0.1,
+                        $"{theme}/{width}: record actions occupy the free space to the right of type filters");
+                    Check(Math.Abs((filterBounds.Top + filterBounds.Height / 2) - (toolbarBounds.Top + toolbarBounds.Height / 2)) < 0.1,
+                        $"{theme}/{width}: record actions align vertically with type filters");
                     Check(searchBorder.CornerRadius == new CornerRadius(4) && historyBorder.CornerRadius == new CornerRadius(4),
                         $"{theme}/{width}: search and history use 4 DIP resident-surface corners");
                     Check(badge.CornerRadius == new CornerRadius(4), $"{theme}/{width}: selection badge uses 4 DIP control corners");
