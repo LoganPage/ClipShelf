@@ -71,6 +71,10 @@ public static class FluentPresentationTests
                     && selectedSurface.BorderThickness == new Thickness(1)
                     && selectedSurface.BorderBrush is SolidColorBrush renderedBorder && renderedBorder.Color == hairline,
                     $"{theme}: SoftButton template renders the selected type-filter border");
+                Check(filterAll.Template.Triggers.OfType<Trigger>().Any(trigger => trigger.Property == FrameworkElement.TagProperty
+                    && Equals(trigger.Value, "Selected") && trigger.Setters.OfType<Setter>().Any(setter => setter.TargetName == "bd"
+                        && setter.Property == Border.BackgroundProperty)),
+                    $"{theme}: selected type filter surface overrides the generic hover background");
                 Check(filterText.Tag is null && filterText.BorderThickness == new Thickness(0),
                     $"{theme}: unselected type filters remain borderless");
                 Check(window.FindResource("ControlCorners") is CornerRadius controlCorners && controlCorners == new CornerRadius(4),
