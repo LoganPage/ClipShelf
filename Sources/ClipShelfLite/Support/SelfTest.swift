@@ -695,6 +695,7 @@ enum ClipShelfSelfTest {
             .deletingLastPathComponent()
             .appendingPathComponent("Views/MainView.swift")
         let mainViewSource = try? String(contentsOf: mainViewSourceURL, encoding: .utf8)
+        let runningFromAppBundle = Bundle.main.bundlePath.hasSuffix(".app")
         results.append(check(
             name: "record context menu exposes the declared actions in order",
             condition: ClipRowMenu.orderedActions == [.copy, .paste, .pin, .delete]
@@ -704,9 +705,9 @@ enum ClipShelfSelfTest {
                 && ClipRowMenu.title(for: .pin) == ClipRowMenu.pinTitle(isPinned: false)
                 && ClipRowMenu.pinTitle(isPinned: false) == "置顶"
                 && ClipRowMenu.pinTitle(isPinned: true) == "取消置顶"
-                && (mainViewSource.map(ClipRowMenu.isDeclaredMenuInstalled(in:)) ?? true),
-            success: "The installed native row menu derives copy, paste, pin, and delete from the declared order",
-            failure: "The record context menu is missing, detached from its declaration, or has divergent titles"
+                && (mainViewSource.map(ClipRowMenu.isDeclaredMenuInstalled(in:)) ?? runningFromAppBundle),
+            success: "The installed native row menu derives its ordered actions and destructive delete role from one declaration",
+            failure: "The record context menu is missing, detached from its declaration, lacks a destructive delete role, or has divergent titles"
         ))
 
         _ = CFPreferencesAppSynchronize(suiteName as CFString)

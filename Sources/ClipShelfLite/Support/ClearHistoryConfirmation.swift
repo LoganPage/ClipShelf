@@ -42,7 +42,43 @@ enum ClipRowMenu {
     }
 
     static func isDeclaredMenuInstalled(in source: String) -> Bool {
-        source.contains(".contextMenu {")
-            && source.contains("ForEach(ClipRowMenu.orderedActions")
+        guard let menuBlock = contextMenuBlock(in: source) else {
+            return false
+        }
+
+        return sourceContains(#"ForEach\(\s*ClipRowMenu\.orderedActions"#, in: menuBlock)
+            && sourceContains(#"\brole:\s*\.destructive"#, in: menuBlock)
+    }
+
+    private static func sourceContains(_ pattern: String, in source: String) -> Bool {
+        source.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private static func contextMenuBlock(in source: String) -> String? {
+        guard let menuStart = source.range(
+            of: #"\.contextMenu\s*\{"#,
+            options: .regularExpression
+        ), let openingBrace = source[menuStart].lastIndex(of: "{") else {
+            return nil
+        }
+
+        var depth = 0
+        var index = openingBrace
+        while index < source.endIndex {
+            switch source[index] {
+            case "{":
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 {
+                    return String(source[menuStart.lowerBound...index])
+                }
+            default:
+                break
+            }
+            index = source.index(after: index)
+        }
+
+        return nil
     }
 }
