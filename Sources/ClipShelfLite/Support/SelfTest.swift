@@ -690,13 +690,23 @@ enum ClipShelfSelfTest {
             success: "Only nonempty histories request confirmation and the copy reflects single or multiple records",
             failure: "Clear-history confirmation did not distinguish empty, single, and multiple histories"
         ))
+        let mainViewSourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Views/MainView.swift")
+        let mainViewSource = try? String(contentsOf: mainViewSourceURL, encoding: .utf8)
         results.append(check(
-            name: "record context menu preserves existing action order and pin wording",
+            name: "record context menu exposes the declared actions in order",
             condition: ClipRowMenu.orderedActions == [.copy, .paste, .pin, .delete]
+                && ClipRowMenu.title(for: .copy) == "复制"
+                && ClipRowMenu.title(for: .paste) == "粘贴"
+                && ClipRowMenu.title(for: .delete) == "删除"
+                && ClipRowMenu.title(for: .pin) == ClipRowMenu.pinTitle(isPinned: false)
                 && ClipRowMenu.pinTitle(isPinned: false) == "置顶"
-                && ClipRowMenu.pinTitle(isPinned: true) == "取消置顶",
-            success: "The native row menu exposes copy, paste, pin, and delete in the expected order",
-            failure: "The record context menu structure or pin title diverged from the row actions"
+                && ClipRowMenu.pinTitle(isPinned: true) == "取消置顶"
+                && (mainViewSource.map(ClipRowMenu.isDeclaredMenuInstalled(in:)) ?? true),
+            success: "The installed native row menu derives copy, paste, pin, and delete from the declared order",
+            failure: "The record context menu is missing, detached from its declaration, or has divergent titles"
         ))
 
         _ = CFPreferencesAppSynchronize(suiteName as CFString)

@@ -1093,17 +1093,25 @@ private struct ClipRow: View {
             handleClick(NSApp.currentEvent)
         }
         .contextMenu {
-            Button("复制") {
-                handleCopy()
-            }
-            Button("粘贴") {
-                handlePaste()
-            }
-            Button(ClipRowMenu.pinTitle(isPinned: item.isPinned)) {
-                store.togglePinned(item)
-            }
-            Button("删除", role: .destructive) {
-                store.remove(item)
+            ForEach(ClipRowMenu.orderedActions, id: \.self) { action in
+                switch action {
+                case .copy:
+                    Button(ClipRowMenu.title(for: action)) {
+                        handleCopy()
+                    }
+                case .paste:
+                    Button(ClipRowMenu.title(for: action)) {
+                        handlePaste()
+                    }
+                case .pin:
+                    Button(ClipRowMenu.pinTitle(isPinned: item.isPinned)) {
+                        store.togglePinned(item)
+                    }
+                case .delete:
+                    Button(ClipRowMenu.title(for: action), role: .destructive) {
+                        store.remove(item)
+                    }
+                }
             }
         }
     }

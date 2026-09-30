@@ -24,7 +24,25 @@ enum ClipRowMenuAction: CaseIterable {
 enum ClipRowMenu {
     static let orderedActions: [ClipRowMenuAction] = [.copy, .paste, .pin, .delete]
 
+    static func title(for action: ClipRowMenuAction) -> String {
+        switch action {
+        case .copy:
+            return "复制"
+        case .paste:
+            return "粘贴"
+        case .pin:
+            return pinTitle(isPinned: false)
+        case .delete:
+            return "删除"
+        }
+    }
+
     static func pinTitle(isPinned: Bool) -> String {
         isPinned ? "取消置顶" : "置顶"
+    }
+
+    static func isDeclaredMenuInstalled(in source: String) -> Bool {
+        source.contains(".contextMenu {")
+            && source.contains("ForEach(ClipRowMenu.orderedActions")
     }
 }
