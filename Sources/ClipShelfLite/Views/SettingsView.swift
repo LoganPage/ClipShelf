@@ -21,6 +21,9 @@ struct SettingsView: View {
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
     @State private var historyLimitText = ""
+    @State private var oldHistoryRetentionDays = OldHistoryCleanup.retentionDays
+    @State private var oldHistoryStatusText = ""
+    @State private var oldHistoryEligibleCount = 0
     @State private var showingClearHistoryConfirmation = false
     @FocusState private var historyLimitIsFocused: Bool
 
@@ -36,6 +39,7 @@ struct SettingsView: View {
                     iconSection
                     screenshotSection
                     historySection
+                    oldHistorySection
                     hotKeySection
                     launchSection
                 }
@@ -108,6 +112,7 @@ struct SettingsView: View {
         }
         .onAppear {
             historyLimitText = String(store.maxItems)
+            oldHistoryRetentionDays = OldHistoryCleanup.retentionDays
         }
     }
 
@@ -348,6 +353,44 @@ struct SettingsView: View {
         }
     }
 
+    private var oldHistorySection: some View {
+        settingsSection("清理旧历史") {
+            HStack {
+                Text("保留最近")
+                Spacer()
+                Picker("保留最近", selection: Binding(
+                    get: { oldHistoryRetentionDays },
+                    set: updateOldHistoryRetentionDays
+                )) {
+                    ForEach(OldHistoryCleanup.retentionOptions, id: \.self) { days in
+                        Text("\(days) 天").tag(days)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+
+            if !oldHistoryStatusText.isEmpty {
+                Text(oldHistoryStatusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("查看待清理记录数量") {
+                refreshOldHistoryCleanupSummary()
+            }
+
+            Button("确认清理这些记录", role: .destructive) {
+                confirmOldHistoryCleanup()
+            }
+            .disabled(oldHistoryEligibleCount == 0)
+
+            Text("只移除所选天数之前的未置顶记录，不删除原文件。清理后仍可使用 Command-Z 撤销。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var launchSection: some View {
         settingsSection("启动") {
             Toggle("开机自启动", isOn: Binding(
@@ -418,6 +461,32 @@ struct SettingsView: View {
     private func updateHistoryLimit(_ value: Int) {
         store.setHistoryLimit(value)
         historyLimitText = String(store.maxItems)
+    }
+
+    private func updateOldHistoryRetentionDays(_ days: Int) {
+        oldHistoryRetentionDays = OldHistoryCleanup.save(days, to: AppEnvironment.userDefaults)
+        oldHistoryEligibleCount = 0
+        oldHistoryStatusText = ""
+    }
+
+    private func refreshOldHistoryCleanupSummary() {
+        oldHistoryEligibleCount = OldHistoryCleanup.eligibleIDs(
+            in: store.items,
+            now: Date(),
+            retentionDays: oldHistoryRetentionDays
+        ).count
+        oldHistoryStatusText = OldHistoryCleanup.summaryText(
+            eligibleCount: oldHistoryEligibleCount,
+            retentionDays: oldHistoryRetentionDays
+        )
+    }
+
+    private func confirmOldHistoryCleanup() {
+        let removedCount = store.removeOldUnpinnedItems(retentionDays: oldHistoryRetentionDays)
+        oldHistoryEligibleCount = 0
+        oldHistoryStatusText = removedCount > 0
+            ? "已清理 \(removedCount) 条记录。"
+            : OldHistoryCleanup.summaryText(eligibleCount: 0, retentionDays: oldHistoryRetentionDays)
     }
 
     private func commitHistoryLimit() {

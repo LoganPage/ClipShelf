@@ -209,10 +209,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let copy = menuItem(title: "复制", action: #selector(copyMenuItem(_:)))
                 copy.representedObject = clip
                 submenu.addItem(copy)
-
-                let paste = menuItem(title: "粘贴", action: #selector(pasteMenuItem(_:)))
-                paste.representedObject = clip
-                submenu.addItem(paste)
                 item.submenu = submenu
                 menu.addItem(item)
             }
@@ -226,11 +222,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func copyMenuItem(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? ClipItem else { return }
         store.copy(item)
-    }
-
-    @objc private func pasteMenuItem(_ sender: NSMenuItem) {
-        guard let item = sender.representedObject as? ClipItem else { return }
-        store.paste(item)
     }
 
     private func menuItem(title: String, action: Selector) -> NSMenuItem {

@@ -698,16 +698,74 @@ enum ClipShelfSelfTest {
         let runningFromAppBundle = Bundle.main.bundlePath.hasSuffix(".app")
         results.append(check(
             name: "record context menu exposes the declared actions in order",
-            condition: ClipRowMenu.orderedActions == [.copy, .paste, .pin, .delete]
+            condition: ClipRowMenu.orderedActions == [.copy, .pin, .delete]
                 && ClipRowMenu.title(for: .copy) == "复制"
-                && ClipRowMenu.title(for: .paste) == "粘贴"
                 && ClipRowMenu.title(for: .delete) == "删除"
                 && ClipRowMenu.title(for: .pin) == ClipRowMenu.pinTitle(isPinned: false)
                 && ClipRowMenu.pinTitle(isPinned: false) == "置顶"
                 && ClipRowMenu.pinTitle(isPinned: true) == "取消置顶"
                 && (mainViewSource.map(ClipRowMenu.isDeclaredMenuInstalled(in:)) ?? runningFromAppBundle),
-            success: "The installed native row menu derives its ordered actions and destructive delete role from one declaration",
+            success: "The installed native row menu derives copy, pin, and destructive delete from one declaration",
             failure: "The record context menu is missing, detached from its declaration, lacks a destructive delete role, or has divergent titles"
+        ))
+
+        let cleanupNow = Date(timeIntervalSince1970: 2_000_000_000)
+        let cleanupCutoff = OldHistoryCleanup.cutoffDate(now: cleanupNow, retentionDays: 30)
+        let pinnedOldItem = ClipItem(
+            kind: .text,
+            title: "pinned-old",
+            createdAt: cleanupCutoff.addingTimeInterval(-1),
+            isPinned: true
+        )
+        let unpinnedNewItem = ClipItem(
+            kind: .text,
+            title: "unpinned-new",
+            createdAt: cleanupCutoff.addingTimeInterval(1)
+        )
+        let unpinnedOldItem = ClipItem(
+            kind: .text,
+            title: "unpinned-old",
+            createdAt: cleanupCutoff.addingTimeInterval(-1)
+        )
+        let unpinnedAtCutoffItem = ClipItem(
+            kind: .text,
+            title: "unpinned-at-cutoff",
+            createdAt: cleanupCutoff
+        )
+        let cleanupEligibleIDs = OldHistoryCleanup.eligibleIDs(
+            in: [pinnedOldItem, unpinnedNewItem, unpinnedOldItem, unpinnedAtCutoffItem],
+            now: cleanupNow,
+            retentionDays: 30
+        )
+        results.append(check(
+            name: "old history cleanup selects only unpinned records older than the window",
+            condition: cleanupEligibleIDs == [unpinnedOldItem.id],
+            success: "Only an unpinned record strictly older than the cutoff is eligible",
+            failure: "Old-history eligibility included a pinned, recent, or cutoff-boundary record"
+        ))
+
+        results.append(check(
+            name: "old history cleanup retention window only accepts the offered values",
+            condition: OldHistoryCleanup.normalized(7) == 7
+                && OldHistoryCleanup.normalized(30) == 30
+                && OldHistoryCleanup.normalized(90) == 90
+                && [0, 15, 999, -1].allSatisfy {
+                    OldHistoryCleanup.normalized($0) == OldHistoryCleanup.defaultRetentionDays
+                }
+                && OldHistoryCleanup.load(from: defaults) == OldHistoryCleanup.defaultRetentionDays,
+            success: "Retention accepts 7, 30, or 90 days and otherwise uses the 30-day default",
+            failure: "Retention accepted an unsupported value or did not use the default"
+        ))
+
+        let emptyCleanupSummary = OldHistoryCleanup.summaryText(eligibleCount: 0, retentionDays: 30)
+        let populatedCleanupSummary = OldHistoryCleanup.summaryText(eligibleCount: 12, retentionDays: 30)
+        results.append(check(
+            name: "old history cleanup summary reports the eligible count",
+            condition: emptyCleanupSummary == "没有符合条件的旧记录。"
+                && populatedCleanupSummary.contains("30")
+                && populatedCleanupSummary.contains("12"),
+            success: "Cleanup summaries distinguish an empty result and include both days and item count",
+            failure: "Cleanup summary omitted the empty state, retention days, or eligible count"
         ))
 
         _ = CFPreferencesAppSynchronize(suiteName as CFString)

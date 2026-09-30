@@ -53,16 +53,6 @@ final class ClipStore: ObservableObject {
         writeToPasteboard(items)
     }
 
-    func paste(_ item: ClipItem) {
-        writeToPasteboard(item)
-        PasteController.paste()
-    }
-
-    func paste(_ items: [ClipItem]) {
-        writeToPasteboard(items)
-        PasteController.paste()
-    }
-
     func addScreenshot(data: Data, sourceURL: URL) {
         runOnMain {
             let item = ClipItem(
@@ -92,6 +82,17 @@ final class ClipStore: ObservableObject {
         updateUndoAvailability()
         items.removeAll { ids.contains($0.id) }
         save()
+    }
+
+    @discardableResult
+    func removeOldUnpinnedItems(retentionDays: Int, now: Date = Date()) -> Int {
+        let ids = OldHistoryCleanup.eligibleIDs(
+            in: items,
+            now: now,
+            retentionDays: retentionDays
+        )
+        remove(ids: ids)
+        return ids.count
     }
 
     func togglePinned(_ item: ClipItem) {

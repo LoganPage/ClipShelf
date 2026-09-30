@@ -16,20 +16,17 @@ enum ClearHistoryConfirmation {
 
 enum ClipRowMenuAction: CaseIterable {
     case copy
-    case paste
     case pin
     case delete
 }
 
 enum ClipRowMenu {
-    static let orderedActions: [ClipRowMenuAction] = [.copy, .paste, .pin, .delete]
+    static let orderedActions: [ClipRowMenuAction] = [.copy, .pin, .delete]
 
     static func title(for action: ClipRowMenuAction) -> String {
         switch action {
         case .copy:
             return "复制"
-        case .paste:
-            return "粘贴"
         case .pin:
             return pinTitle(isPinned: false)
         case .delete:

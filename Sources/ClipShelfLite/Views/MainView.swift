@@ -24,7 +24,6 @@ struct MainView: View {
     @State private var appIconChoice = AppIconPreferences.selected
     @State private var clearSelectionHotKey = ClearSelectionHotKeyDefaults.load()
     @State private var pinHotKey = PinHotKeyDefaults.load()
-    @State private var suppressPasteUntil = Date.distantPast
     @State private var suppressRowTapUntil = Date.distantPast
     @StateObject private var updateChecker = AppUpdateChecker.shared
     @State private var hostWindow: NSWindow?
@@ -158,8 +157,7 @@ struct MainView: View {
                             selectionColorIsPreset: selectionColorPreset != nil,
                             showsSeparator: index < filteredItems.count - 1 && !isSelected && !isNextSelected,
                             handleClick: { event in handleRowClick(item, event: event) },
-                            handleCopy: { store.copy(actionItems(for: item)) },
-                            handlePaste: { pasteRowItems(actionItems(for: item)) }
+                            handleCopy: { store.copy(actionItems(for: item)) }
                         )
                         .id(item.id)
                     }
@@ -329,15 +327,6 @@ struct MainView: View {
                 .floatingTooltip(copyActionHelp)
 
                 Button {
-                    pasteActionItems()
-                } label: {
-                    Image(systemName: "arrow.down.doc")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(actionItems.isEmpty ? Color.secondary.opacity(0.38) : Color.secondary)
-                .floatingTooltip(pasteActionHelp)
-
-                Button {
                     togglePinnedForActionItems()
                 } label: {
                     Image(systemName: "pin")
@@ -477,10 +466,6 @@ struct MainView: View {
             if !items.isEmpty {
                 PreviewController.shared.togglePreview(items, onNavigate: navigatePreview)
             }
-        case 36, 76:
-            if let item = focusedItem {
-                store.paste(item)
-            }
         case 51, 117:
             deleteSelectedOrClear()
         default:
@@ -527,7 +512,7 @@ struct MainView: View {
             }
 
             if event.modifierFlags.contains(.command),
-               ["a", "c", "v", "z"].contains(event.charactersIgnoringModifiers?.lowercased()) {
+               ["a", "c", "z"].contains(event.charactersIgnoringModifiers?.lowercased()) {
                 handleCommandKey(event)
                 return nil
             }
@@ -560,8 +545,6 @@ struct MainView: View {
             selectAllVisibleItems()
         case "c":
             store.copy(actionItems)
-        case "v":
-            store.paste(actionItems)
         case "z":
             guard !isSearchFocused else { return }
             undoLastDeletion()
@@ -609,25 +592,10 @@ struct MainView: View {
         selectedIDs.count > 1 ? "复制选中的 \(selectedIDs.count) 条记录" : "复制当前记录"
     }
 
-    private var pasteActionHelp: String {
-        selectedIDs.count > 1 ? "粘贴选中的 \(selectedIDs.count) 条记录" : "粘贴当前记录"
-    }
-
     private func copyActionItems() {
         let items = actionItems
         guard !items.isEmpty else { return }
         store.copy(items)
-    }
-
-    private func pasteActionItems() {
-        let items = actionItems
-        guard !items.isEmpty else { return }
-        store.paste(items)
-    }
-
-    private func pasteRowItems(_ items: [ClipItem]) {
-        guard Date() >= suppressPasteUntil else { return }
-        store.paste(items)
     }
 
     private func selectAllVisibleItems() {
@@ -933,9 +901,6 @@ struct MainView: View {
     }
 
     private func endDragSelection() {
-        if isDragSelecting {
-            suppressPasteUntil = Date().addingTimeInterval(0.45)
-        }
         isDragSelecting = false
         dragAnchorID = nil
         dragSnapshotItems = nil
@@ -1016,7 +981,6 @@ private struct ClipRow: View {
     let showsSeparator: Bool
     let handleClick: (NSEvent?) -> Void
     let handleCopy: () -> Void
-    let handlePaste: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1029,10 +993,6 @@ private struct ClipRow: View {
                     .font(.system(size: 14, weight: .medium))
                     .lineLimit(2)
                 HStack(spacing: 8) {
-                    if item.isPinned {
-                        Label("已置顶", systemImage: "pin.fill")
-                            .labelStyle(.titleAndIcon)
-                    }
                     Text(kindText)
                     Text(DateText.formatter.string(from: item.createdAt))
                 }
@@ -1057,14 +1017,6 @@ private struct ClipRow: View {
             }
             .buttonStyle(ChatGPTIconButtonStyle(isSelected: isSelected))
             .floatingTooltip(isSelected ? "复制选中的记录" : "复制")
-
-            Button {
-                handlePaste()
-            } label: {
-                Image(systemName: "arrow.down.doc")
-            }
-            .buttonStyle(ChatGPTIconButtonStyle(isSelected: isSelected))
-            .floatingTooltip(isSelected ? "粘贴选中的记录" : "粘贴")
 
             Button(role: .destructive) {
                 store.remove(item)
@@ -1098,10 +1050,6 @@ private struct ClipRow: View {
                 case .copy:
                     Button(ClipRowMenu.title(for: action)) {
                         handleCopy()
-                    }
-                case .paste:
-                    Button(ClipRowMenu.title(for: action)) {
-                        handlePaste()
                     }
                 case .pin:
                     Button(ClipRowMenu.pinTitle(isPinned: item.isPinned)) {
@@ -1440,13 +1388,13 @@ private final class KeyCaptureNSView: NSView {
 
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command),
-           ["a", "c", "v"].contains(event.charactersIgnoringModifiers?.lowercased()) {
+           ["a", "c"].contains(event.charactersIgnoringModifiers?.lowercased()) {
             onKeyDown?(event)
             return
         }
 
         switch event.keyCode {
-        case 36, 49, 51, 76, 117, 125, 126:
+        case 49, 51, 117, 125, 126:
             onKeyDown?(event)
         default:
             super.keyDown(with: event)
