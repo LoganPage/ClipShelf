@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="ClipShelf"
 BUNDLE_ID="local.codex.ClipShelf"
 MIN_SYSTEM_VERSION="13.0"
-APP_VERSION="1.2.0"
+APP_VERSION="1.4.1"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"

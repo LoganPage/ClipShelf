@@ -30,6 +30,7 @@ struct MainView: View {
     @State private var hostWindow: NSWindow?
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
+    @State private var showingClearHistoryConfirmation = false
     @FocusState private var isSearchFocused: Bool
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = 10
@@ -78,6 +79,19 @@ struct MainView: View {
         .background(WindowReader { window in
             hostWindow = window
         })
+        .confirmationDialog(
+            ClearHistoryConfirmation.title(itemCount: store.items.count),
+            isPresented: $showingClearHistoryConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("清空", role: .destructive) {
+                store.clearHistory()
+                clearSelection()
+            }
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text(ClearHistoryConfirmation.message(itemCount: store.items.count))
+        }
         .onAppear {
             installCommandKeyMonitorIfNeeded()
             updateChecker.checkIfNeeded()
@@ -421,11 +435,15 @@ struct MainView: View {
 
     private func deleteSelectedOrClear() {
         if selectedIDs.isEmpty {
-            store.clearHistory()
+            guard ClearHistoryConfirmation.shouldConfirm(itemCount: store.items.count) else {
+                clearSelection()
+                return
+            }
+            showingClearHistoryConfirmation = true
         } else {
             store.remove(ids: selectedIDs)
+            clearSelection()
         }
-        clearSelection()
     }
 
     private func clearSelection() {
@@ -522,7 +540,7 @@ struct MainView: View {
         guard !showingSettings,
               let window = event.window,
               window === NSApp.keyWindow,
-              window.title == "ClipShelf" else {
+              window.title.hasPrefix("ClipShelf") else {
             return false
         }
 
@@ -1073,6 +1091,20 @@ private struct ClipRow: View {
         .contentShape(Rectangle())
         .onTapGesture {
             handleClick(NSApp.currentEvent)
+        }
+        .contextMenu {
+            Button("复制") {
+                handleCopy()
+            }
+            Button("粘贴") {
+                handlePaste()
+            }
+            Button(ClipRowMenu.pinTitle(isPinned: item.isPinned)) {
+                store.togglePinned(item)
+            }
+            Button("删除", role: .destructive) {
+                store.remove(item)
+            }
         }
     }
 

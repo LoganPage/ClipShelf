@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "ClipShelf"
+            window.title = AppVersionInfo.windowTitle(bundleVersion: AppVersionInfo.bundleVersion)
             window.center()
             window.contentView = NSHostingView(rootView: MainView(store: store, watcher: watcher))
             window.isReleasedWhenClosed = false
@@ -111,7 +111,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func clearHistory() {
-        store.clearHistory()
+        let itemCount = store.items.count
+        guard ClearHistoryConfirmation.shouldConfirm(itemCount: itemCount) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = ClearHistoryConfirmation.title(itemCount: itemCount)
+        alert.informativeText = ClearHistoryConfirmation.message(itemCount: itemCount)
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "清空")
+        alert.addButton(withTitle: "取消")
+
+        if let window, window.isVisible {
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard response == .alertFirstButtonReturn else { return }
+                self?.store.clearHistory()
+            }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn {
+                store.clearHistory()
+            }
+        }
     }
 
     @objc func quit() {

@@ -668,6 +668,37 @@ enum ClipShelfSelfTest {
             failure: "Text preview routing captured an unsupported document type or missed a required text extension"
         ))
 
+        let packagedVersion = "1.4.1"
+        results.append(check(
+            name: "app version has one display source and safe development fallbacks",
+            condition: AppVersionInfo.windowTitle(bundleVersion: packagedVersion) == "ClipShelf 1.4.1"
+                && AppVersionInfo.windowTitle(bundleVersion: nil) == "ClipShelf"
+                && AppVersionInfo.statusVersion(bundleVersion: packagedVersion) == packagedVersion
+                && AppVersionInfo.statusVersion(bundleVersion: nil) == "dev",
+            success: "Window title and status version share the bundle version while unbundled builds stay identifiable",
+            failure: "Version display sources diverged or an unbundled build exposed a stale release version"
+        ))
+
+        results.append(check(
+            name: "clear history confirmation covers empty single and multiple histories",
+            condition: !ClearHistoryConfirmation.shouldConfirm(itemCount: 0)
+                && ClearHistoryConfirmation.shouldConfirm(itemCount: 1)
+                && ClearHistoryConfirmation.shouldConfirm(itemCount: 12)
+                && ClearHistoryConfirmation.title(itemCount: 1).contains("这条")
+                && ClearHistoryConfirmation.title(itemCount: 12).contains("全部")
+                && ClearHistoryConfirmation.message(itemCount: 12).contains("12"),
+            success: "Only nonempty histories request confirmation and the copy reflects single or multiple records",
+            failure: "Clear-history confirmation did not distinguish empty, single, and multiple histories"
+        ))
+        results.append(check(
+            name: "record context menu preserves existing action order and pin wording",
+            condition: ClipRowMenu.orderedActions == [.copy, .paste, .pin, .delete]
+                && ClipRowMenu.pinTitle(isPinned: false) == "置顶"
+                && ClipRowMenu.pinTitle(isPinned: true) == "取消置顶",
+            success: "The native row menu exposes copy, paste, pin, and delete in the expected order",
+            failure: "The record context menu structure or pin title diverged from the row actions"
+        ))
+
         _ = CFPreferencesAppSynchronize(suiteName as CFString)
         let unexpectedSelfTestDefaultsFiles = selfTestDefaultsFiles()
             .subtracting(allowedSelfTestDefaultsFiles)

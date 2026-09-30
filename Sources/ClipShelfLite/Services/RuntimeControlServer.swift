@@ -219,8 +219,7 @@ final class RuntimeControlServer {
     }
 
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "1.2.0"
+        AppVersionInfo.statusVersion(bundleVersion: AppVersionInfo.bundleVersion)
     }
 
     private func onMain<T>(_ operation: () -> T) -> T {

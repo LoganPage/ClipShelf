@@ -21,6 +21,7 @@ struct SettingsView: View {
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
     @State private var historyLimitText = ""
+    @State private var showingClearHistoryConfirmation = false
     @FocusState private var historyLimitIsFocused: Bool
 
     private var resolvedColorScheme: ColorScheme {
@@ -62,6 +63,18 @@ struct SettingsView: View {
         .background(WindowReader { window in
             hostWindow = window
         })
+        .confirmationDialog(
+            ClearHistoryConfirmation.title(itemCount: store.items.count),
+            isPresented: $showingClearHistoryConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("清空", role: .destructive) {
+                store.clearHistory()
+            }
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text(ClearHistoryConfirmation.message(itemCount: store.items.count))
+        }
         .onReceive(NotificationCenter.default.publisher(for: HotKeyDefaults.changedNotification)) { notification in
             hotKey = notification.object as? HotKeyConfiguration ?? HotKeyDefaults.load()
         }
@@ -291,7 +304,8 @@ struct SettingsView: View {
             }
 
             Button("清空历史", role: .destructive) {
-                store.clearHistory()
+                guard ClearHistoryConfirmation.shouldConfirm(itemCount: store.items.count) else { return }
+                showingClearHistoryConfirmation = true
             }
 
             Text("清空历史只删除 ClipShelf 的记录，不删除截图文件夹或访达里的原文件。")

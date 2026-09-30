@@ -79,8 +79,7 @@ private struct GitHubRelease: Decodable {
 
 private struct AppVersion: Comparable {
     static var current: AppVersion {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return AppVersion(version ?? "0")
+        AppVersion(AppVersionInfo.statusVersion(bundleVersion: AppVersionInfo.bundleVersion))
     }
 
     private let parts: [Int]
