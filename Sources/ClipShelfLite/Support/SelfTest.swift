@@ -11,20 +11,22 @@ enum ClipShelfSelfTest {
     static func run(fileManager: FileManager = .default) -> [SelfTestResult] {
         let temporaryRoot = fileManager.temporaryDirectory
             .appendingPathComponent("ClipShelf-SelfTest-\(UUID().uuidString)", isDirectory: true)
-        let suiteName = "ClipShelf.SelfTest.Active"
+        let fixedSuiteName = "ClipShelf.SelfTest.Active"
+        let suiteName = fixedSuiteName
         let preferencesURL = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Preferences", isDirectory: true)
         let suitePlistURL = preferencesURL.appendingPathComponent("\(suiteName).plist")
-        let selfTestDefaultsFileCount = {
+        let allowedSelfTestDefaultsFiles: Set<String> = ["\(fixedSuiteName).plist"]
+        let selfTestDefaultsFiles = {
             let contents = (try? fileManager.contentsOfDirectory(
                 at: preferencesURL,
                 includingPropertiesForKeys: nil
             )) ?? []
-            return contents.filter {
-                $0.lastPathComponent.hasPrefix("ClipShelf.SelfTest.") && $0.pathExtension == "plist"
-            }.count
+            return Set(contents.compactMap { url in
+                let name = url.lastPathComponent
+                return name.hasPrefix("ClipShelf.SelfTest.") && url.pathExtension == "plist" ? name : nil
+            })
         }
-        let defaultsFileCountBeforeRun = selfTestDefaultsFileCount()
         let clearSelfTestDefaults = {
             let defaults = UserDefaults(suiteName: suiteName)
             defaults?.removePersistentDomain(forName: suiteName)
@@ -666,12 +668,15 @@ enum ClipShelfSelfTest {
             failure: "Text preview routing captured an unsupported document type or missed a required text extension"
         ))
 
+        _ = CFPreferencesAppSynchronize(suiteName as CFString)
+        let unexpectedSelfTestDefaultsFiles = selfTestDefaultsFiles()
+            .subtracting(allowedSelfTestDefaultsFiles)
         clearSelfTestDefaults()
         results.append(check(
             name: "self test defaults suite file count does not grow",
-            condition: selfTestDefaultsFileCount() <= defaultsFileCountBeforeRun,
+            condition: suiteName == fixedSuiteName && unexpectedSelfTestDefaultsFiles.isEmpty,
             success: "The isolated self-test defaults suite does not increase files in Library/Preferences",
-            failure: "The self-test increased its defaults plist count in Library/Preferences"
+            failure: "Unexpected self-test defaults domains: \(unexpectedSelfTestDefaultsFiles.sorted())"
         ))
 
         return results
