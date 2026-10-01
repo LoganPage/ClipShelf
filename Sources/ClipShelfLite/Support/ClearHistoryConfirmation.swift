@@ -39,43 +39,63 @@ enum ClipRowMenu {
     }
 
     static func isDeclaredMenuInstalled(in source: String) -> Bool {
-        guard let menuBlock = contextMenuBlock(in: source) else {
+        let code = SourceScan.codeOnly(source)
+        guard let clipRowBody = SourceScan.body(ofTypeNamed: "ClipRow", in: code) else {
             return false
         }
 
-        return sourceContains(#"ForEach\(\s*ClipRowMenu\.orderedActions"#, in: menuBlock)
-            && sourceContains(#"\brole:\s*\.destructive"#, in: menuBlock)
-    }
-
-    private static func sourceContains(_ pattern: String, in source: String) -> Bool {
-        source.range(of: pattern, options: .regularExpression) != nil
-    }
-
-    private static func contextMenuBlock(in source: String) -> String? {
-        guard let menuStart = source.range(
-            of: #"\.contextMenu\s*\{"#,
-            options: .regularExpression
-        ), let openingBrace = source[menuStart].lastIndex(of: "{") else {
-            return nil
+        let menuBlocks = contextMenuBlocks(in: clipRowBody)
+        guard menuBlocks.count == 1, let menuBlock = menuBlocks.first else {
+            return false
         }
 
-        var depth = 0
-        var index = openingBrace
-        while index < source.endIndex {
-            switch source[index] {
-            case "{":
-                depth += 1
-            case "}":
-                depth -= 1
-                if depth == 0 {
-                    return String(source[menuStart.lowerBound...index])
+        return SourceScan.contains(#"ForEach\(\s*ClipRowMenu\.orderedActions"#, in: menuBlock)
+            && SourceScan.contains(
+                #"case\s+\.delete:(?:(?!\n\s*case\s+\.)[\s\S])*?\brole:\s*\.destructive"#,
+                in: menuBlock
+            )
+    }
+
+    private static func contextMenuBlocks(in source: String) -> [String] {
+        var blocks = [String]()
+        var searchStart = source.startIndex
+
+        while searchStart < source.endIndex,
+              let menuStart = source.range(
+                of: #"\.contextMenu\s*\{"#,
+                options: .regularExpression,
+                range: searchStart..<source.endIndex
+              ),
+              let openingBrace = source[menuStart].lastIndex(of: "{") {
+            var depth = 0
+            var index = openingBrace
+            var closingBrace: String.Index?
+
+            while index < source.endIndex {
+                switch source[index] {
+                case "{":
+                    depth += 1
+                case "}":
+                    depth -= 1
+                    if depth == 0 {
+                        closingBrace = index
+                    }
+                default:
+                    break
                 }
-            default:
-                break
+                if closingBrace != nil {
+                    break
+                }
+                index = source.index(after: index)
             }
-            index = source.index(after: index)
+
+            guard let closingBrace else {
+                return []
+            }
+            blocks.append(String(source[menuStart.lowerBound...closingBrace]))
+            searchStart = source.index(after: closingBrace)
         }
 
-        return nil
+        return blocks
     }
 }

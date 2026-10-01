@@ -752,7 +752,10 @@ enum ClipShelfSelfTest {
                 && [0, 15, 999, -1].allSatisfy {
                     OldHistoryCleanup.normalized($0) == OldHistoryCleanup.defaultRetentionDays
                 }
-                && OldHistoryCleanup.load(from: defaults) == OldHistoryCleanup.defaultRetentionDays,
+                && OldHistoryCleanup.load(from: defaults) == OldHistoryCleanup.defaultRetentionDays
+                && OldHistoryCleanup.defaultRetentionDays == 30
+                && OldHistoryCleanup.retentionOptions == [7, 30, 90]
+                && OldHistoryCleanup.normalized(15) == 30,
             success: "Retention accepts 7, 30, or 90 days and otherwise uses the 30-day default",
             failure: "Retention accepted an unsupported value or did not use the default"
         ))
@@ -766,6 +769,207 @@ enum ClipShelfSelfTest {
                 && populatedCleanupSummary.contains("12"),
             success: "Cleanup summaries distinguish an empty result and include both days and item count",
             failure: "Cleanup summary omitted the empty state, retention days, or eligible count"
+        ))
+
+        let installedRowMenuSource = #"""
+        private struct ClipRow: View {
+            var body: some View {
+                Text("row")
+                    .contextMenu {
+                        ForEach(ClipRowMenu.orderedActions, id: \.self) { action in
+                            switch action {
+                            case .copy:
+                                Button("Copy") {}
+                            case .pin:
+                                Button("Pin") {}
+                            case .delete:
+                                Button("Delete", role: .destructive) {}
+                            }
+                        }
+                    }
+            }
+        }
+        """#
+        let reflowedRowMenuSource = #"""
+        private struct ClipRow: View {
+            var body: some View {
+                Text("row")
+                    .contextMenu {
+                        ForEach(
+                            ClipRowMenu.orderedActions,
+                            id: \.self
+                        ) { action in
+                            switch action {
+                            case .copy:
+                                Button("Copy") {}
+                            case .pin:
+                                Button("Pin") {}
+                            case .delete:
+                                Button("Delete", role:   .destructive) {}
+                            }
+                        }
+                    }
+            }
+        }
+        """#
+        let wrongTypeRowMenuSource = #"""
+        private struct ClipRowMenu: View {
+            var body: some View {
+                Text("decoy")
+                    .contextMenu {
+                        ForEach(ClipRowMenu.orderedActions, id: \.self) { action in
+                            switch action {
+                            case .delete:
+                                Button("Delete", role: .destructive) {}
+                            default:
+                                EmptyView()
+                            }
+                        }
+                    }
+            }
+        }
+        private struct ClipRow: View {
+            var body: some View { Text("real row") }
+        }
+        """#
+        let stringDecoyRowMenuSource = #"""
+        // private struct ClipRow: View { var body: some View { Text("comment decoy") } }
+        private struct ClipRow: View {
+            let decoy = ".contextMenu { ForEach(ClipRowMenu.orderedActions) { case .delete: Button(role: .destructive) } }"
+            var body: some View { Text("row") }
+        }
+        """#
+        let missingDeclarationRowMenuSource = #"""
+        private struct ClipRow: View {
+            var body: some View {
+                Text("row")
+                    .contextMenu {
+                        let action = ClipRowMenuAction.delete
+                        switch action {
+                        case .copy:
+                            Button("Copy") {}
+                        case .pin:
+                            Button("Pin") {}
+                        case .delete:
+                            Button("Delete", role: .destructive) {}
+                        }
+                    }
+            }
+        }
+        """#
+        let acceptedRowMenuCases = [
+            ("installed menu", ClipRowMenu.isDeclaredMenuInstalled(in: installedRowMenuSource)),
+            ("reflowed menu", ClipRowMenu.isDeclaredMenuInstalled(in: reflowedRowMenuSource)),
+            ("wrong type boundary", !ClipRowMenu.isDeclaredMenuInstalled(in: wrongTypeRowMenuSource)),
+            ("string literal decoy", !ClipRowMenu.isDeclaredMenuInstalled(in: stringDecoyRowMenuSource)),
+            ("missing shared declaration", !ClipRowMenu.isDeclaredMenuInstalled(in: missingDeclarationRowMenuSource))
+        ]
+        let failedAcceptedRowMenuCases = acceptedRowMenuCases
+            .filter { !$0.1 }
+            .map(\.0)
+        results.append(check(
+            name: "row menu source check accepts the installed menu and tolerates reflow",
+            condition: failedAcceptedRowMenuCases.isEmpty,
+            success: "The source check accepts the installed form and whitespace reflow while rejecting type and string decoys",
+            failure: "Failed source-check cases: \(failedAcceptedRowMenuCases.joined(separator: ", "))"
+        ))
+
+        let blockCommentedRowMenuSource = "/*\n\(installedRowMenuSource)\n*/"
+        let lineCommentedRowMenuSource = installedRowMenuSource
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { "// \($0)" }
+            .joined(separator: "\n")
+        let duplicateRowMenuSource = #"""
+        private struct ClipRow: View {
+            var body: some View {
+                Text("row")
+                    .contextMenu {
+                        ForEach(ClipRowMenu.orderedActions, id: \.self) { action in
+                            switch action {
+                            case .copy:
+                                Button("Copy") {}
+                            case .pin:
+                                Button("Pin") {}
+                            case .delete:
+                                Button("Delete", role: .destructive) {}
+                            }
+                        }
+                    }
+                    .contextMenu {
+                        ForEach(ClipRowMenu.orderedActions, id: \.self) { action in
+                            switch action {
+                            case .copy:
+                                Button("Copy") {}
+                            case .pin:
+                                Button("Pin") {}
+                            case .delete:
+                                Button("Delete", role: .destructive) {}
+                            }
+                        }
+                    }
+            }
+        }
+        """#
+        let misplacedRoleRowMenuSource = installedRowMenuSource
+            .replacingOccurrences(of: #"Button("Pin") {}"#, with: #"Button("Pin", role: .destructive) {}"#)
+            .replacingOccurrences(of: #"Button("Delete", role: .destructive) {}"#, with: #"Button("Delete") {}"#)
+        let missingRoleRowMenuSource = installedRowMenuSource
+            .replacingOccurrences(of: #", role: .destructive"#, with: "")
+        let rejectedRowMenuCases = [
+            ("block-commented menu", !ClipRowMenu.isDeclaredMenuInstalled(in: blockCommentedRowMenuSource)),
+            ("line-commented menu", !ClipRowMenu.isDeclaredMenuInstalled(in: lineCommentedRowMenuSource)),
+            ("duplicate menu decoy", !ClipRowMenu.isDeclaredMenuInstalled(in: duplicateRowMenuSource)),
+            ("destructive role on pin", !ClipRowMenu.isDeclaredMenuInstalled(in: misplacedRoleRowMenuSource)),
+            ("missing destructive role", !ClipRowMenu.isDeclaredMenuInstalled(in: missingRoleRowMenuSource)),
+            ("missing shared declaration", !ClipRowMenu.isDeclaredMenuInstalled(in: missingDeclarationRowMenuSource))
+        ]
+        let failedRejectedRowMenuCases = rejectedRowMenuCases
+            .filter { !$0.1 }
+            .map(\.0)
+        results.append(check(
+            name: "row menu source check rejects comments decoys and misplaced roles",
+            condition: failedRejectedRowMenuCases.isEmpty,
+            success: "Comments, duplicate menus, misplaced roles, and hand-written actions are rejected",
+            failure: "Failed rejection cases: \(failedRejectedRowMenuCases.joined(separator: ", "))"
+        ))
+
+        let absoluteCleanupNow = Date(timeIntervalSince1970: 2_000_000_000)
+        results.append(check(
+            name: "old history cleanup cutoff matches the declared retention window exactly",
+            condition: OldHistoryCleanup.cutoffDate(now: absoluteCleanupNow, retentionDays: 30)
+                == Date(timeIntervalSince1970: TimeInterval(2_000_000_000 - 30 * 86_400))
+                && OldHistoryCleanup.cutoffDate(now: absoluteCleanupNow, retentionDays: 7)
+                == Date(timeIntervalSince1970: TimeInterval(2_000_000_000 - 7 * 86_400))
+                && OldHistoryCleanup.cutoffDate(now: absoluteCleanupNow, retentionDays: 90)
+                == Date(timeIntervalSince1970: TimeInterval(2_000_000_000 - 90 * 86_400))
+                && OldHistoryCleanup.cutoffDate(now: absoluteCleanupNow, retentionDays: 0)
+                == OldHistoryCleanup.cutoffDate(now: absoluteCleanupNow, retentionDays: 30),
+            success: "The 7-, 30-, and 90-day cutoffs match their exact durations and invalid values fall back to 30 days",
+            failure: "A cleanup cutoff drifted from its declared duration or invalid values did not fall back to 30 days"
+        ))
+
+        let clipStoreSourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Stores/ClipStore.swift")
+        let clipStoreSource = try? String(contentsOf: clipStoreSourceURL, encoding: .utf8)
+        let oldHistoryRemovalBody = clipStoreSource.flatMap {
+            SourceScan.body(
+                ofFunctionNamed: "removeOldUnpinnedItems",
+                in: SourceScan.codeOnly($0)
+            )
+        }
+        let oldHistoryRemovalIsUndoable = oldHistoryRemovalBody.map {
+            SourceScan.contains(#"remove\(ids:"#, in: $0)
+                && !SourceScan.contains(#"items\.removeAll"#, in: $0)
+                && !SourceScan.contains(#"deletionUndoStack"#, in: $0)
+                && !SourceScan.contains(#"save\(\)"#, in: $0)
+        } ?? runningFromAppBundle
+        results.append(check(
+            name: "old history cleanup routes through the shared removal path so it stays undoable",
+            condition: oldHistoryRemovalIsUndoable,
+            success: "Old-history cleanup delegates to the shared undoable removal path",
+            failure: "Old-history cleanup bypasses remove(ids:) or directly mutates, records, or saves history"
         ))
 
         _ = CFPreferencesAppSynchronize(suiteName as CFString)
