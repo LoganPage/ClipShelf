@@ -58,8 +58,8 @@ internal static class HistoryTypeFilterTests
             var listShift = historyBorder.RenderTransform as TranslateTransform ?? new TranslateTransform();
             var indicatorShift = (TranslateTransform)filterSelection.RenderTransform;
             double listFirst = listShift.X, indicatorFirst = indicatorShift.X;
-            await Task.Delay(35); double listMiddle = listShift.X, indicatorMiddle = indicatorShift.X;
-            await Task.Delay(110); await Idle();
+            await Task.Delay(55); double listMiddle = listShift.X, indicatorMiddle = indicatorShift.X;
+            await Task.Delay(230); await Idle();
             Check(!SystemParameters.ClientAreaAnimation || (new[] { listFirst, listMiddle, listShift.X }.Distinct().Count() >= 2
                 && new[] { indicatorFirst, indicatorMiddle, indicatorShift.X }.Distinct().Count() >= 2),
                 "Type selection and history content expose interruptible horizontal motion");

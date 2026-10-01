@@ -41,6 +41,7 @@ public partial class MainWindow : Window
     private const double RowHeight = 74;
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private bool dragRendering;
+    private bool typeFilterAnimationActive, typeFilterResizePending;
     private long dragFrameTick;
     private TimeSpan dragRenderingTime = TimeSpan.MinValue;
     private bool quitting, refreshing, dragging, pointerDown, suppressDragRelease;
@@ -82,7 +83,11 @@ public partial class MainWindow : Window
         UpdateTypeFilterButtons();
         UpdateAlwaysOnTopButton(animate: false);
         Loaded += (_, _) => PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
-        TypeFilterBar.SizeChanged += (_, _) => PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
+        TypeFilterBar.SizeChanged += (_, _) =>
+        {
+            if (typeFilterAnimationActive) typeFilterResizePending = true;
+            else PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
+        };
         Refresh();
     }
     private void InitializeNative()
@@ -317,7 +322,6 @@ public partial class MainWindow : Window
             button.Tag = active ? "Selected" : null;
             AutomationProperties.SetName(button, active ? $"{label}记录，已选择" : $"筛选{label}记录");
         }
-        if (IsLoaded) PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(selected));
     }
     private static int FilterIndex(string filter) => HistoryTypeFilter.Normalize(filter) switch
     {
@@ -333,14 +337,29 @@ public partial class MainWindow : Window
         int targetIndex = FilterIndex(Store.Settings.HistoryTypeFilter);
         TypeFilterSelection.Width = width;
         double target = targetIndex * width;
+        double current = shift.X;
         shift.BeginAnimation(TranslateTransform.XProperty, null);
         shift.X = target;
-        if (!animate || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
-        shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(previousIndex * width, target, TimeSpan.FromMilliseconds(110))
+        if (!animate || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation)
         {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            typeFilterAnimationActive = false;
+            typeFilterResizePending = false;
+            return;
+        }
+        var animation = new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(240))
+        {
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             FillBehavior = FillBehavior.Stop
-        }, HandoffBehavior.SnapshotAndReplace);
+        };
+        typeFilterAnimationActive = true;
+        animation.Completed += (_, _) =>
+        {
+            typeFilterAnimationActive = false;
+            if (!typeFilterResizePending) return;
+            typeFilterResizePending = false;
+            PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
+        };
+        shift.BeginAnimation(TranslateTransform.XProperty, animation, HandoffBehavior.SnapshotAndReplace);
     }
     private void AnimateFilteredList(double from)
     {
@@ -352,9 +371,9 @@ public partial class MainWindow : Window
         }
         shift.BeginAnimation(TranslateTransform.XProperty, null);
         shift.X = 0;
-        shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(from, 0, TimeSpan.FromMilliseconds(110))
+        shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(from, 0, TimeSpan.FromMilliseconds(240))
         {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             FillBehavior = FillBehavior.Stop
         }, HandoffBehavior.SnapshotAndReplace);
     }
