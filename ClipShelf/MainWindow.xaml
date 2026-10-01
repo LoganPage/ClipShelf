@@ -24,6 +24,10 @@
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource ControlCorners}" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="{DynamicResource HoverBrush}"/></Trigger><Trigger Property="Tag" Value="Selected"><Setter TargetName="bd" Property="Background" Value="Transparent"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter TargetName="bd" Property="Opacity" Value="0.65"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="bd" Property="Opacity" Value="0.32"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
    <Style.Triggers><Trigger Property="Tag" Value="Selected"><Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger></Style.Triggers>
   </Style>
+  <Style x:Key="CaptionPinButton" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+   <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+   <Style.Triggers><Trigger Property="Tag" Value="Selected"><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/></Trigger></Style.Triggers>
+  </Style>
  </Window.Resources>
  <!-- DWM owns the only outer contour. Never stack an unrelated client-side radius over it. -->
  <Border x:Name="WindowFrame" BorderThickness="0" CornerRadius="0" Padding="1" Background="{DynamicResource BackgroundBrush}">
@@ -35,6 +39,13 @@
    </Ellipse>
    <TextBlock x:Name="WindowTitleText" Text="ClipShelf" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+    <Button x:Name="AlwaysOnTopButton" Style="{StaticResource CaptionPinButton}" ToolTip="总在最前" AutomationProperties.Name="总在最前" Click="AlwaysOnTop_Click">
+     <Viewbox Width="18" Height="18" IsHitTestVisible="False"><Canvas x:Name="AlwaysOnTopPinVisual" Width="24" Height="24">
+      <Canvas.RenderTransform><RotateTransform x:Name="AlwaysOnTopPinRotation" Angle="35" CenterX="12" CenterY="12"/></Canvas.RenderTransform>
+      <Path Data="M7,3 L17,3 15,6 15,11 19,15 5,15 9,11 9,6 Z" Fill="Transparent" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" StrokeLineJoin="Round"/>
+      <Path Data="M12,15 L12,22" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" StrokeEndLineCap="Round"/>
+     </Canvas></Viewbox>
+    </Button>
     <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" ToolTip="最小化" AutomationProperties.Name="最小化" Click="Minimize_Click"/>
     <Button ToolTip="最大化 / 还原" AutomationProperties.Name="最大化 / 还原" Click="Maximize_Click"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CaptionButton}"><Setter Property="Content" Value="&#xE922;"/><Style.Triggers><DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized"><Setter Property="Content" Value="&#xE923;"/></DataTrigger></Style.Triggers></Style></Button.Style></Button>
     <Button Style="{StaticResource CaptionButton}" Tag="CloseCaption" Content="&#xE8BB;" ToolTip="关闭（行为可在设置中选择）" AutomationProperties.Name="关闭" Click="Hide_Click"/>
@@ -71,7 +82,6 @@
       </Grid>
      </Border>
      <StackPanel x:Name="PrimaryToolbar" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0" AutomationProperties.Name="记录操作">
-      <Button x:Name="AlwaysOnTopButton" Style="{StaticResource ToolbarButton}" Content="&#xE718;" ToolTip="总在最前" AutomationProperties.Name="总在最前" Click="AlwaysOnTop_Click"/>
       <Button Style="{StaticResource ToolbarButton}" Content="&#xE8B7;" ToolTip="选择截图文件夹" AutomationProperties.Name="选择截图文件夹" Click="Folder_Click"/>
       <Button Style="{StaticResource ToolbarButton}" Content="&#xE713;" ToolTip="设置" AutomationProperties.Name="设置" Click="Settings_Click"/>
       <Button x:Name="CopyButton" Style="{StaticResource ToolbarButton}" Content="&#xE8C8;" ToolTip="复制当前记录 · Ctrl+C" AutomationProperties.Name="复制选中记录" Click="Copy_Click"/>

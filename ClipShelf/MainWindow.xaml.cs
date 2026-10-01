@@ -80,7 +80,7 @@ public partial class MainWindow : Window
             if (!quitting && SettingsContent.Content is null) SettingsContent.Content = new SettingsPanel(this);
         }, DispatcherPriority.ContextIdle);
         UpdateTypeFilterButtons();
-        UpdateAlwaysOnTopButton();
+        UpdateAlwaysOnTopButton(animate: false);
         Loaded += (_, _) => PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
         TypeFilterBar.SizeChanged += (_, _) => PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
         Refresh();
@@ -153,7 +153,7 @@ public partial class MainWindow : Window
         Store.SaveSettings(); ThemeManager.Apply(Store.Settings); windowAppearance.Refresh(); UpdateIcon();
         Topmost = Store.Settings.AlwaysOnTop;
         if (!appearanceOnly) Integration?.ApplySettings();
-        UpdateAlwaysOnTopButton();
+        UpdateAlwaysOnTopButton(animate: false);
         UpdateActions();
     }
     private void SystemAppearanceChanged(object sender, UserPreferenceChangedEventArgs e) => Dispatcher.BeginInvoke(() => { ThemeManager.Apply(Store.Settings); windowAppearance.Refresh(); });
@@ -363,14 +363,24 @@ public partial class MainWindow : Window
         Store.Settings.AlwaysOnTop = !Store.Settings.AlwaysOnTop;
         Topmost = Store.Settings.AlwaysOnTop;
         Store.SaveSettings();
-        UpdateAlwaysOnTopButton();
+        UpdateAlwaysOnTopButton(animate: true);
     }
-    private void UpdateAlwaysOnTopButton()
+    private void UpdateAlwaysOnTopButton(bool animate)
     {
         if (AlwaysOnTopButton is null) return;
         AlwaysOnTopButton.Tag = Store.Settings.AlwaysOnTop ? "Selected" : null;
         AlwaysOnTopButton.ToolTip = Store.Settings.AlwaysOnTop ? "取消总在最前" : "总在最前";
         AutomationProperties.SetName(AlwaysOnTopButton, Store.Settings.AlwaysOnTop ? "总在最前，已开启" : "总在最前，已关闭");
+        double target = Store.Settings.AlwaysOnTop ? 0 : 35;
+        double current = AlwaysOnTopPinRotation.Angle;
+        AlwaysOnTopPinRotation.BeginAnimation(RotateTransform.AngleProperty, null);
+        AlwaysOnTopPinRotation.Angle = target;
+        if (!animate || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation || Math.Abs(current - target) < .01) return;
+        AlwaysOnTopPinRotation.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(200))
+        {
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+            FillBehavior = FillBehavior.Stop
+        }, HandoffBehavior.SnapshotAndReplace);
     }
     private async void Copy_Click(object sender, RoutedEventArgs e) => await CopyItems(Selected());
     private void Pin_Click(object sender, RoutedEventArgs e) => Store.TogglePinned(Selected().Select(x => x.Id));
