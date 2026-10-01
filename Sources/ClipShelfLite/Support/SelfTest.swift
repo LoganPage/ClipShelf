@@ -972,6 +972,159 @@ enum ClipShelfSelfTest {
             failure: "Old-history cleanup bypasses remove(ids:) or directly mutates, records, or saves history"
         ))
 
+        let scrollFixtureStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let olderPinnedScrollItem = ClipItem(
+            kind: .text,
+            title: "older-pinned",
+            createdAt: scrollFixtureStart,
+            isPinned: true
+        )
+        let newestScrollItem = ClipItem(
+            kind: .text,
+            title: "newest-unpinned",
+            createdAt: scrollFixtureStart.addingTimeInterval(60)
+        )
+        let pinSortedScrollItems = [olderPinnedScrollItem, newestScrollItem]
+        results.append(check(
+            name: "newest record anchor ignores pin order",
+            condition: HistoryScrollTarget.newestAnchorID(in: pinSortedScrollItems) == newestScrollItem.id
+                && HistoryScrollTarget.newestAnchorID(in: pinSortedScrollItems) != pinSortedScrollItems.first?.id,
+            success: "The newest timestamp supplies the scroll anchor even when an older pinned record sorts first",
+            failure: "The scroll anchor followed pin order instead of the newest timestamp"
+        ))
+
+        var newlyPinnedScrollItem = newestScrollItem
+        newlyPinnedScrollItem.isPinned = true
+        let lastRevealedNewest = newestScrollItem.createdAt
+        results.append(check(
+            name: "scroll anchor stays nil unless the newest record is newer",
+            condition: HistoryScrollTarget.anchorToReveal(
+                in: pinSortedScrollItems,
+                lastRevealedNewest: olderPinnedScrollItem.createdAt
+            ) == newestScrollItem.id
+                && HistoryScrollTarget.anchorToReveal(
+                    in: pinSortedScrollItems,
+                    lastRevealedNewest: lastRevealedNewest
+                ) == nil
+                && HistoryScrollTarget.anchorToReveal(
+                    in: [olderPinnedScrollItem],
+                    lastRevealedNewest: lastRevealedNewest
+                ) == nil
+                && HistoryScrollTarget.anchorToReveal(
+                    in: [newlyPinnedScrollItem, olderPinnedScrollItem],
+                    lastRevealedNewest: lastRevealedNewest
+                ) == nil,
+            success: "Only a timestamp newer than the last revealed record requests scrolling",
+            failure: "Deletion, pin reordering, or an unchanged newest timestamp requested scrolling"
+        ))
+
+        HistoryFilterPreferences.save(.image, to: defaults)
+        let filterReloadedDefaults = UserDefaults(suiteName: suiteName)
+        results.append(check(
+            name: "history filter preference round trips through defaults",
+            condition: filterReloadedDefaults.map { HistoryFilterPreferences.load(from: $0) } == .image,
+            success: "The selected history filter survives a fresh defaults instance",
+            failure: "The selected history filter was not persisted"
+        ))
+
+        defaults.removeObject(forKey: HistoryFilterPreferences.key)
+        let emptyFilterValue = HistoryFilterPreferences.load(from: defaults)
+        defaults.set("bogus-not-a-kind", forKey: HistoryFilterPreferences.key)
+        let invalidFilterValue = HistoryFilterPreferences.load(from: defaults)
+        results.append(check(
+            name: "unknown history filter value falls back to all",
+            condition: HistoryFilterPreferences.defaultValue == .all
+                && emptyFilterValue == .all
+                && invalidFilterValue == .all,
+            success: "Missing and unknown filter values both fall back to all records",
+            failure: "A missing or unknown filter value did not fall back to all records"
+        ))
+
+        let unselectedRestBackground = IconButtonAppearance.background(
+            isSelected: false,
+            isPressed: false,
+            isHovered: false
+        )
+        let unselectedHoverBackground = IconButtonAppearance.background(
+            isSelected: false,
+            isPressed: false,
+            isHovered: true
+        )
+        let selectedRestBackground = IconButtonAppearance.background(
+            isSelected: true,
+            isPressed: false,
+            isHovered: false
+        )
+        let selectedHoverBackground = IconButtonAppearance.background(
+            isSelected: true,
+            isPressed: false,
+            isHovered: true
+        )
+        results.append(check(
+            name: "icon button hover surface differs from the rest state",
+            condition: unselectedHoverBackground != unselectedRestBackground
+                && selectedHoverBackground != selectedRestBackground,
+            success: "Selected and unselected icon buttons both expose a distinct hover surface",
+            failure: "At least one icon-button hover surface matches its resting state"
+        ))
+
+        results.append(check(
+            name: "icon button press state outranks hover",
+            condition: IconButtonAppearance.background(
+                isSelected: false,
+                isPressed: true,
+                isHovered: true
+            ) == IconButtonAppearance.background(
+                isSelected: false,
+                isPressed: true,
+                isHovered: false
+            ),
+            success: "The pressed surface is independent of hover state",
+            failure: "Hover changed the surface while the icon button was pressed"
+        ))
+
+        results.append(check(
+            name: "selection row transition duration is a pinned literal",
+            condition: SelectionRowMotion.duration == 0.11,
+            success: "Selection rows use the pinned 0.11-second transition",
+            failure: "The selection-row transition duration drifted from 0.11 seconds"
+        ))
+
+        results.append(check(
+            name: "selection row surface opacity keeps the existing presentation",
+            condition: SelectionRowMotion.surfaceOpacity(isSelected: false, isDark: true, isPreset: false) == 0
+                && SelectionRowMotion.surfaceOpacity(isSelected: false, isDark: true, isPreset: true) == 0
+                && SelectionRowMotion.surfaceOpacity(isSelected: false, isDark: false, isPreset: false) == 0
+                && SelectionRowMotion.surfaceOpacity(isSelected: true, isDark: true, isPreset: false) == 0.68
+                && SelectionRowMotion.surfaceOpacity(isSelected: true, isDark: true, isPreset: true) == 1
+                && SelectionRowMotion.surfaceOpacity(isSelected: true, isDark: false, isPreset: false) == 1,
+            success: "Selection opacity preserves clear rest, dark custom 0.68, and all other selected surfaces at 1",
+            failure: "Selection opacity changed the existing light, dark, preset, or custom presentation"
+        ))
+
+        let clipRowSurfaceAnimationIsScoped = mainViewSource.map { source in
+            guard let clipRowBody = SourceScan.body(ofTypeNamed: "ClipRow", in: source) else {
+                return false
+            }
+            let code = SourceScan.codeOnly(clipRowBody)
+            let animationExpression = try? NSRegularExpression(pattern: #"\.animation\s*\("#)
+            let range = NSRange(code.startIndex..<code.endIndex, in: code)
+            let animationCount = animationExpression?.numberOfMatches(in: code, range: range) ?? 0
+            let surfacePattern = #"\.background\s*\{(?:(?!\n\s*\})[\s\S])*?SelectionRowMotion\.surfaceOpacity(?:(?!\n\s*\})[\s\S])*?\.animation\s*\("#
+            let hStackRange = code.range(of: #"\bHStack\s*\("#, options: .regularExpression)
+            let animationRange = code.range(of: #"\.animation\s*\("#, options: .regularExpression)
+            return animationCount == 1
+                && SourceScan.contains(surfacePattern, in: code)
+                && (hStackRange?.lowerBound ?? code.endIndex) < (animationRange?.lowerBound ?? code.startIndex)
+        } ?? runningFromAppBundle
+        results.append(check(
+            name: "selection row animation only targets the surface layer",
+            condition: SelectionRowMotion.animation == .easeOut(duration: SelectionRowMotion.duration)
+                && clipRowSurfaceAnimationIsScoped,
+            success: "The single selection animation is an ease-out transition scoped to the background surface",
+            failure: "The selection animation changed curve or escaped the background surface layer"
+        ))
+
         _ = CFPreferencesAppSynchronize(suiteName as CFString)
         let unexpectedSelfTestDefaultsFiles = selfTestDefaultsFiles()
             .subtracting(allowedSelfTestDefaultsFiles)

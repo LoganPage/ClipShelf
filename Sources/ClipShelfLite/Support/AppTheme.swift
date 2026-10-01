@@ -73,6 +73,10 @@ enum AppTheme {
         light: color(red: 0.91, green: 0.92, blue: 0.94, alpha: 0.78),
         dark: color(red: 0.25, green: 0.27, blue: 0.32, alpha: 0.90)
     )
+    static let actionButtonHoverBackground = adaptive(
+        light: color(red: 0.85, green: 0.87, blue: 0.91, alpha: 0.92),
+        dark: color(red: 0.32, green: 0.35, blue: 0.41, alpha: 0.96)
+    )
     static let selectedActionBackground = adaptive(
         light: color(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.07),
         dark: color(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.13)

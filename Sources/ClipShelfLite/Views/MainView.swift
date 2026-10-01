@@ -5,7 +5,7 @@ struct MainView: View {
     @ObservedObject var store: ClipStore
     @ObservedObject var watcher: ScreenshotFolderWatcher
     @State private var searchText = ""
-    @State private var kindFilter: ClipKindFilter = .all
+    @State private var kindFilter: ClipKindFilter = HistoryFilterPreferences.value
     @State private var showingSettings = false
     @State private var selectedIDs = Set<ClipItem.ID>()
     @State private var focusedID: ClipItem.ID?
@@ -30,6 +30,7 @@ struct MainView: View {
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
     @State private var showingClearHistoryConfirmation = false
+    @State private var lastRevealedNewest: Date?
     @FocusState private var isSearchFocused: Bool
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = 10
@@ -92,6 +93,7 @@ struct MainView: View {
             Text(ClearHistoryConfirmation.message(itemCount: store.items.count))
         }
         .onAppear {
+            lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
             installCommandKeyMonitorIfNeeded()
             updateChecker.checkIfNeeded()
         }
@@ -212,17 +214,23 @@ struct MainView: View {
                     }
                 )
             )
-            .onChange(of: store.items.first?.id) { newID in
+            .onChange(of: HistoryScrollTarget.newestAnchorID(in: store.items)) { newID in
                 guard let newID, !isDragSelecting else { return }
+                guard HistoryScrollTarget.anchorToReveal(
+                    in: store.items,
+                    lastRevealedNewest: lastRevealedNewest
+                ) == newID else { return }
                 withAnimation(.easeOut(duration: 0.18)) {
                     proxy.scrollTo(newID, anchor: .top)
                 }
+                lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
             }
             .onChange(of: searchText) { _ in
                 clearSelection()
             }
             .onChange(of: kindFilter) { _ in
                 clearSelection()
+                HistoryFilterPreferences.value = kindFilter
                 DispatchQueue.main.async {
                     guard let firstID = liveFilteredItems.first?.id else { return }
                     var transaction = Transaction()
@@ -1030,7 +1038,17 @@ private struct ClipRow: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
         .foregroundStyle(isSelected ? selectedTextColor : Color.primary)
-        .background(rowBackground)
+        .background {
+            selectionColor
+                .opacity(
+                    SelectionRowMotion.surfaceOpacity(
+                        isSelected: isSelected,
+                        isDark: colorScheme == .dark,
+                        isPreset: selectionColorIsPreset
+                    )
+                )
+                .animation(SelectionRowMotion.animation, value: isSelected)
+        }
         .overlay(alignment: .bottom) {
             if showsSeparator {
                 Rectangle()
@@ -1062,18 +1080,6 @@ private struct ClipRow: View {
                 }
             }
         }
-    }
-
-    private var rowBackground: Color {
-        if isSelected {
-            return selectionColor.opacity(colorScheme == .dark && !selectionColorIsPreset ? 0.68 : 1)
-        }
-
-        if isFocused {
-            return Color.clear
-        }
-
-        return Color.clear
     }
 
     private var selectedTextColor: Color {
@@ -1146,18 +1152,41 @@ private struct FileTypePreview: View {
 }
 
 private struct ChatGPTIconButtonStyle: ButtonStyle {
-    @Environment(\.colorScheme) private var colorScheme
     let isSelected: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        IconButtonStyleBody(
+            label: configuration.label,
+            isSelected: isSelected,
+            isPressed: configuration.isPressed
+        )
+    }
+}
+
+private struct IconButtonStyleBody<Label: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovered = false
+    let label: Label
+    let isSelected: Bool
+    let isPressed: Bool
+
+    var body: some View {
+        label
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(isSelected ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary)
             .frame(width: 36, height: 32)
             .background(
                 RoundedRectangle(cornerRadius: 9)
-                    .fill(isSelected ? AppTheme.selectedActionBackground.opacity(configuration.isPressed ? 1.5 : 1) : AppTheme.actionButtonBackground.opacity(configuration.isPressed ? 1.2 : 1))
+                    .fill(
+                        IconButtonAppearance.background(
+                            isSelected: isSelected,
+                            isPressed: isPressed,
+                            isHovered: isHovered
+                        )
+                    )
+                    .animation(.easeOut(duration: 0.10), value: isHovered)
             )
+            .onHover { isHovered = $0 }
     }
 }
 
