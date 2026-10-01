@@ -62,6 +62,13 @@ public partial class App : Application
         if (e.Args.Length >= 2 && e.Args[0] == "--multi-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], multiSelection: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--fine-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], fineWheel: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--preview-scroll-test") { await ScrollRenderingProbe.RunAsync(e.Args[1], previewStress: true); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-test") { await SmoothnessProbe.RunAsync(e.Args[1], variant: e.Args.ElementAtOrDefault(2)); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-multi-test") { await SmoothnessProbe.RunAsync(e.Args[1], multiSelection: true, variant: e.Args.ElementAtOrDefault(2)); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-fine-test") { await SmoothnessProbe.RunAsync(e.Args[1], fineWheel: true, variant: e.Args.ElementAtOrDefault(2)); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-up-test") { await SmoothnessProbe.RunAsync(e.Args[1], direction: ScrollProbeDirection.Up); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-resume-test") { await SmoothnessProbe.RunAsync(e.Args[1], pauseBeforeMeasurement: true); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-settings-test") { await SmoothnessProbe.RunAsync(e.Args[1], settings: true, pauseBeforeMeasurement: true); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-regression-test") { await SmoothnessRegressionTests.RunAsync(e.Args[1]); return; }
         DispatcherUnhandledException += (_, args) =>
         {
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipShelf");
@@ -159,7 +166,9 @@ public partial class App : Application
         };
         if (file is not null) return Path.GetFullPath(Path.Combine(args[1], file));
         return args[0] is "--theme-transition-test" or "--ui-performance-test" or "--interaction-test" or
-            "--scroll-render-test" or "--multi-scroll-test" or "--fine-scroll-test" or "--preview-scroll-test"
+            "--scroll-render-test" or "--multi-scroll-test" or "--fine-scroll-test" or "--preview-scroll-test" or
+            "--smoothness-test" or "--smoothness-multi-test" or "--smoothness-fine-test" or
+            "--smoothness-up-test" or "--smoothness-resume-test" or "--smoothness-settings-test" or "--smoothness-regression-test"
             ? Path.GetFullPath(args[1]) : null;
     }
 }
