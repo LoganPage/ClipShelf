@@ -37,9 +37,6 @@ public sealed class SettingsPanel : UserControl
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.Children.Add(new TextBlock { Text = "设置", FontSize = 18, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
-        var slogan = Note("让 ClipShelf 按你的习惯工作 · 更改即时保存");
-        slogan.Margin = new Thickness(12, 0, 12, 0); slogan.VerticalAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(slogan, 1); header.Children.Add(slogan);
         var done = Button("完成", owner.CloseSettings); done.MinWidth = 76; done.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(done, 2); header.Children.Add(done);
         DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
