@@ -116,12 +116,21 @@ internal static class HistoryTypeFilterTests
             Check(new HistoryStore(invalid).Settings.HistoryTypeFilter == HistoryTypeFilter.All, "Unknown persisted filter falls back to All");
             Check(Filter("FilterFileButton").Tag as string == "Selected", "Selected segment exposes a visual and accessibility state");
             var topmost = (Button)window.FindName("AlwaysOnTopButton");
+            var topmostRotation = (RotateTransform)window.FindName("AlwaysOnTopPinRotation");
+            Check(Math.Abs(topmostRotation.Angle - 35) < .01, "Always-on-top starts as a tilted pin when disabled");
             topmost.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await store.FlushAsync();
             Check(window.Topmost && store.Settings.AlwaysOnTop && topmost.Tag as string == "Selected",
                 "Always-on-top applies immediately and exposes its active state");
+            await Task.Delay(90);
+            Check(!SystemParameters.ClientAreaAnimation || topmostRotation.Angle is > 0 and < 35,
+                "Always-on-top pin exposes an interruptible intermediate rotation");
+            await Task.Delay(150);
+            Check(Math.Abs(topmostRotation.Angle) < .01, "Always-on-top pin settles vertically when enabled");
             Check(new HistoryStore(data).Settings.AlwaysOnTop, "Always-on-top survives a settings reload");
             topmost.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(!window.Topmost && !store.Settings.AlwaysOnTop, "Always-on-top can be switched off without affecting the window");
+            await Task.Delay(240);
+            Check(Math.Abs(topmostRotation.Angle - 35) < .01, "Always-on-top pin returns to its tilted disabled angle");
         }
         catch (Exception ex) { error = ex.ToString(); }
         File.WriteAllText(Path.Combine(directory, "type-filter-results.json"), JsonSerializer.Serialize(new { passed = error is null, checks, error }, new JsonSerializerOptions { WriteIndented = true }));

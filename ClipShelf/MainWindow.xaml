@@ -38,7 +38,7 @@
     <Ellipse.Style><Style TargetType="Ellipse"><Setter Property="Fill" Value="#92989F"/><Setter Property="ToolTip" Value="窗口未聚焦"/><Style.Triggers><DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"><Setter Property="Fill" Value="#32B96B"/><Setter Property="ToolTip" Value="窗口已聚焦"/></DataTrigger></Style.Triggers></Style></Ellipse.Style>
    </Ellipse>
    <TextBlock x:Name="WindowTitleText" Text="ClipShelf" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
-   <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+   <StackPanel x:Name="CaptionButtonsPanel" Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
     <Button x:Name="AlwaysOnTopButton" Style="{StaticResource CaptionPinButton}" ToolTip="总在最前" AutomationProperties.Name="总在最前" Click="AlwaysOnTop_Click">
      <Viewbox Width="18" Height="18" IsHitTestVisible="False"><Canvas x:Name="AlwaysOnTopPinVisual" Width="24" Height="24">
       <Canvas.RenderTransform><RotateTransform x:Name="AlwaysOnTopPinRotation" Angle="35" CenterX="12" CenterY="12"/></Canvas.RenderTransform>
