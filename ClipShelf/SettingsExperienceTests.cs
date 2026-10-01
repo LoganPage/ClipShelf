@@ -91,11 +91,11 @@ public static class SettingsExperienceTests
                 Check(FindAll<System.Windows.Shapes.Path>(pinned).Any(t => t.Name == "PinHead" && ReferenceEquals(t.Fill, window.FindResource("AccentBrush"))), theme + ": pinned head is filled with accent");
                 Check(AutomationProperties.GetName(pinned) == "取消置顶此记录" && pinned.ToolTip?.ToString() == "取消置顶此记录", theme + ": pin status retains accessible and hover descriptions");
                 Check(!FindAll<TextBlock>(list).Any(t => t.Text == "已置顶"), theme + ": history rows have no redundant pinned label");
-                Check(ReferenceEquals(toolbar.Foreground, window.FindResource("AccentBrush")), theme + ": selected pinned record also colors toolbar pin");
-                Check(FindAll<System.Windows.Shapes.Path>(toolbar).Any(t => t.Name == "PinHead" && ReferenceEquals(t.Fill, window.FindResource("AccentBrush"))), theme + ": toolbar pin head is also filled");
+                Check(ReferenceEquals(toolbar.Foreground, window.FindResource("TextBrush")), theme + ": toolbar pin stays neutral for a pinned selection");
+                Check(FindAll<System.Windows.Shapes.Path>(toolbar).Any(t => t.Name == "PinHead" && t.Fill == Brushes.Transparent), theme + ": toolbar pin head stays unfilled for a pinned selection");
                 Save((FrameworkElement)window.Content, Path.Combine(directory, "pin-" + theme.ToLowerInvariant() + ".png"));
                 list.ReplaceSelection(new[] { first, second }); await Idle();
-                Check(ReferenceEquals(toolbar.Foreground, window.FindResource("TextBrush")), theme + ": mixed selection does not claim all records are pinned");
+                Check(ReferenceEquals(toolbar.Foreground, window.FindResource("TextBrush")), theme + ": toolbar pin stays neutral for a mixed selection");
                 store.TogglePinned(new[] { first.Id }); await Idle();
                 Check(ReferenceEquals(Pin(first).Foreground, window.FindResource("TextBrush")), theme + ": unpin restores neutral glyph");
 

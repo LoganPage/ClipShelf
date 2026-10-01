@@ -272,8 +272,8 @@ public partial class MainWindow : Window
         AutomationProperties.SetName(SelectionCountText, SelectionCountText.Text);
         string pinGesture = HistoryShortcutPolicy.IsReserved(Store.Settings.PinHotKey) ? "" : Store.Settings.PinHotKey;
         bool allPinned = count > 0 && HistoryList.SelectedItems.Cast<ClipItem>().All(item => item.IsPinned);
-        PinButton.Tag = allPinned ? "Pinned" : null;
-        PinButton.SetResourceReference(ForegroundProperty, allPinned ? "AccentBrush" : "TextBrush");
+        PinButton.Tag = null;
+        PinButton.SetResourceReference(ForegroundProperty, "TextBrush");
         foreach (var (button, verb, shortcut) in new[] { (CopyButton, "复制", "Ctrl+C"), (PinButton, "置顶 / 取消置顶", pinGesture), (DeleteButton, "删除", "Delete") })
         {
             string action = count > 0 ? $"{verb}选中的 {count} 条记录" : $"{verb}选中记录";
