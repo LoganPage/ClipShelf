@@ -214,7 +214,7 @@ public partial class MainWindow : Window
         var scroll = HistoryScroll;
         double offset = scroll?.VerticalOffset ?? 0;
         int topIndex = Math.Clamp((int)(offset / RowHeight), 0, Math.Max(0, visible.Count - 1));
-        Guid? topId = !resetScroll && offset > 0 && visible.Count > 0 ? visible[topIndex].Id : null;
+        Guid? topId = !resetScroll && visible.Count > 0 ? visible[topIndex].Id : null;
         refreshing = true;
         try
         {
