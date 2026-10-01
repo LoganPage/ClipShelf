@@ -228,7 +228,11 @@ public partial class MainWindow
         if (preview?.IsVisible == true) return true;
         if (SettingsOverlay.Visibility == Visibility.Visible)
         {
-            if (key == Key.Escape && modifiers == ModifierKeys.None && Ancestor<TextBox>(origin)?.Tag as string != "ShortcutRecorder") { CloseSettings(); return true; }
+            if (key == Key.Escape && modifiers == ModifierKeys.None && Ancestor<TextBox>(origin)?.Tag as string != "ShortcutRecorder")
+            {
+                if (SettingsContent.Content is SettingsPanel panel && panel.TryCloseShortcutHelp()) return true;
+                CloseSettings(); return true;
+            }
             return false;
         }
         if (key == Key.F && modifiers == ModifierKeys.Control) { SearchBox.Focus(); SearchBox.SelectAll(); return true; }

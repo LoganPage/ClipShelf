@@ -472,7 +472,7 @@ public static class DragSelectionTests
         Application.Current.Exit += (_, _) => WriteReport();
         window.Loaded += (_, _) =>
         {
-            ((TextBlock)window.FindName("StatusText")).Text = "独立合成 100 条记录 · 拖选测试 · F12 结束并保存日志";
+            ((TextBlock)window.FindName("WindowTitleText")).Text = "独立合成 100 条记录 · 拖选测试 · F12 结束并保存日志";
             var scroll = Descendant<ScrollViewer>(list);
             if (scroll is not null) scroll.ScrollChanged += (_, e) => Record("scroll", new
             {

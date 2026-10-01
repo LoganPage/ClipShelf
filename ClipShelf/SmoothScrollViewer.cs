@@ -135,13 +135,18 @@ public sealed class SmoothScrollViewer : ScrollViewer
         long now = Stopwatch.GetTimestamp();
         double elapsed = (now - lastTimestamp) / (double)Stopwatch.Frequency;
         lastTimestamp = now;
-        RequestOffset(motion.Advance(elapsed, MaximumOffset));
+        double next = motion.Advance(elapsed, MaximumOffset);
+        RequestOffset(next, force: !motion.IsActive);
         if (!motion.IsActive) StopRendering();
     }
 
-    private void RequestOffset(double value)
+    private void RequestOffset(double value, bool force = true)
     {
         if (scrollInfo is null) return;
+        // Composition can report several sub-pixel steps in one display interval.
+        // Coalesce imperceptible intermediate offsets while always committing the
+        // final target; this avoids redundant full StackPanel arrange/raster passes.
+        if (!force && Math.Abs(scrollInfo.VerticalOffset - value) < .35) return;
         hasRequest = true; requestedOffset = value;
         // The presenter arranges translated content with valid hit testing. There is no
         // per-frame ScrollViewer command queue, UpdateLayout or render-transform illusion.

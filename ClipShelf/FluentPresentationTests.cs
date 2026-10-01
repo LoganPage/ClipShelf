@@ -111,6 +111,17 @@ public static class FluentPresentationTests
                         $"{theme}/{width}: record actions occupy the free space to the right of type filters");
                     Check(Math.Abs((filterBounds.Top + filterBounds.Height / 2) - (toolbarBounds.Top + toolbarBounds.Height / 2)) < 0.1,
                         $"{theme}/{width}: record actions align vertically with type filters");
+                    Check(window.FindName("StatusText") is null, $"{theme}/{width}: the obsolete resident status line is absent");
+                    var headerPanel = (StackPanel)window.FindName("HeaderPanel");
+                    var titleBlock = (Grid)headerPanel.Children[0];
+                    var listHost = (Grid)((Grid)headerPanel.Parent).Children.Cast<UIElement>().First(element => Grid.GetRow(element) == 1);
+                    var titleBounds = titleBlock.TransformToAncestor((Visual)headerPanel.Parent).TransformBounds(new Rect(titleBlock.RenderSize));
+                    var searchBounds = searchBorder.TransformToAncestor((Visual)headerPanel.Parent).TransformBounds(new Rect(searchBorder.RenderSize));
+                    var typeBounds = typeFilterRow.TransformToAncestor((Visual)headerPanel.Parent).TransformBounds(new Rect(typeFilterRow.RenderSize));
+                    var listBounds = listHost.TransformToAncestor((Visual)headerPanel.Parent).TransformBounds(new Rect(listHost.RenderSize));
+                    var gaps = new[] { searchBounds.Top - titleBounds.Bottom, typeBounds.Top - searchBounds.Bottom, listBounds.Top - typeBounds.Bottom };
+                    Check(gaps.Max() - gaps.Min() < .5 && gaps.All(gap => Math.Abs(gap - 10) <= 1),
+                        $"{theme}/{width}: title, search, filter and history surfaces use one ten-DIP vertical rhythm ({string.Join(", ", gaps.Select(gap => gap.ToString("0.##")))})");
                     Check(searchBorder.CornerRadius == new CornerRadius(4) && historyBorder.CornerRadius == new CornerRadius(4),
                         $"{theme}/{width}: search and history use 4 DIP resident-surface corners");
                     Check(badge.CornerRadius == new CornerRadius(4), $"{theme}/{width}: selection badge uses 4 DIP control corners");
@@ -157,6 +168,7 @@ public static class FluentPresentationTests
                 settingsContent.Content = settings; settingsOverlay.Visibility = Visibility.Visible;
                 await Idle();
                 Check(settingsCard.CornerRadius == new CornerRadius(8), $"{theme}: settings overlay uses 8 DIP corners");
+                Check(settings.SettingsHeaderElement is { ActualHeight: <= 60 }, $"{theme}: settings header and done action share one compact row");
                 CheckButtonCorners(settings, $"{theme}: settings", Check);
                 var inputs = FindAll<TextBox>(settings).ToArray();
                 Check(inputs.Length >= 4, $"{theme}: settings color and shortcut inputs are realized");

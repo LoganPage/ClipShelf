@@ -394,6 +394,7 @@ public sealed class HistoryStore
         LaunchAtLogin = source.LaunchAtLogin,
         CloseToTray = source.CloseToTray,
         PrewarmAdjacentPreview = source.PrewarmAdjacentPreview,
+        AlwaysOnTop = source.AlwaysOnTop,
         WindowWidth = source.WindowWidth,
         WindowHeight = source.WindowHeight,
         WindowLeft = source.WindowLeft,

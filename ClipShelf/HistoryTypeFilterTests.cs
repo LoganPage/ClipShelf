@@ -34,6 +34,8 @@ internal static class HistoryTypeFilterTests
             var list = (HistoryListBox)window.FindName("HistoryList");
             var search = (TextBox)window.FindName("SearchBox");
             var emptyTitle = (TextBlock)window.FindName("EmptyTitle");
+            var historyBorder = (FrameworkElement)window.FindName("HistoryBorder");
+            var filterSelection = (FrameworkElement)window.FindName("TypeFilterSelection");
             Button Filter(string name) => (Button)window.FindName(name);
             void Click(string name) => Filter(name).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             ClipItem[] Visible() => list.Items.Cast<ClipItem>().ToArray();
@@ -48,8 +50,21 @@ internal static class HistoryTypeFilterTests
             }
 
             Check(Visible().Length == 4, "All filter initially shows every record");
+            var changes = (System.Collections.Specialized.INotifyCollectionChanged)list.ItemsSource;
+            int resets = 0;
+            changes.CollectionChanged += (_, e) => { if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) resets++; };
             Click("FilterFileButton");
             Check(Visible().Length == 1 && Visible()[0].Kind == ClipKind.File, "File filter shows only file records");
+            var listShift = historyBorder.RenderTransform as TranslateTransform ?? new TranslateTransform();
+            var indicatorShift = (TranslateTransform)filterSelection.RenderTransform;
+            double listFirst = listShift.X, indicatorFirst = indicatorShift.X;
+            await Task.Delay(35); double listMiddle = listShift.X, indicatorMiddle = indicatorShift.X;
+            await Task.Delay(110); await Idle();
+            Check(!SystemParameters.ClientAreaAnimation || (new[] { listFirst, listMiddle, listShift.X }.Distinct().Count() >= 2
+                && new[] { indicatorFirst, indicatorMiddle, indicatorShift.X }.Distinct().Count() >= 2),
+                "Type selection and history content expose interruptible horizontal motion");
+            Check(Math.Abs(listShift.X) < .01, "History filter motion returns exactly to its neutral transform");
+            Check(resets == 0, "Animated filtering never resets the displayed collection");
             Click("FilterAllButton");
             Check(Visible().Length == 4, "Returning to All is equivalent to no type filter");
             list.ReplaceSelection(new[] { textAlpha, fileAlpha });
@@ -100,6 +115,13 @@ internal static class HistoryTypeFilterTests
             File.WriteAllText(Path.Combine(invalid, "settings.json"), "{\"HistoryTypeFilter\":\"Unknown\"}");
             Check(new HistoryStore(invalid).Settings.HistoryTypeFilter == HistoryTypeFilter.All, "Unknown persisted filter falls back to All");
             Check(Filter("FilterFileButton").Tag as string == "Selected", "Selected segment exposes a visual and accessibility state");
+            var topmost = (Button)window.FindName("AlwaysOnTopButton");
+            topmost.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await store.FlushAsync();
+            Check(window.Topmost && store.Settings.AlwaysOnTop && topmost.Tag as string == "Selected",
+                "Always-on-top applies immediately and exposes its active state");
+            Check(new HistoryStore(data).Settings.AlwaysOnTop, "Always-on-top survives a settings reload");
+            topmost.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(!window.Topmost && !store.Settings.AlwaysOnTop, "Always-on-top can be switched off without affecting the window");
         }
         catch (Exception ex) { error = ex.ToString(); }
         File.WriteAllText(Path.Combine(directory, "type-filter-results.json"), JsonSerializer.Serialize(new { passed = error is null, checks, error }, new JsonSerializerOptions { WriteIndented = true }));

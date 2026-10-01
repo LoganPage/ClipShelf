@@ -36,7 +36,7 @@ public partial class MainWindow : Window
     private ScrollViewer? HistoryScroll => historyScroll ??= Descendant<ScrollViewer>(HistoryList);
     private CancellationTokenSource? searchCancellation;
     internal Task PendingSearch { get; private set; } = Task.CompletedTask;
-    private bool refreshPending, refreshQueued, resetScroll, showingSearchStatus;
+    private bool refreshPending, refreshQueued, resetScroll;
     private int rangeStart = -1, rangeEnd = -1;
     private const double RowHeight = 74;
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(3) };
@@ -61,6 +61,7 @@ public partial class MainWindow : Window
         ThemeManager.Apply(store.Settings);
         InitializeComponent();
         Title = WindowTitleText.Text = $"ClipShelf {WindowsUpdateService.CurrentVersion}";
+        Topmost = store.Settings.AlwaysOnTop;
         FocusCuePolicy.SetIsEnabled(this, true);
         windowAppearance = new WindowAppearance(this);
         HistoryList.ItemsSource = displayed;
@@ -79,15 +80,17 @@ public partial class MainWindow : Window
             if (!quitting && SettingsContent.Content is null) SettingsContent.Content = new SettingsPanel(this);
         }, DispatcherPriority.ContextIdle);
         UpdateTypeFilterButtons();
+        UpdateAlwaysOnTopButton();
+        Loaded += (_, _) => PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
+        TypeFilterBar.SizeChanged += (_, _) => PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
         Refresh();
     }
     private void InitializeNative()
     {
         var handle = new WindowInteropHelper(this).Handle;
         HwndSource.FromHwnd(handle)?.AddHook(MessageHook);
-        if (!demo) {
-            ConnectIntegration();
-        } else { StatusText.Text = "界面预览 · 示例记录"; return; }
+        if (!demo) ConnectIntegration();
+        else return;
         InitializeTray();
     }
     private void RestoreSavedPosition()
@@ -123,7 +126,6 @@ public partial class MainWindow : Window
     {
         Integration = new WindowsIntegration(this, Store, manageStartup);
         Integration.ShowRequested += ShowShelf; Integration.Status += ShowStatus;
-        StatusText.Text = Integration.ScreenshotStatus;
         if (Integration.LastHotKeyError is string error) ShowStatus(error);
     }
     private IntPtr MessageHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -141,14 +143,17 @@ public partial class MainWindow : Window
         CloseTrayContextMenu();
         interactionVersion++;
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
-        Show(); Activate(); Topmost = true; Topmost = false;
+        Show(); Activate();
+        if (Store.Settings.AlwaysOnTop) Topmost = true;
+        else { Topmost = true; Topmost = false; }
         RestoreHistoryFocus();
     }
     public void ApplyPreferences(bool appearanceOnly = false)
     {
         Store.SaveSettings(); ThemeManager.Apply(Store.Settings); windowAppearance.Refresh(); UpdateIcon();
+        Topmost = Store.Settings.AlwaysOnTop;
         if (!appearanceOnly) Integration?.ApplySettings();
-        if (!demo && Integration is not null) StatusText.Text = Integration.ScreenshotStatus;
+        UpdateAlwaysOnTopButton();
         UpdateActions();
     }
     private void SystemAppearanceChanged(object sender, UserPreferenceChangedEventArgs e) => Dispatcher.BeginInvoke(() => { ThemeManager.Apply(Store.Settings); windowAppearance.Refresh(); });
@@ -167,7 +172,6 @@ public partial class MainWindow : Window
         if (pointerDown || dragging) { refreshPending = true; return; }
         refreshPending = false;
         searchCancellation?.Cancel(); searchCancellation?.Dispose(); searchCancellation = null;
-        RestoreSearchStatus();
         string query = SearchBox.Text;
         string typeFilter = HistoryTypeFilter.Normalize(Store.Settings.HistoryTypeFilter);
         if (string.IsNullOrWhiteSpace(query)) { ApplyVisible(HistoryTypeFilter.Filter(Store.Items, typeFilter), query); PendingSearch = Task.CompletedTask; return; }
@@ -185,22 +189,16 @@ public partial class MainWindow : Window
             _ = ShowSearchProgressAsync(work, cancellation);
             var matches = await work;
             if (cancellation.IsCancellationRequested || quitting) return;
-            RestoreSearchStatus();
             if (pointerDown || dragging) { refreshPending = true; return; }
             ApplyVisible(matches, query);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Trace.TraceError("Search failed: {0}", ex.GetType().Name); if (!cancellation.IsCancellationRequested) { RestoreSearchStatus(); ShowStatus("搜索暂时没有完成，请重试。"); } }
+        catch (Exception ex) { Trace.TraceError("Search failed: {0}", ex.GetType().Name); if (!cancellation.IsCancellationRequested) ShowStatus("搜索暂时没有完成，请重试。"); }
     }
     private async Task ShowSearchProgressAsync(Task work, CancellationToken cancellation)
     {
         await Task.WhenAny(work, Task.Delay(180, cancellation));
-        if (!work.IsCompleted && !cancellation.IsCancellationRequested && !quitting) { showingSearchStatus = true; StatusText.Text = "正在搜索…"; }
-    }
-    private void RestoreSearchStatus()
-    {
-        if (!showingSearchStatus) return;
-        showingSearchStatus = false; StatusText.Text = demo ? "界面预览 · 示例记录" : Integration?.ScreenshotStatus ?? "准备就绪";
+        if (!work.IsCompleted && !cancellation.IsCancellationRequested && !quitting) ShowStatus("正在搜索…");
     }
     private void ApplyVisible(List<ClipItem> next, string query)
     {
@@ -300,11 +298,14 @@ public partial class MainWindow : Window
         if (sender is not Button { CommandParameter: string requested }) return;
         string filter = HistoryTypeFilter.Normalize(requested);
         if (filter == Store.Settings.HistoryTypeFilter) return;
+        int previousIndex = FilterIndex(Store.Settings.HistoryTypeFilter);
         Store.Settings.HistoryTypeFilter = filter;
         Store.SaveSettings();
         UpdateTypeFilterButtons();
         resetScroll = true;
         Refresh();
+        PositionTypeFilterSelection(animate: true, previousIndex: previousIndex);
+        AnimateFilteredList(FilterIndex(filter) > previousIndex ? 22 : -22);
     }
     private void UpdateTypeFilterButtons()
     {
@@ -316,6 +317,60 @@ public partial class MainWindow : Window
             button.Tag = active ? "Selected" : null;
             AutomationProperties.SetName(button, active ? $"{label}记录，已选择" : $"筛选{label}记录");
         }
+        if (IsLoaded) PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(selected));
+    }
+    private static int FilterIndex(string filter) => HistoryTypeFilter.Normalize(filter) switch
+    {
+        HistoryTypeFilter.Text => 1,
+        HistoryTypeFilter.File => 2,
+        HistoryTypeFilter.Image => 3,
+        _ => 0
+    };
+    private void PositionTypeFilterSelection(bool animate, int previousIndex)
+    {
+        if (TypeFilterSelection.RenderTransform is not TranslateTransform shift || TypeFilterBar.ActualWidth <= 0) return;
+        double width = TypeFilterBar.ActualWidth / 4;
+        int targetIndex = FilterIndex(Store.Settings.HistoryTypeFilter);
+        TypeFilterSelection.Width = width;
+        double target = targetIndex * width;
+        shift.BeginAnimation(TranslateTransform.XProperty, null);
+        shift.X = target;
+        if (!animate || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
+        shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(previousIndex * width, target, TimeSpan.FromMilliseconds(110))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            FillBehavior = FillBehavior.Stop
+        }, HandoffBehavior.SnapshotAndReplace);
+    }
+    private void AnimateFilteredList(double from)
+    {
+        if (!IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
+        if (HistoryBorder.RenderTransform is not TranslateTransform shift)
+        {
+            shift = new TranslateTransform();
+            HistoryBorder.RenderTransform = shift;
+        }
+        shift.BeginAnimation(TranslateTransform.XProperty, null);
+        shift.X = 0;
+        shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(from, 0, TimeSpan.FromMilliseconds(110))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            FillBehavior = FillBehavior.Stop
+        }, HandoffBehavior.SnapshotAndReplace);
+    }
+    private void AlwaysOnTop_Click(object sender, RoutedEventArgs e)
+    {
+        Store.Settings.AlwaysOnTop = !Store.Settings.AlwaysOnTop;
+        Topmost = Store.Settings.AlwaysOnTop;
+        Store.SaveSettings();
+        UpdateAlwaysOnTopButton();
+    }
+    private void UpdateAlwaysOnTopButton()
+    {
+        if (AlwaysOnTopButton is null) return;
+        AlwaysOnTopButton.Tag = Store.Settings.AlwaysOnTop ? "Selected" : null;
+        AlwaysOnTopButton.ToolTip = Store.Settings.AlwaysOnTop ? "取消总在最前" : "总在最前";
+        AutomationProperties.SetName(AlwaysOnTopButton, Store.Settings.AlwaysOnTop ? "总在最前，已开启" : "总在最前，已关闭");
     }
     private async void Copy_Click(object sender, RoutedEventArgs e) => await CopyItems(Selected());
     private void Pin_Click(object sender, RoutedEventArgs e) => Store.TogglePinned(Selected().Select(x => x.Id));

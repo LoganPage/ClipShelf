@@ -13,6 +13,7 @@ public sealed class AppSettings
     public string ClearSelectionHotKey { get; set; } = "Ctrl+Shift+A";
     public string PinHotKey { get; set; } = "Ctrl+Shift+P";
     public string Theme { get; set; } = "System";
+    // Deprecated: retained only so older settings.json files round-trip without data loss.
     public string SelectionPreset { get; set; } = "coolGrayBlue";
     public string SelectionColor { get; set; } = "#2870DB";
     public int AppIcon { get; set; } = 2;
@@ -27,6 +28,7 @@ public sealed class AppSettings
     public bool LaunchAtLogin { get; set; }
     public bool CloseToTray { get; set; } = true;
     public bool PrewarmAdjacentPreview { get; set; }
+    public bool AlwaysOnTop { get; set; }
     public const double DefaultWindowWidth = 680;
     public const double DefaultWindowHeight = 552;
     public double WindowWidth { get; set; } = DefaultWindowWidth;

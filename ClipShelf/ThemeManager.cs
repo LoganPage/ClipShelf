@@ -17,8 +17,6 @@ public static class ThemeManager
     public static bool IsDark { get; private set; }
     private static bool initialized;
     private static bool animate;
-    public static readonly string[] Presets = { "coolGrayBlue", "appleBlue", "neutralGray", "lavenderGray", "tealGray", "Custom" };
-    public static readonly string[] PresetNames = { "冷灰蓝 · 稳重耐看", "Apple 蓝 · 交互明显", "中性灰 · 极简克制", "淡紫灰 · 柔和有感", "青灰 · 清爽工具感", "自定义颜色" };
     public static void Apply(AppSettings settings)
     {
         settings.AppIcon = 2;
@@ -35,10 +33,9 @@ public static class ThemeManager
             ["TextTileBrush"]=("#E6F2FA","#1F3842"),["TextTileForeground"]=("#1A526B","#7AD6E6"),["FileTileBrush"]=("#E8F5EB","#213D2E"),["FileTileForeground"]=("#1F6133","#73DBAB"),["ImageTileBrush"]=("#FAF0E0","#423324"),["ImageTileForeground"]=("#8F4D0A","#F5C26B")
         };
         foreach (var pair in colors) Set(pair.Key, IsDark ? pair.Value.dark : pair.Value.light);
-        string[] light = { "#E8EFF7", "#E5F1FF", "#ECEDEF", "#EEEAF7", "#E6F1F1" };
-        string[] dark = { "#283544", "#173A5E", "#343538", "#373146", "#243B3D" };
-        int preset = Array.IndexOf(Presets, settings.SelectionPreset);
-        Set("SelectedBrush", preset >= 0 && preset < 5 ? (IsDark ? dark[preset] : light[preset]) : settings.SelectionPreset == "Custom" ? settings.SelectionColor : (IsDark ? dark[0] : light[0]));
+        // Selection colour is now a stable design token. Legacy settings remain readable,
+        // but no longer alter list, badge or settings-choice selection surfaces.
+        Set("SelectedBrush", IsDark ? "#283544" : "#E8EFF7");
         initialized = true;
     }
     private static void Set(string name, string color)

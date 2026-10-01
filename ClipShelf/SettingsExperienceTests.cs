@@ -136,6 +136,9 @@ public static class SettingsExperienceTests
                 foreach (double width in new[] { 680.0, 900.0, 1200.0 })
                 {
                     window.Width = width; scroll.ScrollToTop(); await Idle();
+                    Check(settings.SettingsHeaderElement is { ActualHeight: <= 60 }, $"{theme}/{width}: compact settings header stays within 60 DIP");
+                    var settingsCard = (FrameworkElement)window.FindName("SettingsCard");
+                    Check(scroll.ActualHeight >= settingsCard.ActualHeight * .85, $"{theme}/{width}: scrolling content receives at least 85 percent of the settings card");
                     var cards = FindAll<Border>(settings).Where(b => b.Name == "SettingsGroupCard").ToArray();
                     Check(cards.Length >= 8 && cards.All(b => b.CornerRadius == new CornerRadius(8)), $"{theme}/{width}: grouped cards consistently use 8 DIP corners");
                     Check(cards.All(b => b.TransformToAncestor(scroll).TransformBounds(new Rect(b.RenderSize)).Right <= scroll.ActualWidth), $"{theme}/{width}: cards fit the viewport without horizontal clipping");
@@ -147,6 +150,14 @@ public static class SettingsExperienceTests
                     scroll.ScrollToVerticalOffset(700); await Idle();
                     Save((FrameworkElement)window.Content, Path.Combine(directory, $"settings-history-{theme.ToLowerInvariant()}-{width:0}.png"));
                 }
+                Check(settings.ShortcutHelpButton is { IsTabStop: true, MinWidth: >= 20, MinHeight: >= 20 }
+                    && settings.ShortcutHelpPopup is { IsOpen: false }, theme + ": shortcut help is keyboard reachable and initially hidden");
+                settings.ShortcutHelpButton!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Idle();
+                Check(settings.ShortcutHelpPopup!.IsOpen, theme + ": shortcut help opens on demand");
+                settings.ShortcutHelpButton.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, Environment.TickCount, Key.Escape)
+                    { RoutedEvent = Keyboard.PreviewKeyDownEvent }); await Idle();
+                Check(!settings.ShortcutHelpPopup.IsOpen && overlay.Visibility == Visibility.Visible,
+                    theme + ": Escape closes only shortcut help and leaves settings open");
                 scroll.ScrollToVerticalOffset(200); await Idle();
                 double before = scroll.VerticalOffset;
                 scroll.HandleWheelDelta(-120);

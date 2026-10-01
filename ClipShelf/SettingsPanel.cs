@@ -4,7 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -13,27 +15,34 @@ namespace ClipShelf;
 
 public sealed class SettingsPanel : UserControl
 {
+    private const string ShortcutHelpText = "↑↓ 选择 · Space 预览 · Ctrl+A 全选 · Ctrl+C 复制\n预览支持文字、常见文本文件、图片、PDF / DOCX / PPTX 及 XLSX / XLSM；不需要 Office。预览文字时 Ctrl+F 查找、F3 前后跳转，并可切换换行与行号。↑↓ 逐条切换记录，←→ 翻文档页或切换工作表，Home/End 跳文档首末页；图片及分页文档可用 Ctrl+滚轮缩放，表格不支持缩放。Space/Esc 关闭，普通滚轮滚动内容。\nDelete 删除 · Ctrl+Z 撤销 · Shift+F10 菜单 · Ctrl+F 搜索\n复制后，在需要输入的位置按 Ctrl+V 粘贴；ClipShelf 不自动切换应用。";
     private readonly MainWindow owner;
     private AppSettings S => owner.Store.Settings;
     private readonly StackPanel body = new() { Margin = new Thickness(20, 4, 14, 20) };
     private readonly List<(Button Button, Func<bool> Selected)> appearanceChoices = new();
     private readonly List<Action> refreshControls = new();
     private bool refreshingControls, restoringFocus;
+    internal FrameworkElement? SettingsHeaderElement { get; private set; }
+    internal Button? ShortcutHelpButton { get; private set; }
+    internal Popup? ShortcutHelpPopup { get; private set; }
     public SettingsPanel(MainWindow owner)
     {
         this.owner = owner;
         body.RequestBringIntoView += (_, e) => { if (restoringFocus) e.Handled = true; };
         SetResourceReference(ForegroundProperty, "TextBrush");
         var root = new DockPanel();
-        var header = new StackPanel { Margin = new Thickness(22, 20, 22, 16) };
-        header.Children.Add(new TextBlock { Text = "设置", FontSize = 22, FontWeight = FontWeights.SemiBold });
-        header.Children.Add(Note("让 ClipShelf 按你的习惯工作 · 更改即时保存"));
+        var header = new Grid { Name = "SettingsHeader", Margin = new Thickness(20, 10, 20, 10) };
+        SettingsHeaderElement = header;
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.Children.Add(new TextBlock { Text = "设置", FontSize = 18, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        var slogan = Note("让 ClipShelf 按你的习惯工作 · 更改即时保存");
+        slogan.Margin = new Thickness(12, 0, 12, 0); slogan.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(slogan, 1); header.Children.Add(slogan);
+        var done = Button("完成", owner.CloseSettings); done.MinWidth = 76; done.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(done, 2); header.Children.Add(done);
         DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
-        var footer = new Border { BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(20, 12, 20, 12) };
-        footer.SetResourceReference(Border.BorderBrushProperty, "SettingsStrokeBrush");
-        footer.SetResourceReference(Border.BackgroundProperty, "SettingsCanvasBrush");
-        var done = Button("完成", owner.CloseSettings); done.HorizontalAlignment = HorizontalAlignment.Right; done.MinWidth = 76;
-        footer.Child = done; DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer);
         root.Children.Add(new SmoothScrollViewer { Name = "SettingsScroller", Content = body });
         Content = root;
         Build();
@@ -80,18 +89,12 @@ public sealed class SettingsPanel : UserControl
         repeatClick.Name = "DeselectOnRepeatedClickToggle";
         selectionCard.Children.Add(repeatClick);
         selectionCard.Children.Add(Note("仅作用于单条选择；Ctrl / Shift 多选和拖选不受影响。"));
-        var colorCard = Card(historySection);
-        colorCard.Children.Add(ChoiceRow("选中颜色", ThemeManager.PresetNames, ThemeManager.Presets, () => S.SelectionPreset, value => { S.SelectionPreset = value; Changed(); }));
-        var color = new TextBox { Text = S.SelectionColor, MinWidth = 100, MaxWidth = 140 };
-        refreshControls.Add(() => { if (!color.IsKeyboardFocusWithin) color.Text = S.SelectionColor; });
-        color.LostKeyboardFocus += (_, _) => { if (string.Equals(color.Text, S.SelectionColor, StringComparison.OrdinalIgnoreCase)) return; try { if (color.Text.Length != 7 || !color.Text.StartsWith('#')) throw new FormatException(); ColorConverter.ConvertFromString(color.Text); S.SelectionColor = color.Text; S.SelectionPreset = "Custom"; Changed(); } catch { color.Text = S.SelectionColor; } };
-        colorCard.Children.Add(Row("自定义颜色（#RRGGBB）", color));
-        colorCard.Children.Add(Note("行内按钮操作当前记录；顶部工具栏操作选中的记录。"));
+        selectionCard.Children.Add(Note("行内按钮操作当前记录；顶部工具栏操作选中的记录。"));
         var historyButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
         historyButtons.Children.Add(Button("显示历史文件", () => Reveal(owner.Store.DirectoryPath)));
         var clear = Button("清空全部历史…", owner.ConfirmClearHistory); clear.Margin = new Thickness(8, 0, 0, 0); historyButtons.Children.Add(clear);
 
-        var keys = Card(Section("快捷键"));
+        var keys = Card(Section("快捷键", ShortcutHelpText));
         keys.Children.Add(ShortcutRow("全局呼出", S.GlobalHotKey, value => {
             if (!ValidateShortcut(value, S.ClearSelectionHotKey, S.PinHotKey)) return false;
             if (owner.Integration is not null && !owner.Integration.RegisterHotKey(value)) { owner.ShowStatus(owner.Integration.LastHotKeyError ?? "这个快捷键已被占用。"); return false; }
@@ -100,7 +103,6 @@ public sealed class SettingsPanel : UserControl
         keys.Children.Add(ShortcutRow("取消选择", S.ClearSelectionHotKey, value => { if (!ValidateShortcut(value, S.GlobalHotKey, S.PinHotKey)) return false; S.ClearSelectionHotKey = value; owner.Store.SaveSettings(); return true; }));
         keys.Children.Add(ShortcutRow("置顶选中记录", S.PinHotKey, value => { if (!ValidateShortcut(value, S.GlobalHotKey, S.ClearSelectionHotKey)) return false; S.PinHotKey = value; owner.Store.SaveSettings(); return true; }));
         keys.Children.Add(Note("点击右侧输入框，按下新的组合键。"));
-        keys.Children.Add(Note("↑↓ 选择 · Space 预览 · Ctrl+A 全选 · Ctrl+C 复制\n预览支持文字、常见文本文件、图片、PDF / DOCX / PPTX 及 XLSX / XLSM；不需要 Office。预览文字时 Ctrl+F 查找、F3 前后跳转，并可切换换行与行号。↑↓ 逐条切换记录，←→ 翻文档页或切换工作表，Home/End 跳文档首末页；图片及分页文档可用 Ctrl+滚轮缩放，表格不支持缩放。Space/Esc 关闭，普通滚轮滚动内容。\nDelete 删除 · Ctrl+Z 撤销 · Shift+F10 菜单 · Ctrl+F 搜索\n复制后，在需要输入的位置按 Ctrl+V 粘贴；ClipShelf 不自动切换应用。"));
         var previewPerformance = Card(Section("快速预览性能"));
         previewPerformance.Children.Add(Toggle("预热相邻记录首屏（实验性）", () => S.PrewarmAdjacentPreview, value => { S.PrewarmAdjacentPreview = value; Changed(); }));
         previewPerformance.Children.Add(Note("默认关闭。开启后，当前预览稳定显示时会在后台准备相邻记录，可能增加短时内存和磁盘活动。"));
@@ -189,6 +191,13 @@ public sealed class SettingsPanel : UserControl
         try { return control.Focus(); }
         finally { restoringFocus = false; }
     }
+    internal bool TryCloseShortcutHelp()
+    {
+        if (ShortcutHelpPopup?.IsOpen != true) return false;
+        ShortcutHelpPopup.IsOpen = false;
+        ShortcutHelpButton?.Focus();
+        return true;
+    }
     private bool ValidateShortcut(string value, params string[] otherShortcuts)
     {
         if (HistoryShortcutPolicy.IsReserved(value)) { owner.ShowStatus("这个组合用于标准编辑或窗口操作，请选择其它快捷键。"); return false; }
@@ -196,10 +205,34 @@ public sealed class SettingsPanel : UserControl
         { owner.ShowStatus("这个组合已用于 ClipShelf 的其它操作，请选择不同的快捷键。"); return false; }
         return true;
     }
-    private StackPanel Section(string title)
+    private StackPanel Section(string title, string? help = null)
     {
         var section = new StackPanel { Margin = new Thickness(0, body.Children.Count == 0 ? 0 : 20, 0, 0) };
-        section.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(2, 0, 0, 8) }); body.Children.Add(section); return section;
+        var titleRow = new DockPanel { Margin = new Thickness(2, 0, 0, 8), LastChildFill = false };
+        titleRow.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.SemiBold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center });
+        if (help is not null)
+        {
+            var helpButton = Button("?", () => { });
+            helpButton.Name = "ShortcutsHelpButton"; helpButton.MinWidth = 24; helpButton.MinHeight = 24;
+            ShortcutHelpButton = helpButton;
+            helpButton.Padding = new Thickness(0); helpButton.Margin = new Thickness(7, 0, 0, 0);
+            AutomationProperties.SetName(helpButton, "查看快捷键说明");
+            var helpText = Note(help); helpText.Margin = new Thickness(0); helpText.MaxWidth = 400;
+            var surface = new Border { Child = helpText, Padding = new Thickness(14, 12, 14, 12), MaxWidth = 430,
+                CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Focusable = true };
+            surface.SetResourceReference(Border.BackgroundProperty, "SettingsCardBrush");
+            surface.SetResourceReference(Border.BorderBrushProperty, "SettingsStrokeBrush");
+            var popup = new Popup { Name = "ShortcutsHelpPopup", PlacementTarget = helpButton, Placement = PlacementMode.Bottom,
+                VerticalOffset = 4, StaysOpen = false, AllowsTransparency = true, PopupAnimation = PopupAnimation.Fade, Child = surface };
+            ShortcutHelpPopup = popup;
+            void CloseHelp(KeyEventArgs e) { if (e.Key != Key.Escape || !popup.IsOpen) return; popup.IsOpen = false; helpButton.Focus(); e.Handled = true; }
+            helpButton.Click += (_, _) => popup.IsOpen = !popup.IsOpen;
+            helpButton.PreviewKeyDown += (_, e) => CloseHelp(e);
+            surface.PreviewKeyDown += (_, e) => CloseHelp(e);
+            popup.Opened += (_, _) => surface.Focus();
+            DockPanel.SetDock(helpButton, Dock.Right); titleRow.Children.Add(helpButton); titleRow.Children.Add(popup);
+        }
+        section.Children.Add(titleRow); body.Children.Add(section); return section;
     }
     private static StackPanel Card(StackPanel section)
     {
