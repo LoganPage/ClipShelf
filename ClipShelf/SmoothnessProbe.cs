@@ -28,11 +28,12 @@ public static class SmoothnessProbe
 {
     /// <summary>One process run == one pass. Repeat the process externally for distribution.</summary>
     public static async Task RunAsync(string reportPath, bool multiSelection = false, bool fineWheel = false, string? variant = null,
-        ScrollProbeDirection direction = ScrollProbeDirection.Down, bool pauseBeforeMeasurement = false, bool settings = false)
+        ScrollProbeDirection direction = ScrollProbeDirection.Down, bool pauseBeforeMeasurement = false, bool settings = false,
+        bool undoBeforeMeasurement = false)
     {
         object? result = null;
         string? error = null;
-        try { result = await OnePassAsync(multiSelection, fineWheel, variant, direction, pauseBeforeMeasurement, settings); }
+        try { result = await OnePassAsync(multiSelection, fineWheel, variant, direction, pauseBeforeMeasurement, settings, undoBeforeMeasurement); }
         catch (Exception exception) { error = exception.ToString(); }
 
         try
@@ -47,6 +48,7 @@ public static class SmoothnessProbe
                 direction = direction.ToString(),
                 pauseBeforeMeasurement,
                 settings,
+                undoBeforeMeasurement,
                 variant = variant ?? "default",
                 warmup = (variant ?? "").ToLowerInvariant().Contains("warm"),
                 result,
@@ -60,7 +62,7 @@ public static class SmoothnessProbe
     }
 
     private static async Task<object> OnePassAsync(bool multiSelection, bool fineWheel, string? variantName,
-        ScrollProbeDirection direction, bool pauseBeforeMeasurement, bool settings)
+        ScrollProbeDirection direction, bool pauseBeforeMeasurement, bool settings, bool undoBeforeMeasurement)
     {
         var intervals = new List<double>();
         var latencies = new List<double>();
@@ -99,7 +101,8 @@ public static class SmoothnessProbe
         Task? sampler = null;
         try
         {
-            window = new MainWindow(new HistoryStore(fixture), demo: true) { ShowInTaskbar = false, Width = 720, Height = 572 };
+            var store = new HistoryStore(fixture);
+            window = new MainWindow(store, demo: true) { ShowInTaskbar = false, Width = 720, Height = 572 };
             var list = (HistoryListBox)window.FindName("HistoryList")!;
             window.Show();
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
@@ -125,6 +128,15 @@ public static class SmoothnessProbe
                 wheelTarget = list;
             }
             if (multiSelection) list.SelectAll();
+
+            if (undoBeforeMeasurement)
+            {
+                store.Remove(store.Items.Skip(12).Take(8).Select(item => item.Id));
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                store.UndoDelete();
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                await Task.Delay(300);
+            }
 
             double lastOffset = panel.VerticalOffset;
             double distance = 0;
