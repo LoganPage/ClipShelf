@@ -100,12 +100,13 @@ public sealed class SmoothScrollViewer : ScrollViewer
         double distance = WheelScrollMotion.WheelDistance(delta, SystemParameters.WheelScrollLines, scrollInfo.ViewportHeight);
         if (distance == 0) { CancelWheelMotion(); return true; }
         long now = Stopwatch.GetTimestamp();
-        // Non-multiples of 120 are not necessarily fine input: drivers can combine
-        // several notches into a large packet. Never turn that into an instant jump.
-        // Small packets join an active wheel motion instead of discarding its target.
-        bool fineInput = Math.Abs((long)delta) < 120 && !motion.IsActive;
+        // Small packets are also animated. Paying the first arrange/raster cost in a
+        // synchronous SetVerticalOffset call makes the first wheel input after an idle
+        // pause visibly hitch; a higher response frequency keeps it direct without
+        // turning it into an instant jump.
+        motion.ResponseFrequency = WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28;
         double current = hasRequest ? requestedOffset : scrollInfo.VerticalOffset;
-        if (fineInput || directInput || !SystemParameters.ClientAreaAnimation)
+        if (directInput || !SystemParameters.ClientAreaAnimation)
         {
             StopRendering(); motion.Reset(current + distance, MaximumOffset); RequestOffset(motion.Position);
         }
