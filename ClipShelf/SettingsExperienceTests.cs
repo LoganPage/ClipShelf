@@ -216,7 +216,11 @@ public static class SettingsExperienceTests
                 double stopped = scroll.VerticalOffset; await Task.Delay(180);
                 Check(Math.Abs(scroll.VerticalOffset - stopped) < .1 && !scroll.IsWheelMotionActive, theme + ": interruption stops residual scrolling");
                 scroll.HandleWheelDelta(-15); await Idle();
-                Check(Math.Abs(scroll.VerticalOffset - stopped - WheelScrollMotion.WheelDistance(-15, SystemParameters.WheelScrollLines, scroll.ViewportHeight)) < 1 && !scroll.IsWheelMotionActive, theme + ": precision wheel preserves small direct deltas");
+                Check(!SystemParameters.ClientAreaAnimation || (scroll.IsWheelMotionActive && Math.Abs(scroll.VerticalOffset - stopped) < 1),
+                    theme + ": precision wheel starts on the frame driver without a synchronous jump");
+                await Task.Delay(400); await Idle();
+                Check(Math.Abs(scroll.VerticalOffset - stopped - WheelScrollMotion.WheelDistance(-15, SystemParameters.WheelScrollLines, scroll.ViewportHeight)) < 1,
+                    theme + ": precision wheel preserves its full small delta while settling");
                 scroll.CancelWheelMotion(); scroll.HandleWheelDelta(-120); await Task.Delay(30);
                 scroll.ScrollToVerticalOffset(123); await Idle(); await Task.Delay(180);
                 Check(Math.Abs(scroll.VerticalOffset - 123) < 1 && !scroll.IsWheelMotionActive, theme + ": external navigation cancels the old scroll target");
