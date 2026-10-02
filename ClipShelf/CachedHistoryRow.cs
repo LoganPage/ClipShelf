@@ -17,7 +17,7 @@ public sealed class CachedHistoryRow : Grid
     }
     private void UpdateCache(DpiScale dpi)
     {
-        CacheMode = !DiagnosticsDisableCache && (RenderCapability.Tier >> 16) > 0
+        CacheMode = !DiagnosticsDisableCache && !RuntimeFeatureSwitches.NoRowCache && (RenderCapability.Tier >> 16) > 0
             ? new BitmapCache { RenderAtScale = dpi.DpiScaleX, EnableClearType = true, SnapsToDevicePixels = true }
             : null;
     }

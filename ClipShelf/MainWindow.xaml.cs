@@ -558,6 +558,7 @@ public partial class MainWindow : Window
     }
     private void StartDragFrames()
     {
+        if (RuntimeFeatureSwitches.NoDragRender) return;
         if (dragRendering) return;
         dragRendering = true; dragFrameTick = Stopwatch.GetTimestamp(); dragRenderingTime = TimeSpan.MinValue;
         CompositionTarget.Rendering += RenderDragFrame;

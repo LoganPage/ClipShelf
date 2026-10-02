@@ -13,9 +13,12 @@ public partial class App : Application
     private HistoryStore? activeStore;
     private string? expectedTestReport;
     private string? testUnhandledError;
+    private ScrollDiagnosticsSession? scrollDiagnostics;
+    private string? diagnosticDataDirectory;
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        RuntimeFeatureSwitches.Configure(e.Args);
         expectedTestReport = ExpectedTestReport(e.Args);
         if (expectedTestReport is not null)
             DispatcherUnhandledException += (_, args) => { testUnhandledError = args.Exception.ToString(); args.Handled = true; Shutdown(1); };
@@ -33,6 +36,7 @@ public partial class App : Application
         if (e.Args.Length == 2 && e.Args[0] == "--text-preview-test") { await TextFilePreviewTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--ocr-test") { await ImageOcrTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--window-position-test") { await WindowPositionTests.RunAsync(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--runtime-switch-test") { await RuntimeFeatureSwitchTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--type-filter-test") { await HistoryTypeFilterTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--native-preview-benchmark") { await NativePreviewBenchmark.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--theme-transition-test") { await ThemeTransitionTests.Run(e.Args[1]); return; }
@@ -96,6 +100,18 @@ public partial class App : Application
         if (di >= 0 && di + 1 < e.Args.Length) dataDir = Path.GetFullPath(e.Args[di + 1]);
         bool demo = e.Args.Contains("--demo");
         if (demo) dataDir = Path.Combine(Path.GetTempPath(), "ClipShelf-demo-" + Guid.NewGuid().ToString("N"));
+        if (RuntimeFeatureSwitches.ScrollDiagnosticReport is not null)
+        {
+            string source = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipShelf");
+            diagnosticDataDirectory = Path.Combine(Path.GetTempPath(), "ClipShelf-scroll-diag-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(diagnosticDataDirectory);
+            foreach (string name in new[] { "history.json", "settings.json" })
+            {
+                string input = Path.Combine(source, name), output = Path.Combine(diagnosticDataDirectory, name);
+                if (File.Exists(input)) File.Copy(input, output);
+            }
+            dataDir = diagnosticDataDirectory;
+        }
         string mutexName = "Local\\ClipShelf.Windows." + (dataDir is null ? "Default" : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(dataDir))).Substring(0, 16));
         instance = new Mutex(true, mutexName, out bool first);
         if (!first)
@@ -112,6 +128,11 @@ public partial class App : Application
         SessionEnding += (_, _) => store.Flush();
         MainWindow = window;
         window.Show();
+        if (RuntimeFeatureSwitches.ScrollDiagnosticReport is string diagnosticReport)
+        {
+            scrollDiagnostics = new ScrollDiagnosticsSession(window, diagnosticReport);
+            window.ShowStatus("滚动诊断已开启 · Ctrl+Shift+F12 保存最近 20 秒");
+        }
         if (e.Args.Contains("--background")) window.Hide();
     }
     protected override void OnExit(ExitEventArgs e)
@@ -144,9 +165,14 @@ public partial class App : Application
                 Environment.ExitCode = 1;
             }
         }
+        scrollDiagnostics?.Dispose();
         activeStore?.Flush();
         try { instance?.ReleaseMutex(); } catch (ApplicationException) { }
         instance?.Dispose();
+        if (diagnosticDataDirectory is string temporary)
+        {
+            try { Directory.Delete(temporary, recursive: true); } catch { }
+        }
         base.OnExit(e);
     }
 
@@ -165,6 +191,7 @@ public partial class App : Application
             "--cleanup-test" => "cleanup-tests.json", "--tooltip-test" => "results.json",
             "--update-test" => "update-tests.json", "--native-preview-test" or "--preview-interaction-test" => "native-preview-results.json",
             "--text-preview-test" => "text-preview-results.json", "--ocr-test" => "ocr-results.json", "--window-position-test" => "window-position-results.json", "--native-preview-benchmark" => "benchmark.json",
+            "--runtime-switch-test" => "runtime-switch-results.json",
             "--type-filter-test" => "type-filter-results.json",
             "--common-preview-test" or "--file-preview-test" => "file-preview-results.json",
             "--file-record-test" => "file-record-results.json", "--copy-only-test" => "copy-only-results.json",

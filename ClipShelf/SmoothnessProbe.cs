@@ -101,6 +101,7 @@ public static class SmoothnessProbe
         string? scenarioName, ScrollProbeMode requestedMode, int sampleIndex)
     {
         var intervals = new List<double>();
+        var compositionIntervals = new List<double>();
         var latencies = new List<double>();
         var stalls = new List<object>();
 
@@ -121,15 +122,7 @@ public static class SmoothnessProbe
         ScrollProbeMode mode = ResolveMode(scenario, requestedMode);
         string fixture = Path.Combine(Path.GetTempPath(), "ClipShelf-smoothness-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(fixture);
-        string? picture = realFixture || variant == "text" ? null : Path.Combine(fixture, "screenshot.png");
-        if (picture is not null)
-        {
-            int height = variant == "small" ? 300 : 12000;
-            var bitmap = System.Windows.Media.Imaging.BitmapSource.Create(300, height, 96, 96, PixelFormats.Bgra32, null, new byte[300 * height * 4], 300 * 4);
-            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
-            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
-            using (var output = File.Create(picture)) encoder.Save(output);
-        }
+        bool createImages = !realFixture && variant != "text";
 
         bool filtered = scenario is "filtered-pinned" or "filtered-pinned-fine" or "filtered-unpinned";
         bool pinned = scenario is "filtered-pinned" or "filtered-pinned-fine" or "all-pinned";
@@ -145,11 +138,11 @@ public static class SmoothnessProbe
         }
         else
         {
-            Func<int, bool> isImageRow = index => picture is not null && index % 3 == 0;
+            Func<int, bool> isImageRow = index => createImages && index % 3 == 0;
             var seed = Enumerable.Range(0, 1000).Select(index => new ClipItem
             {
                 Kind = isImageRow(index) ? ClipKind.Image : ClipKind.Text,
-                ImagePath = isImageRow(index) ? picture : null,
+                ImagePath = isImageRow(index) ? CreateProbeImage(fixture, index, variant == "small" ? 96 : 180) : null,
                 Text = $"独立示例记录 {index:D4} · 平滑度诊断，不包含你的剪贴板内容。",
                 CreatedAt = DateTimeOffset.Now.AddSeconds(-index),
                 IsPinned = pinned && index % 17 == 1
@@ -159,7 +152,12 @@ public static class SmoothnessProbe
         }
 
         MainWindow? window = null;
+        HistoryListBox? diagnosticList = null;
         EventHandler? handler = null;
+        Action<WheelDiagnosticPacket>? packetHandler = null;
+        Action<WheelDiagnosticMove>? moveHandler = null;
+        Action<long, double>? settledHandler = null;
+        var responsePackets = new List<ProbeWheelPacket>();
         var sampling = new CancellationTokenSource();
         Task? sampler = null;
         try
@@ -176,6 +174,7 @@ public static class SmoothnessProbe
             window = new MainWindow(store, demo: true) { ShowInTaskbar = false, Width = width, Height = height };
             window.SuppressApplicationShutdownForDiagnostics = true;
             var list = (HistoryListBox)window.FindName("HistoryList")!;
+            diagnosticList = list;
             window.Show();
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             await Task.Delay(700);
@@ -261,6 +260,24 @@ public static class SmoothnessProbe
             }
             if (multiSelection) list.SelectAll();
 
+            if (!settings)
+            {
+                packetHandler = packet => responsePackets.Add(new ProbeWheelPacket(packet));
+                moveHandler = move =>
+                {
+                    foreach (ProbeWheelPacket packet in responsePackets.Where(packet => !packet.Settled)) packet.Observe(move);
+                    if (!move.IsActive)
+                        foreach (ProbeWheelPacket packet in responsePackets.Where(packet => !packet.Settled)) packet.Complete(move.Timestamp, move.Offset);
+                };
+                settledHandler = (timestamp, offset) =>
+                {
+                    foreach (ProbeWheelPacket packet in responsePackets.Where(packet => !packet.Settled)) packet.Complete(timestamp, offset);
+                };
+                list.DiagnosticWheelPacket += packetHandler;
+                list.DiagnosticWheelMove += moveHandler;
+                list.DiagnosticWheelSettled += settledHandler;
+            }
+
             if (undoBeforeMeasurement)
             {
                 store.Remove(store.Items.Skip(12).Take(8).Select(item => item.Id));
@@ -277,6 +294,7 @@ public static class SmoothnessProbe
             string currentPacketDirection = "none";
             TimeSpan previousRendering = TimeSpan.MinValue;
             long lastTick = 0;
+            long renderingCallbackCount = 0;
 
             void Packet(int delta)
             {
@@ -310,7 +328,9 @@ public static class SmoothnessProbe
                 ((IScrollInfo)panel).SetVerticalOffset(0);
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 await Task.Delay(300);
-                packets = 0; frames = 0; movedFrames = 0; distance = 0;
+                packets = 0; frames = 0; movedFrames = 0; distance = 0; renderingCallbackCount = 0;
+                responsePackets.Clear();
+                compositionIntervals.Clear(); previousRendering = TimeSpan.MinValue;
                 lastOffset = panel.VerticalOffset;
             }
 
@@ -335,8 +355,12 @@ public static class SmoothnessProbe
 
             handler = (_, args) =>
             {
-                if (args is not RenderingEventArgs frame || frame.RenderingTime == previousRendering) return;
+                if (args is not RenderingEventArgs frame) return;
+                renderingCallbackCount++;
+                if (frame.RenderingTime == previousRendering) return;
                 long now = Stopwatch.GetTimestamp();
+                if (previousRendering != TimeSpan.MinValue)
+                    compositionIntervals.Add((frame.RenderingTime - previousRendering).TotalMilliseconds);
                 if (lastTick != 0)
                 {
                     double interval = (now - lastTick) * 1000.0 / Stopwatch.Frequency;
@@ -415,6 +439,14 @@ public static class SmoothnessProbe
                 environment,
                 frames, movedFrames, packets, traveledDip = distance,
                 callbackIntervalMs = Summary(intervals),
+                compositionIntervalMs = Summary(compositionIntervals),
+                renderingCallbackCount,
+                callbacksPerCompositionFrame = frames == 0 ? 0 : renderingCallbackCount / (double)frames,
+                inputToFirstMoveMs = Summary(responsePackets.Where(packet => packet.FirstMoveMs.HasValue).Select(packet => packet.FirstMoveMs!.Value).ToList()),
+                timeToTarget95Ms = Summary(responsePackets.Where(packet => packet.Target95Ms.HasValue).Select(packet => packet.Target95Ms!.Value).ToList()),
+                settleMs = Summary(responsePackets.Where(packet => packet.SettleMs.HasValue).Select(packet => packet.SettleMs!.Value).ToList()),
+                overshootDip = Summary(responsePackets.Select(packet => packet.OvershootDip).ToList()),
+                wheelPackets = responsePackets.Select(packet => packet.Report()).ToArray(),
                 uiLatencyMs = Summary(latencies),
                 uiBlocked = Blocked(latencies),
                 gc = new
@@ -431,6 +463,9 @@ public static class SmoothnessProbe
         finally
         {
             if (handler is not null) CompositionTarget.Rendering -= handler;
+            if (packetHandler is not null && diagnosticList is not null) diagnosticList.DiagnosticWheelPacket -= packetHandler;
+            if (moveHandler is not null && diagnosticList is not null) diagnosticList.DiagnosticWheelMove -= moveHandler;
+            if (settledHandler is not null && diagnosticList is not null) diagnosticList.DiagnosticWheelSettled -= settledHandler;
             sampling.Cancel();
             if (sampler is not null) { try { await sampler; } catch (OperationCanceledException) { } }
             sampling.Dispose();
@@ -443,6 +478,55 @@ public static class SmoothnessProbe
                 await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
+    }
+
+    private sealed class ProbeWheelPacket
+    {
+        private readonly long timestamp;
+        private readonly double start, target, direction;
+        private readonly int delta;
+        public double? FirstMoveMs { get; private set; }
+        public double? Target95Ms { get; private set; }
+        public double? SettleMs { get; private set; }
+        public double OvershootDip { get; private set; }
+        public bool Settled => SettleMs.HasValue;
+        public ProbeWheelPacket(WheelDiagnosticPacket packet)
+        { timestamp = packet.Timestamp; start = packet.StartOffset; target = packet.TargetOffset; delta = packet.Delta; direction = Math.Sign(target - start); }
+        public void Observe(WheelDiagnosticMove move)
+        {
+            double ms = (move.Timestamp - timestamp) * 1000.0 / Stopwatch.Frequency;
+            double traveled = Math.Abs(move.Offset - start), distance = Math.Abs(target - start);
+            if (!FirstMoveMs.HasValue && traveled > .5) FirstMoveMs = ms;
+            if (!Target95Ms.HasValue && (distance <= .5 || traveled >= distance * .95)) Target95Ms = ms;
+            OvershootDip = Math.Max(OvershootDip, Math.Max(0, (move.Offset - target) * direction));
+        }
+        public void Complete(long ticks, double offset)
+        { Observe(new WheelDiagnosticMove(ticks, offset, false)); SettleMs = (ticks - timestamp) * 1000.0 / Stopwatch.Frequency; }
+        public object Report() => new { delta, startOffset = start, targetOffset = target, inputToFirstMoveMs = FirstMoveMs, timeToTarget95Ms = Target95Ms, settleMs = SettleMs, overshootDip = OvershootDip };
+    }
+
+    private static string CreateProbeImage(string directory, int index, int height)
+    {
+        string path = Path.Combine(directory, $"probe-{index:D4}.png");
+        const int width = 160;
+        byte[] pixels = new byte[width * height * 4];
+        uint state = unchecked((uint)(index * 747796405 + 2891336453));
+        for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++)
+        {
+            state = state * 1664525 + 1013904223;
+            int offset = (y * width + x) * 4;
+            pixels[offset] = (byte)((x * 3 + index * 11 + (state & 31)) & 255);
+            pixels[offset + 1] = (byte)((y * 2 + index * 7 + ((state >> 5) & 31)) & 255);
+            pixels[offset + 2] = (byte)(((x + y) * 2 + index * 13) & 255);
+            pixels[offset + 3] = 255;
+        }
+        var bitmap = System.Windows.Media.Imaging.BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+        using var output = File.Create(path);
+        encoder.Save(output);
+        return path;
     }
 
     private static void RunFilterAnimationProbe(FrameworkElement target, bool legacyContent)

@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace ClipShelf;
 
@@ -21,9 +22,23 @@ public sealed class HistoryListBox : ListBox
     private double? dragScrollOffset;
     private long lastFrameTimestamp;
     private TimeSpan lastRenderingTime = TimeSpan.MinValue;
+    private readonly DispatcherTimer nativeDiagnosticSettle = new() { Interval = TimeSpan.FromMilliseconds(120) };
+    private bool nativeDiagnosticPending;
+    internal event Action<WheelDiagnosticPacket>? DiagnosticWheelPacket;
+    internal event Action<WheelDiagnosticMove>? DiagnosticWheelMove;
+    internal event Action<long, double>? DiagnosticWheelSettled;
 
     public HistoryListBox()
     {
+        nativeDiagnosticSettle.Tick += (_, _) =>
+        {
+            nativeDiagnosticSettle.Stop();
+            if (!nativeDiagnosticPending || wheelPanel is null) return;
+            nativeDiagnosticPending = false;
+            long now = Stopwatch.GetTimestamp();
+            DiagnosticWheelMove?.Invoke(new WheelDiagnosticMove(now, wheelPanel.VerticalOffset, false));
+            DiagnosticWheelSettled?.Invoke(now, wheelPanel.VerticalOffset);
+        };
         Loaded += (_, _) => FindScrollParts();
         Unloaded += (_, _) => DetachScrollParts();
         IsVisibleChanged += (_, _) => { if (!IsVisible) CancelWheelMotion(); };
@@ -76,8 +91,20 @@ public sealed class HistoryListBox : ListBox
     {
         base.OnPreviewMouseWheel(e);
         if (e.Handled || e.Delta == 0) return;
-        if (UsesNativeWheel(Keyboard.Modifiers, e.StylusDevice is not null))
-        { CancelWheelMotion(); return; }
+        if (RuntimeFeatureSwitches.NativeWheel || UsesNativeWheel(Keyboard.Modifiers, e.StylusDevice is not null))
+        {
+            CancelWheelMotion();
+            if (DiagnosticWheelPacket is not null && FindScrollParts() && wheelPanel is not null)
+            {
+                double current = wheelPanel.VerticalOffset;
+                double distance = WheelScrollMotion.WheelDistance(e.Delta, SystemParameters.WheelScrollLines, wheelPanel.ViewportHeight);
+                DiagnosticWheelPacket(new WheelDiagnosticPacket(Stopwatch.GetTimestamp(), current,
+                    Math.Clamp(current + distance, 0, MaximumOffset), e.Delta));
+                nativeDiagnosticPending = true;
+                nativeDiagnosticSettle.Stop(); nativeDiagnosticSettle.Start();
+            }
+            return;
+        }
         if (!FindScrollParts() || wheelViewer is null) return;
         // A future nested editor/scroll viewer keeps its own wheel behavior.
         var nearest = Ancestor<ScrollViewer>(e.OriginalSource as DependencyObject);
@@ -101,9 +128,12 @@ public sealed class HistoryListBox : ListBox
         // A small delta does not identify a touchpad: high-resolution mouse wheels
         // produce them too. All ordinary wheel packets share the same frame driver.
         // A quicker response keeps small packets responsive without per-packet jumps.
-        wheelMotion.ResponseFrequency = WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28;
-        bool immediate = !SystemParameters.ClientAreaAnimation || directInput;
+        wheelMotion.ResponseFrequency = RuntimeFeatureSwitches.WheelResponse
+            ?? (WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28);
+        bool immediate = !SystemParameters.ClientAreaAnimation || directInput || RuntimeFeatureSwitches.InstantWheel;
         double current = hasRequestedOffset ? requestedOffset : wheelPanel.VerticalOffset;
+        double target = Math.Clamp(current + distance, 0, maximum);
+        DiagnosticWheelPacket?.Invoke(new WheelDiagnosticPacket(now, current, target, delta));
         if (immediate)
         {
             StopRendering(); wheelMotion.Reset(current, maximum);
@@ -147,11 +177,17 @@ public sealed class HistoryListBox : ListBox
     private void RequestOffset(double value)
     {
         if (wheelPanel is null) return;
+        if (RuntimeFeatureSwitches.WheelPixelSnap)
+        {
+            double scale = Math.Max(.01, VisualTreeHelper.GetDpi(this).DpiScaleY);
+            value = Math.Round(value * scale) / scale;
+        }
         requestedOffset = value; hasRequestedOffset = true;
         // Use the public IScrollInfo path directly, just like WPF's native wheel handler.
         // This avoids a per-frame ScrollViewer command queue while retaining recycling,
         // real content offsets and correct hit testing. No RenderTransform or UpdateLayout.
         ((IScrollInfo)wheelPanel).SetVerticalOffset(value);
+        DiagnosticWheelMove?.Invoke(new WheelDiagnosticMove(Stopwatch.GetTimestamp(), value, wheelMotion.IsActive));
     }
 
     internal double ScrollDragBy(double distance)
@@ -173,6 +209,11 @@ public sealed class HistoryListBox : ListBox
         if (e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0 || e.ViewportWidthChange != 0)
         { CancelWheelMotion(); return; }
         if (e.VerticalChange == 0 || wheelPanel is null) return;
+        if (nativeDiagnosticPending)
+        {
+            DiagnosticWheelMove?.Invoke(new WheelDiagnosticMove(Stopwatch.GetTimestamp(), wheelPanel.VerticalOffset, true));
+            nativeDiagnosticSettle.Stop(); nativeDiagnosticSettle.Start();
+        }
         // A thumb drag, keyboard/bring-into-view request, or app command owns the new
         // position. Small layout rounding differences in our own request are harmless.
         if (hasRequestedOffset && Math.Abs(wheelPanel.VerticalOffset - requestedOffset) <= 1)
@@ -198,10 +239,12 @@ public sealed class HistoryListBox : ListBox
         if (!rendering) return;
         CompositionTarget.Rendering -= RenderWheelFrame; rendering = false;
         lastRenderingTime = TimeSpan.MinValue;
+        DiagnosticWheelSettled?.Invoke(Stopwatch.GetTimestamp(), requestedOffset);
     }
 
     private void DetachScrollParts()
     {
+        nativeDiagnosticSettle.Stop(); nativeDiagnosticPending = false;
         CancelWheelMotion();
         if (wheelViewer is not null) wheelViewer.ScrollChanged -= OnWheelScrollChanged;
         wheelViewer = null; wheelPanel = null;
@@ -227,3 +270,6 @@ public sealed class HistoryListBox : ListBox
         }
     }
 }
+
+internal readonly record struct WheelDiagnosticPacket(long Timestamp, double StartOffset, double TargetOffset, int Delta);
+internal readonly record struct WheelDiagnosticMove(long Timestamp, double Offset, bool IsActive);
