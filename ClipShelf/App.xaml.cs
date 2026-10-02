@@ -69,7 +69,14 @@ public partial class App : Application
         if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-resume-test") { await SmoothnessProbe.RunAsync(e.Args[1], pauseBeforeMeasurement: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-settings-test") { await SmoothnessProbe.RunAsync(e.Args[1], settings: true, pauseBeforeMeasurement: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-undo-up-test") { await SmoothnessProbe.RunAsync(e.Args[1], direction: ScrollProbeDirection.Up, undoBeforeMeasurement: true); return; }
-        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-filtered-pin-test") { await SmoothnessProbe.RunAsync(e.Args[1], scenario: e.Args.ElementAtOrDefault(2) ?? "filtered-pinned"); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-filtered-pin-test")
+        {
+            int repeat = int.TryParse(e.Args.ElementAtOrDefault(3), out int requestedRepeat) ? requestedRepeat : 1;
+            ScrollProbeMode mode = Enum.TryParse(e.Args.ElementAtOrDefault(4), true, out ScrollProbeMode requestedMode)
+                ? requestedMode : ScrollProbeMode.Directional;
+            await SmoothnessProbe.RunAsync(e.Args[1], scenario: e.Args.ElementAtOrDefault(2) ?? "filtered-pinned", repeat: repeat, mode: mode);
+            return;
+        }
         if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-regression-test") { await SmoothnessRegressionTests.RunAsync(e.Args[1]); return; }
         DispatcherUnhandledException += (_, args) =>
         {

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +18,7 @@ using System.Windows.Threading;
 namespace ClipShelf;
 
 public enum ScrollProbeDirection { Down, Up }
+public enum ScrollProbeMode { Directional, Reverse, DownOnly, UpOnly }
 
 /// <summary>
 /// Smoothness diagnostics probe. Adds the measurements the scroll probe lacks:
@@ -26,14 +29,24 @@ public enum ScrollProbeDirection { Down, Up }
 /// </summary>
 public static class SmoothnessProbe
 {
-    /// <summary>One process run == one pass. Repeat the process externally for distribution.</summary>
     public static async Task RunAsync(string reportPath, bool multiSelection = false, bool fineWheel = false, string? variant = null,
         ScrollProbeDirection direction = ScrollProbeDirection.Down, bool pauseBeforeMeasurement = false, bool settings = false,
-        bool undoBeforeMeasurement = false, string? scenario = null)
+        bool undoBeforeMeasurement = false, string? scenario = null, int repeat = 1, ScrollProbeMode mode = ScrollProbeMode.Directional)
     {
-        object? result = null;
+        Application.Current.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        var samples = new List<JsonElement>();
         string? error = null;
-        try { result = await OnePassAsync(multiSelection, fineWheel, variant, direction, pauseBeforeMeasurement, settings, undoBeforeMeasurement, scenario); }
+        repeat = Math.Clamp(repeat, 1, 20);
+        mode = ResolveMode(scenario, mode);
+        try
+        {
+            for (int run = 1; run <= repeat; run++)
+            {
+                object sample = await OnePassAsync(multiSelection, fineWheel, variant, direction, pauseBeforeMeasurement,
+                    settings, undoBeforeMeasurement, scenario, mode, run);
+                samples.Add(JsonSerializer.SerializeToElement(sample));
+            }
+        }
         catch (Exception exception) { error = exception.ToString(); }
 
         try
@@ -49,11 +62,16 @@ public static class SmoothnessProbe
                 pauseBeforeMeasurement,
                 settings,
                 undoBeforeMeasurement,
+                repeat,
+                mode = mode.ToString(),
                 scenario = scenario ?? "default",
                 variant = variant ?? "default",
                 warmup = (variant ?? "").ToLowerInvariant().Contains("warm"),
-                result,
-                scope = (string.Equals(scenario, "real", StringComparison.OrdinalIgnoreCase)
+                build = BuildFingerprint(),
+                result = samples.Count == 0 ? null : (object)samples[0],
+                samples,
+                summary = DistributionSummary(samples),
+                scope = ((scenario ?? "").StartsWith("real", StringComparison.OrdinalIgnoreCase)
                         ? "In-process read-only copy of the current local ClipShelf history; source files and user data are not modified. "
                         : "In-process synthetic WPF fixture, 1000 records with 1/3 image rows. ") +
                         "uiLatencyMs is a Dispatcher round-trip at Send priority from a background sampler, " +
@@ -61,11 +79,17 @@ public static class SmoothnessProbe
                         "in-process. Callback intervals are NOT displayed frames and NOT a refresh-rate guarantee."
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
+        catch (Exception reportException)
+        {
+            error = string.Join(Environment.NewLine, new[] { error, "Report serialization failed: " + reportException }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            File.WriteAllText(reportPath, JsonSerializer.Serialize(new { passed = false, error }));
+        }
         finally { Application.Current?.Shutdown(error is null ? 0 : 1); }
     }
 
     private static async Task<object> OnePassAsync(bool multiSelection, bool fineWheel, string? variantName,
-        ScrollProbeDirection direction, bool pauseBeforeMeasurement, bool settings, bool undoBeforeMeasurement, string? scenarioName)
+        ScrollProbeDirection direction, bool pauseBeforeMeasurement, bool settings, bool undoBeforeMeasurement,
+        string? scenarioName, ScrollProbeMode requestedMode, int sampleIndex)
     {
         var intervals = new List<double>();
         var latencies = new List<double>();
@@ -76,7 +100,10 @@ public static class SmoothnessProbe
         string variant = requested.Replace("-warm", "").Replace("warm", "").Trim('-');
         if (variant.Length == 0) variant = "default";
         string scenario = (scenarioName ?? "default").ToLowerInvariant();
-        bool realFixture = scenario == "real";
+        bool scenarioFine = scenario.EndsWith("-fine", StringComparison.Ordinal);
+        bool realFixture = scenario.StartsWith("real", StringComparison.Ordinal);
+        bool realPinnedOffscreen = scenario == "real-pinned-offscreen";
+        ScrollProbeMode mode = ResolveMode(scenario, requestedMode);
         string fixture = Path.Combine(Path.GetTempPath(), "ClipShelf-smoothness-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(fixture);
         string? picture = realFixture || variant == "text" ? null : Path.Combine(fixture, "screenshot.png");
@@ -89,12 +116,14 @@ public static class SmoothnessProbe
             using (var output = File.Create(picture)) encoder.Save(output);
         }
 
-        bool filtered = scenario is "filtered-pinned" or "filtered-unpinned";
-        bool pinned = scenario is "filtered-pinned" or "all-pinned";
+        bool filtered = scenario is "filtered-pinned" or "filtered-pinned-fine" or "filtered-unpinned";
+        bool pinned = scenario is "filtered-pinned" or "filtered-pinned-fine" or "all-pinned";
         if (realFixture)
         {
             string source = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipShelf");
-            File.Copy(Path.Combine(source, "history.json"), Path.Combine(fixture, "history.json"));
+            string sourceHistory = Path.Combine(source, "history.json");
+            if (!File.Exists(sourceHistory)) throw new InvalidOperationException("Real-data probe skipped: history.json does not exist.");
+            File.Copy(sourceHistory, Path.Combine(fixture, "history.json"));
             string sourceSettings = Path.Combine(source, "settings.json");
             if (File.Exists(sourceSettings)) File.Copy(sourceSettings, Path.Combine(fixture, "settings.json"));
             else File.WriteAllText(Path.Combine(fixture, "settings.json"), "{\"MaxItems\":10000}");
@@ -121,16 +150,29 @@ public static class SmoothnessProbe
         try
         {
             var store = new HistoryStore(fixture);
+            if (realFixture && store.Items.Count < 3)
+                throw new InvalidOperationException("Real-data probe skipped: copied history contains fewer than three records.");
             window = new MainWindow(store, demo: true) { ShowInTaskbar = false, Width = 720, Height = 572 };
+            window.SuppressApplicationShutdownForDiagnostics = true;
             var list = (HistoryListBox)window.FindName("HistoryList")!;
             window.Show();
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             await Task.Delay(700);
             if (realFixture)
             {
-                var pinnedItem = store.Items.FirstOrDefault(item => item.IsPinned) ?? store.Items.FirstOrDefault()
-                    ?? throw new InvalidOperationException("The copied history is empty.");
-                if (!pinnedItem.IsPinned) store.TogglePinned([pinnedItem.Id]);
+                ClipItem pinnedItem;
+                if (realPinnedOffscreen)
+                {
+                    var group = store.Items.GroupBy(item => item.Kind).OrderByDescending(items => items.Count()).First();
+                    var candidates = group.Take(12).ToArray();
+                    foreach (ClipItem item in candidates.Where(item => !item.IsPinned).ToArray()) store.TogglePinned([item.Id]);
+                    pinnedItem = candidates[^1];
+                }
+                else
+                {
+                    pinnedItem = store.Items.FirstOrDefault(item => item.IsPinned) ?? store.Items[0];
+                    if (!pinnedItem.IsPinned) store.TogglePinned([pinnedItem.Id]);
+                }
                 store.Settings.HistoryTypeFilter = pinnedItem.Kind switch
                 {
                     ClipKind.File => HistoryTypeFilter.File,
@@ -182,16 +224,20 @@ public static class SmoothnessProbe
             double lastOffset = panel.VerticalOffset;
             double distance = 0;
             int frames = 0, movedFrames = 0, packets = 0;
+            int currentPacketIndex = 0;
+            string currentPacketDirection = "none";
             TimeSpan previousRendering = TimeSpan.MinValue;
             long lastTick = 0;
 
             void Packet(int delta)
             {
+                currentPacketIndex++;
+                currentPacketDirection = delta < 0 ? "down" : "up";
                 var args = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta) { RoutedEvent = Mouse.PreviewMouseWheelEvent, Source = wheelTarget };
                 wheelTarget.RaiseEvent(args); packets++;
             }
 
-            if (direction == ScrollProbeDirection.Up)
+            if (direction == ScrollProbeDirection.Up || mode == ScrollProbeMode.UpOnly)
             {
                 panel.SetVerticalOffset(Math.Min(Math.Max(0, panel.ExtentHeight - panel.ViewportHeight), settings ? 760 : 1200));
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
@@ -250,6 +296,8 @@ public static class SmoothnessProbe
                         stalls.Add(new
                         {
                             intervalMs = interval,
+                            packetIndex = currentPacketIndex,
+                            direction = currentPacketDirection,
                             offset = panel.VerticalOffset,
                             realized = settings ? -1 : Enumerable.Range(0, list.Items.Count)
                                 .Count(index => list.ItemContainerGenerator.ContainerFromIndex(index) is not null),
@@ -274,11 +322,17 @@ public static class SmoothnessProbe
             }
             else
             {
-                int wheelDelta = (fineWheel ? 15 : 120) * (direction == ScrollProbeDirection.Up ? 1 : -1);
+                int magnitude = fineWheel || scenarioFine ? 15 : 120;
+                int wheelDelta = magnitude * (direction == ScrollProbeDirection.Up ? 1 : -1);
                 for (int index = 0; index < 50; index++)
                 {
-                    int packet = scenario is "filtered-pinned" or "filtered-unpinned" or "all-pinned" or "real"
-                        ? (index < 25 ? -120 : 120) : wheelDelta;
+                    int packet = mode switch
+                    {
+                        ScrollProbeMode.Reverse => (index < 25 ? -magnitude : magnitude),
+                        ScrollProbeMode.DownOnly => -magnitude,
+                        ScrollProbeMode.UpOnly => magnitude,
+                        _ => wheelDelta
+                    };
                     Packet(packet); await Task.Delay(80);
                 }
             }
@@ -300,6 +354,7 @@ public static class SmoothnessProbe
 
             return new
             {
+                sampleIndex,
                 frames, movedFrames, packets, traveledDip = distance,
                 callbackIntervalMs = Summary(intervals),
                 uiLatencyMs = Summary(latencies),
@@ -321,8 +376,66 @@ public static class SmoothnessProbe
             sampling.Cancel();
             if (sampler is not null) { try { await sampler; } catch (OperationCanceledException) { } }
             sampling.Dispose();
-            window?.Quit();
+            if (window is not null)
+            {
+                var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                window.Closed += (_, _) => closed.TrySetResult();
+                window.Quit();
+                await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
+    }
+
+    private static ScrollProbeMode ResolveMode(string? scenarioName, ScrollProbeMode requestedMode)
+    {
+        string scenario = (scenarioName ?? "default").ToLowerInvariant();
+        if (scenario == "real-down") return ScrollProbeMode.DownOnly;
+        if (requestedMode != ScrollProbeMode.Directional) return requestedMode;
+        return scenario is "filtered-pinned" or "filtered-pinned-fine" or "filtered-unpinned" or "all-pinned"
+            or "unfiltered-unpinned" or "real" or "real-fine" or "real-pinned-offscreen"
+            ? ScrollProbeMode.Reverse : ScrollProbeMode.Directional;
+    }
+
+    private static object BuildFingerprint()
+    {
+        string path = Assembly.GetExecutingAssembly().Location;
+        var file = new FileInfo(path);
+        using var stream = File.OpenRead(path);
+        return new
+        {
+            sha256 = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(),
+            fileSize = file.Length,
+            buildTimestampUtc = file.LastWriteTimeUtc,
+            version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown"
+        };
+    }
+
+    private static object DistributionSummary(IReadOnlyList<JsonElement> samples)
+    {
+        double[] Values(Func<JsonElement, double> selector) => samples.Select(selector).ToArray();
+        return new
+        {
+            callbackMaxMs = Distribution(Values(sample => sample.GetProperty("callbackIntervalMs").GetProperty("max").GetDouble())),
+            callbackP99Ms = Distribution(Values(sample => sample.GetProperty("callbackIntervalMs").GetProperty("p99").GetDouble())),
+            stallCount = Distribution(Values(sample => sample.GetProperty("stallCount").GetDouble())),
+            uiOver33Count = Distribution(Values(sample => sample.GetProperty("uiBlocked").GetProperty("over33_3").GetDouble())),
+            uiLatencyMaxMs = Distribution(Values(sample => sample.GetProperty("uiLatencyMs").GetProperty("max").GetDouble()))
+        };
+    }
+
+    private static object Distribution(double[] values)
+    {
+        double[] sorted = values.OrderBy(value => value).ToArray();
+        double median = sorted.Length == 0 ? 0 : sorted.Length % 2 == 1
+            ? sorted[sorted.Length / 2]
+            : (sorted[sorted.Length / 2 - 1] + sorted[sorted.Length / 2]) / 2;
+        return new
+        {
+            min = sorted.Length == 0 ? 0 : sorted[0],
+            median,
+            max = sorted.Length == 0 ? 0 : sorted[^1],
+            all = values
+        };
     }
 
     private static object Summary(List<double> samples)
