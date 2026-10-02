@@ -55,15 +55,23 @@ internal static class HistoryTypeFilterTests
             changes.CollectionChanged += (_, e) => { if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) resets++; };
             Click("FilterFileButton");
             Check(Visible().Length == 1 && Visible()[0].Kind == ClipKind.File, "File filter shows only file records");
+            Check(ReferenceEquals(Filter("FilterFileButton").ReadLocalValue(Control.BorderBrushProperty), Brushes.Transparent),
+                "Destination filter border stays hidden while the shared surface is moving");
             var listShift = historyBorder.RenderTransform as TranslateTransform ?? new TranslateTransform();
             var indicatorShift = (TranslateTransform)filterSelection.RenderTransform;
-            double listFirst = listShift.X, indicatorFirst = indicatorShift.X;
-            await Task.Delay(55); double listMiddle = listShift.X, indicatorMiddle = indicatorShift.X;
+            double listFirstY = listShift.Y, listFirstOpacity = historyBorder.Opacity, indicatorFirst = indicatorShift.X;
+            Check(Math.Abs(listShift.X) < .01, "Type filtering starts without horizontal history motion");
+            await Task.Delay(55); double listMiddleY = listShift.Y, listMiddleOpacity = historyBorder.Opacity, indicatorMiddle = indicatorShift.X;
             await Task.Delay(230); await Idle();
-            Check(!SystemParameters.ClientAreaAnimation || (new[] { listFirst, listMiddle, listShift.X }.Distinct().Count() >= 2
+            Check(!SystemParameters.ClientAreaAnimation || (new[] { listFirstY, listMiddleY, listShift.Y }.Distinct().Count() >= 2
+                && new[] { listFirstOpacity, listMiddleOpacity, historyBorder.Opacity }.Distinct().Count() >= 2
                 && new[] { indicatorFirst, indicatorMiddle, indicatorShift.X }.Distinct().Count() >= 2),
-                "Type selection and history content expose interruptible horizontal motion");
-            Check(Math.Abs(listShift.X) < .01, "History filter motion returns exactly to its neutral transform");
+                "Type selection slides while history rises and fades through intermediate values");
+            Check(Math.Abs(listShift.X) < .01 && Math.Abs(listShift.Y) < .01 && Math.Abs(historyBorder.Opacity - 1) < .01,
+                "History filter motion settles at neutral X/Y and full opacity");
+            Check(new[] { "FilterAllButton", "FilterTextButton", "FilterFileButton", "FilterImageButton" }
+                .All(name => ReferenceEquals(Filter(name).ReadLocalValue(Control.BorderBrushProperty), DependencyProperty.UnsetValue)),
+                "Filter transition clears every temporary border override after settling");
             Check(resets == 0, "Animated filtering never resets the displayed collection");
             Click("FilterAllButton");
             Check(Visible().Length == 4, "Returning to All is equivalent to no type filter");

@@ -413,6 +413,46 @@ public static class WindowsInteractionTests
             store.Settings.Theme = originalTheme;
             store.Settings.AppIcon = originalIcon;
             window.ApplyPreferences();
+
+            // Pin reordering must not repurpose the viewport to follow the moved item.
+            foreach (var extra in Enumerable.Range(8, 24).Select(index => new ClipItem
+            {
+                Title = $"Viewport fixture {index}", Text = $"Viewport fixture {index}", CreatedAt = created.AddSeconds(-index)
+            })) store.Add(extra);
+            window.Height = 552;
+            window.Refresh();
+            await IdleAsync();
+            var topPinTarget = store.Items.Last();
+            store.TogglePinned([topPinTarget.Id]); await IdleAsync();
+            list.ReplaceSelection(new[] { topPinTarget }); scroll.ScrollToTop(); await IdleAsync();
+            double beforeTopUnpin = scroll.VerticalOffset;
+            toolbarPin.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, toolbarPin)); await IdleAsync();
+            Check(Math.Abs(scroll.VerticalOffset - beforeTopUnpin) <= 1,
+                $"Toolbar unpin at top preserves viewport offset ({beforeTopUnpin:0.###} -> {scroll.VerticalOffset:0.###})");
+
+            var middlePinTarget = store.Items.Last();
+            store.TogglePinned([middlePinTarget.Id]); await IdleAsync();
+            list.ReplaceSelection(new[] { middlePinTarget }); scroll.ScrollToVerticalOffset(222); await IdleAsync();
+            double beforeMiddleUnpin = scroll.VerticalOffset;
+            toolbarPin.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, toolbarPin)); await IdleAsync();
+            Check(Math.Abs(scroll.VerticalOffset - beforeMiddleUnpin) <= 1,
+                $"Toolbar unpin in the middle preserves viewport offset ({beforeMiddleUnpin:0.###} -> {scroll.VerticalOffset:0.###})");
+
+            var rowPinTarget = store.Items.Last();
+            store.TogglePinned([rowPinTarget.Id]); window.Refresh(); await IdleAsync();
+            var viewportRowPin = new Button { DataContext = rowPinTarget, Tag = "Pin" };
+            scroll.ScrollToVerticalOffset(296); await IdleAsync();
+            double beforeRowUnpin = scroll.VerticalOffset;
+            Invoke(window, "RowAction_Click", viewportRowPin, new RoutedEventArgs(ButtonBase.ClickEvent, viewportRowPin)); await IdleAsync();
+            Check(Math.Abs(scroll.VerticalOffset - beforeRowUnpin) <= 1,
+                $"Inline unpin preserves viewport offset ({beforeRowUnpin:0.###} -> {scroll.VerticalOffset:0.###})");
+
+            var pinGroup = store.Items.Where(item => !item.IsPinned).Skip(8).Take(3).ToArray();
+            list.ReplaceSelection(pinGroup); scroll.ScrollToVerticalOffset(148); await IdleAsync();
+            double beforeGroupPin = scroll.VerticalOffset;
+            toolbarPin.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, toolbarPin)); await IdleAsync();
+            Check(Math.Abs(scroll.VerticalOffset - beforeGroupPin) <= 1,
+                $"Toolbar group pin preserves viewport offset ({beforeGroupPin:0.###} -> {scroll.VerticalOffset:0.###})");
             Check(await store.FlushAsync() && store.LastError is null, "Synthetic interaction changes finish without persistence errors");
         }
         catch (Exception exception)
@@ -670,6 +710,8 @@ public static class WindowsInteractionTests
     private static async Task<Button> RowButtonAsync(HistoryListBox list, ClipItem item, string action)
     {
         list.ScrollIntoView(item);
+        await IdleAsync();
+        list.UpdateLayout();
         await IdleAsync();
         var container = list.ItemContainerGenerator.ContainerFromItem(item) as ListBoxItem
             ?? throw new InvalidOperationException("The interaction fixture row was not realized.");

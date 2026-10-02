@@ -36,12 +36,13 @@ public partial class MainWindow : Window
     private ScrollViewer? HistoryScroll => historyScroll ??= Descendant<ScrollViewer>(HistoryList);
     private CancellationTokenSource? searchCancellation;
     internal Task PendingSearch { get; private set; } = Task.CompletedTask;
-    private bool refreshPending, refreshQueued, resetScroll;
+    private bool refreshPending, refreshQueued, resetScroll, suppressViewportCompensation;
     private int rangeStart = -1, rangeEnd = -1;
     private const double RowHeight = 74;
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private bool dragRendering;
     private bool typeFilterAnimationActive, typeFilterResizePending;
+    private int typeFilterAnimationVersion;
     private long dragFrameTick;
     private TimeSpan dragRenderingTime = TimeSpan.MinValue;
     private bool quitting, refreshing, dragging, pointerDown, suppressDragRelease;
@@ -208,13 +209,15 @@ public partial class MainWindow : Window
     private void ApplyVisible(List<ClipItem> next, string query)
     {
         HistoryList.CancelWheelMotion();
+        bool keepViewportOffset = suppressViewportCompensation;
+        suppressViewportCompensation = false;
         var selected = HistoryList.SelectedItems.Cast<ClipItem>().Select(x => x.Id).ToHashSet();
         int previousFocus = focusedId is Guid focusId ? visible.FindIndex(item => item.Id == focusId) : -1;
         bool hadRowFocus = IsHistoryContentOrigin(Keyboard.FocusedElement as DependencyObject);
         var scroll = HistoryScroll;
         double offset = scroll?.VerticalOffset ?? 0;
         int topIndex = Math.Clamp((int)(offset / RowHeight), 0, Math.Max(0, visible.Count - 1));
-        Guid? topId = !resetScroll && visible.Count > 0 ? visible[topIndex].Id : null;
+        Guid? topId = !keepViewportOffset && !resetScroll && visible.Count > 0 ? visible[topIndex].Id : null;
         refreshing = true;
         try
         {
@@ -235,7 +238,9 @@ public partial class MainWindow : Window
                 focusedId = next.Count == 0 ? null : next[Math.Clamp(previousFocus, 0, next.Count - 1)].Id;
             if (anchorId is Guid oldAnchor && !wanted.Contains(oldAnchor)) anchorId = focusedId;
             anchor = anchorId is Guid currentAnchor ? next.FindIndex(item => item.Id == currentAnchor) : -1;
-            if (topId is Guid id && next.FindIndex(x => x.Id == id) is int newTop && newTop >= 0)
+            if (keepViewportOffset)
+                scroll?.ScrollToVerticalOffset(offset);
+            else if (topId is Guid id && next.FindIndex(x => x.Id == id) is int newTop && newTop >= 0)
                 scroll?.ScrollToVerticalOffset(newTop * RowHeight + offset % RowHeight);
             else if (resetScroll) scroll?.ScrollToTop();
             resetScroll = false;
@@ -304,13 +309,25 @@ public partial class MainWindow : Window
         string filter = HistoryTypeFilter.Normalize(requested);
         if (filter == Store.Settings.HistoryTypeFilter) return;
         int previousIndex = FilterIndex(Store.Settings.HistoryTypeFilter);
+        PrepareTypeFilterBorderTransition(filter);
         Store.Settings.HistoryTypeFilter = filter;
         Store.SaveSettings();
         UpdateTypeFilterButtons();
         resetScroll = true;
         Refresh();
         PositionTypeFilterSelection(animate: true, previousIndex: previousIndex);
-        AnimateFilteredList(FilterIndex(filter) > previousIndex ? 22 : -22);
+        AnimateFilteredList();
+    }
+    private IEnumerable<Button> TypeFilterButtons() => new[] { FilterAllButton, FilterTextButton, FilterFileButton, FilterImageButton };
+    private void ClearTypeFilterBorderOverrides()
+    {
+        foreach (var button in TypeFilterButtons()) button.ClearValue(BorderBrushProperty);
+    }
+    private void PrepareTypeFilterBorderTransition(string filter)
+    {
+        ClearTypeFilterBorderOverrides();
+        if (!IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
+        TypeFilterButtons().ElementAt(FilterIndex(filter)).SetValue(BorderBrushProperty, Brushes.Transparent);
     }
     private void UpdateTypeFilterButtons()
     {
@@ -333,6 +350,7 @@ public partial class MainWindow : Window
     private void PositionTypeFilterSelection(bool animate, int previousIndex)
     {
         if (TypeFilterSelection.RenderTransform is not TranslateTransform shift || TypeFilterBar.ActualWidth <= 0) return;
+        ClearTypeFilterBorderOverrides();
         double width = TypeFilterBar.ActualWidth / 4;
         int targetIndex = FilterIndex(Store.Settings.HistoryTypeFilter);
         TypeFilterSelection.Width = width;
@@ -346,6 +364,8 @@ public partial class MainWindow : Window
             typeFilterResizePending = false;
             return;
         }
+        TypeFilterButtons().ElementAt(targetIndex).SetValue(BorderBrushProperty, Brushes.Transparent);
+        int animationVersion = ++typeFilterAnimationVersion;
         var animation = new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(240))
         {
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
@@ -354,6 +374,8 @@ public partial class MainWindow : Window
         typeFilterAnimationActive = true;
         animation.Completed += (_, _) =>
         {
+            if (animationVersion != typeFilterAnimationVersion) return;
+            ClearTypeFilterBorderOverrides();
             typeFilterAnimationActive = false;
             if (!typeFilterResizePending) return;
             typeFilterResizePending = false;
@@ -361,17 +383,27 @@ public partial class MainWindow : Window
         };
         shift.BeginAnimation(TranslateTransform.XProperty, animation, HandoffBehavior.SnapshotAndReplace);
     }
-    private void AnimateFilteredList(double from)
+    private void AnimateFilteredList()
     {
-        if (!IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
         if (HistoryBorder.RenderTransform is not TranslateTransform shift)
         {
             shift = new TranslateTransform();
             HistoryBorder.RenderTransform = shift;
         }
         shift.BeginAnimation(TranslateTransform.XProperty, null);
+        shift.BeginAnimation(TranslateTransform.YProperty, null);
+        HistoryBorder.BeginAnimation(OpacityProperty, null);
         shift.X = 0;
-        shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(from, 0, TimeSpan.FromMilliseconds(240))
+        shift.Y = 0;
+        HistoryBorder.Opacity = 1;
+        if (!IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
+        var easing = new SineEase { EasingMode = EasingMode.EaseInOut };
+        shift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(18, 0, TimeSpan.FromMilliseconds(240))
+        {
+            EasingFunction = easing,
+            FillBehavior = FillBehavior.Stop
+        }, HandoffBehavior.SnapshotAndReplace);
+        HistoryBorder.BeginAnimation(OpacityProperty, new DoubleAnimation(.6, 1, TimeSpan.FromMilliseconds(240))
         {
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             FillBehavior = FillBehavior.Stop
@@ -402,7 +434,11 @@ public partial class MainWindow : Window
         }, HandoffBehavior.SnapshotAndReplace);
     }
     private async void Copy_Click(object sender, RoutedEventArgs e) => await CopyItems(Selected());
-    private void Pin_Click(object sender, RoutedEventArgs e) => Store.TogglePinned(Selected().Select(x => x.Id));
+    private void Pin_Click(object sender, RoutedEventArgs e)
+    {
+        suppressViewportCompensation = true;
+        Store.TogglePinned(Selected().Select(x => x.Id));
+    }
     private void Delete_Click(object sender, RoutedEventArgs e) => DeleteSelection();
     private void DeleteSelection()
     {
@@ -420,7 +456,7 @@ public partial class MainWindow : Window
         e.Handled = true;
         if (sender is not Button { DataContext: ClipItem item } button) return;
         switch (button.Tag as string) {
-            case "Pin": Store.TogglePinned(new[] { item.Id }); break;
+            case "Pin": suppressViewportCompensation = true; Store.TogglePinned(new[] { item.Id }); break;
             case "Delete": DeleteHistoryItems(new[] { item }); break;
             case "Copy": await CopyItems(RowItems(item)); break;
         }
