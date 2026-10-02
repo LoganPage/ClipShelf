@@ -8,6 +8,7 @@ namespace ClipShelf;
 // Moving a realized row can reuse its text/icons at the monitor's native density.
 public sealed class CachedHistoryRow : Grid
 {
+    internal static bool DiagnosticsDisableCache { get; set; }
     public CachedHistoryRow() => Loaded += (_, _) => UpdateCache(VisualTreeHelper.GetDpi(this));
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
     {
@@ -16,7 +17,7 @@ public sealed class CachedHistoryRow : Grid
     }
     private void UpdateCache(DpiScale dpi)
     {
-        CacheMode = (RenderCapability.Tier >> 16) > 0
+        CacheMode = !DiagnosticsDisableCache && (RenderCapability.Tier >> 16) > 0
             ? new BitmapCache { RenderAtScale = dpi.DpiScaleX, EnableClearType = true, SnapsToDevicePixels = true }
             : null;
     }

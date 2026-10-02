@@ -13,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
 namespace ClipShelf;
@@ -68,6 +69,14 @@ public static class SmoothnessProbe
                 variant = variant ?? "default",
                 warmup = (variant ?? "").ToLowerInvariant().Contains("warm"),
                 build = BuildFingerprint(),
+                renderTier = SampleProperty(samples, "environment", "renderTier"),
+                clientAreaAnimation = SampleProperty(samples, "environment", "clientAreaAnimation"),
+                dpiScale = SampleProperty(samples, "environment", "dpiScale"),
+                windowPixelSize = SampleProperty(samples, "environment", "windowPixelSize"),
+                rowCount = SampleProperty(samples, "environment", "rowCount"),
+                imageRowCount = SampleProperty(samples, "environment", "imageRowCount"),
+                bitmapCacheActive = SampleProperty(samples, "environment", "bitmapCacheActive"),
+                animationTarget = SampleProperty(samples, "environment", "animationTarget"),
                 result = samples.Count == 0 ? null : (object)samples[0],
                 samples,
                 summary = DistributionSummary(samples),
@@ -103,6 +112,12 @@ public static class SmoothnessProbe
         bool scenarioFine = scenario.EndsWith("-fine", StringComparison.Ordinal);
         bool realFixture = scenario.StartsWith("real", StringComparison.Ordinal);
         bool realPinnedOffscreen = scenario == "real-pinned-offscreen";
+        bool largeWindow = scenario.Contains("large-window", StringComparison.Ordinal);
+        bool defaultThumbnailScaling = scenario.Contains("default-scaling", StringComparison.Ordinal);
+        bool disableBitmapCache = scenario.Contains("no-cache", StringComparison.Ordinal);
+        bool contentAnimation = scenario.Contains("animation-content", StringComparison.Ordinal);
+        bool overlayAnimation = scenario.Contains("animation-overlay", StringComparison.Ordinal);
+        bool noAnimation = scenario.Contains("animation-none", StringComparison.Ordinal);
         ScrollProbeMode mode = ResolveMode(scenario, requestedMode);
         string fixture = Path.Combine(Path.GetTempPath(), "ClipShelf-smoothness-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(fixture);
@@ -149,10 +164,16 @@ public static class SmoothnessProbe
         Task? sampler = null;
         try
         {
+            CachedHistoryRow.DiagnosticsDisableCache = disableBitmapCache;
             var store = new HistoryStore(fixture);
             if (realFixture && store.Items.Count < 3)
                 throw new InvalidOperationException("Real-data probe skipped: copied history contains fewer than three records.");
-            window = new MainWindow(store, demo: true) { ShowInTaskbar = false, Width = 720, Height = 572 };
+            if (realFixture && store.Items.Count > 60)
+                store.Remove(store.Items.Skip(60).Select(item => item.Id));
+            double width = realFixture ? Math.Max(680, store.Settings.WindowWidth) : 720;
+            double height = realFixture ? Math.Max(552, store.Settings.WindowHeight + 30) : 572;
+            if (largeWindow) { width = Math.Min(1200, SystemParameters.WorkArea.Width); height = Math.Min(780, SystemParameters.WorkArea.Height); }
+            window = new MainWindow(store, demo: true) { ShowInTaskbar = false, Width = width, Height = height };
             window.SuppressApplicationShutdownForDiagnostics = true;
             var list = (HistoryListBox)window.FindName("HistoryList")!;
             window.Show();
@@ -190,6 +211,34 @@ public static class SmoothnessProbe
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 await Task.Delay(250);
             }
+
+            window.UpdateLayout();
+            if (defaultThumbnailScaling)
+                foreach (Image image in Descendants<Image>(list).Where(image => image.Name == "Thumbnail"))
+                    RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.Unspecified);
+
+            FrameworkElement animationTarget = contentAnimation
+                ? window.FilteredListAnimationTarget() ?? throw new InvalidOperationException("No history content animation target")
+                : (FrameworkElement)window.FindName("HistoryTransitionOverlay")!;
+            DpiScale dpi = VisualTreeHelper.GetDpi(window);
+            Rect descendantBounds = VisualTreeHelper.GetDescendantBounds(animationTarget);
+            var environment = new
+            {
+                renderTier = RenderCapability.Tier >> 16,
+                clientAreaAnimation = SystemParameters.ClientAreaAnimation,
+                dpiScale = dpi.DpiScaleX,
+                windowPixelSize = new { width = window.ActualWidth * dpi.DpiScaleX, height = window.ActualHeight * dpi.DpiScaleY },
+                rowCount = store.Items.Count,
+                imageRowCount = store.Items.Count(item => item.Kind == ClipKind.Image),
+                bitmapCacheActive = Descendants<CachedHistoryRow>(list).Count(row => row.CacheMode is BitmapCache),
+                animationTarget = new
+                {
+                    type = animationTarget.GetType().Name,
+                    clipToBounds = animationTarget.ClipToBounds,
+                    renderSize = animationTarget.RenderSize.ToString(),
+                    descendantBounds = descendantBounds.ToString()
+                }
+            };
 
             IScrollInfo panel;
             UIElement wheelTarget;
@@ -320,6 +369,14 @@ public static class SmoothnessProbe
                 ((Button)window.FindName("FilterImageButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 await Task.Delay(420);
             }
+            else if (contentAnimation || overlayAnimation || noAnimation)
+            {
+                store.Settings.HistoryTypeFilter = HistoryTypeFilter.All;
+                window.Refresh();
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                if (!noAnimation) RunFilterAnimationProbe(animationTarget, contentAnimation);
+                await Task.Delay(420);
+            }
             else
             {
                 int magnitude = fineWheel || scenarioFine ? 15 : 120;
@@ -355,6 +412,7 @@ public static class SmoothnessProbe
             return new
             {
                 sampleIndex,
+                environment,
                 frames, movedFrames, packets, traveledDip = distance,
                 callbackIntervalMs = Summary(intervals),
                 uiLatencyMs = Summary(latencies),
@@ -376,6 +434,7 @@ public static class SmoothnessProbe
             sampling.Cancel();
             if (sampler is not null) { try { await sampler; } catch (OperationCanceledException) { } }
             sampling.Dispose();
+            CachedHistoryRow.DiagnosticsDisableCache = false;
             if (window is not null)
             {
                 var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -384,6 +443,31 @@ public static class SmoothnessProbe
                 await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
+    }
+
+    private static void RunFilterAnimationProbe(FrameworkElement target, bool legacyContent)
+    {
+        target.BeginAnimation(UIElement.OpacityProperty, null);
+        if (legacyContent)
+        {
+            var shift = new TranslateTransform();
+            target.RenderTransform = shift;
+            shift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(18, 0, TimeSpan.FromMilliseconds(240))
+            {
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop
+            }, HandoffBehavior.SnapshotAndReplace);
+            target.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(.6, 1, TimeSpan.FromMilliseconds(240))
+            {
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop
+            }, HandoffBehavior.SnapshotAndReplace);
+            return;
+        }
+        target.Visibility = Visibility.Visible;
+        target.Opacity = .45;
+        target.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(.45, 0, TimeSpan.FromMilliseconds(120))
+        {
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop
+        }, HandoffBehavior.SnapshotAndReplace);
     }
 
     private static ScrollProbeMode ResolveMode(string? scenarioName, ScrollProbeMode requestedMode)
@@ -408,6 +492,13 @@ public static class SmoothnessProbe
             buildTimestampUtc = file.LastWriteTimeUtc,
             version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown"
         };
+    }
+
+    private static object? SampleProperty(IReadOnlyList<JsonElement> samples, string group, string name)
+    {
+        if (samples.Count == 0 || !samples[0].TryGetProperty(group, out JsonElement container)
+            || !container.TryGetProperty(name, out JsonElement value)) return null;
+        return value.Clone();
     }
 
     private static object DistributionSummary(IReadOnlyList<JsonElement> samples)
@@ -488,5 +579,16 @@ public static class SmoothnessProbe
         for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
             if (Find<T>(VisualTreeHelper.GetChild(root, index)) is T found) return found;
         return null;
+    }
+
+    private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        if (root is not Visual && root is not System.Windows.Media.Media3D.Visual3D) yield break;
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, index);
+            if (child is T value) yield return value;
+            foreach (T nested in Descendants<T>(child)) yield return nested;
+        }
     }
 }
