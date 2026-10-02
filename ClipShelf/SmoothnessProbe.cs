@@ -29,11 +29,11 @@ public static class SmoothnessProbe
     /// <summary>One process run == one pass. Repeat the process externally for distribution.</summary>
     public static async Task RunAsync(string reportPath, bool multiSelection = false, bool fineWheel = false, string? variant = null,
         ScrollProbeDirection direction = ScrollProbeDirection.Down, bool pauseBeforeMeasurement = false, bool settings = false,
-        bool undoBeforeMeasurement = false)
+        bool undoBeforeMeasurement = false, string? scenario = null)
     {
         object? result = null;
         string? error = null;
-        try { result = await OnePassAsync(multiSelection, fineWheel, variant, direction, pauseBeforeMeasurement, settings, undoBeforeMeasurement); }
+        try { result = await OnePassAsync(multiSelection, fineWheel, variant, direction, pauseBeforeMeasurement, settings, undoBeforeMeasurement, scenario); }
         catch (Exception exception) { error = exception.ToString(); }
 
         try
@@ -49,10 +49,13 @@ public static class SmoothnessProbe
                 pauseBeforeMeasurement,
                 settings,
                 undoBeforeMeasurement,
+                scenario = scenario ?? "default",
                 variant = variant ?? "default",
                 warmup = (variant ?? "").ToLowerInvariant().Contains("warm"),
                 result,
-                scope = "In-process synthetic WPF fixture, 1000 records with 1/3 image rows. " +
+                scope = (string.Equals(scenario, "real", StringComparison.OrdinalIgnoreCase)
+                        ? "In-process read-only copy of the current local ClipShelf history; source files and user data are not modified. "
+                        : "In-process synthetic WPF fixture, 1000 records with 1/3 image rows. ") +
                         "uiLatencyMs is a Dispatcher round-trip at Send priority from a background sampler, " +
                         "i.e. how long the UI thread took to answer. GC counters and pause duration are read " +
                         "in-process. Callback intervals are NOT displayed frames and NOT a refresh-rate guarantee."
@@ -62,7 +65,7 @@ public static class SmoothnessProbe
     }
 
     private static async Task<object> OnePassAsync(bool multiSelection, bool fineWheel, string? variantName,
-        ScrollProbeDirection direction, bool pauseBeforeMeasurement, bool settings, bool undoBeforeMeasurement)
+        ScrollProbeDirection direction, bool pauseBeforeMeasurement, bool settings, bool undoBeforeMeasurement, string? scenarioName)
     {
         var intervals = new List<double>();
         var latencies = new List<double>();
@@ -72,9 +75,11 @@ public static class SmoothnessProbe
         bool warmup = requested.Contains("warm");
         string variant = requested.Replace("-warm", "").Replace("warm", "").Trim('-');
         if (variant.Length == 0) variant = "default";
+        string scenario = (scenarioName ?? "default").ToLowerInvariant();
+        bool realFixture = scenario == "real";
         string fixture = Path.Combine(Path.GetTempPath(), "ClipShelf-smoothness-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(fixture);
-        string? picture = variant == "text" ? null : Path.Combine(fixture, "screenshot.png");
+        string? picture = realFixture || variant == "text" ? null : Path.Combine(fixture, "screenshot.png");
         if (picture is not null)
         {
             int height = variant == "small" ? 300 : 12000;
@@ -84,16 +89,30 @@ public static class SmoothnessProbe
             using (var output = File.Create(picture)) encoder.Save(output);
         }
 
-        Func<int, bool> isImageRow = index => picture is not null && index % 3 == 0;
-        var seed = Enumerable.Range(0, 1000).Select(index => new ClipItem
+        bool filtered = scenario is "filtered-pinned" or "filtered-unpinned";
+        bool pinned = scenario is "filtered-pinned" or "all-pinned";
+        if (realFixture)
         {
-            Kind = isImageRow(index) ? ClipKind.Image : ClipKind.Text,
-            ImagePath = isImageRow(index) ? picture : null,
-            Text = $"独立示例记录 {index:D4} · 平滑度诊断，不包含你的剪贴板内容。",
-            CreatedAt = DateTimeOffset.Now.AddSeconds(-index)
-        }).ToArray();
-        File.WriteAllText(Path.Combine(fixture, "history.json"), JsonSerializer.Serialize(seed));
-        File.WriteAllText(Path.Combine(fixture, "settings.json"), "{\"MaxItems\":1000}");
+            string source = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClipShelf");
+            File.Copy(Path.Combine(source, "history.json"), Path.Combine(fixture, "history.json"));
+            string sourceSettings = Path.Combine(source, "settings.json");
+            if (File.Exists(sourceSettings)) File.Copy(sourceSettings, Path.Combine(fixture, "settings.json"));
+            else File.WriteAllText(Path.Combine(fixture, "settings.json"), "{\"MaxItems\":10000}");
+        }
+        else
+        {
+            Func<int, bool> isImageRow = index => picture is not null && index % 3 == 0;
+            var seed = Enumerable.Range(0, 1000).Select(index => new ClipItem
+            {
+                Kind = isImageRow(index) ? ClipKind.Image : ClipKind.Text,
+                ImagePath = isImageRow(index) ? picture : null,
+                Text = $"独立示例记录 {index:D4} · 平滑度诊断，不包含你的剪贴板内容。",
+                CreatedAt = DateTimeOffset.Now.AddSeconds(-index),
+                IsPinned = pinned && index % 17 == 1
+            }).ToArray();
+            File.WriteAllText(Path.Combine(fixture, "history.json"), JsonSerializer.Serialize(seed));
+            File.WriteAllText(Path.Combine(fixture, "settings.json"), "{\"MaxItems\":1000}");
+        }
 
         MainWindow? window = null;
         EventHandler? handler = null;
@@ -107,6 +126,28 @@ public static class SmoothnessProbe
             window.Show();
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             await Task.Delay(700);
+            if (realFixture)
+            {
+                var pinnedItem = store.Items.FirstOrDefault(item => item.IsPinned) ?? store.Items.FirstOrDefault()
+                    ?? throw new InvalidOperationException("The copied history is empty.");
+                if (!pinnedItem.IsPinned) store.TogglePinned([pinnedItem.Id]);
+                store.Settings.HistoryTypeFilter = pinnedItem.Kind switch
+                {
+                    ClipKind.File => HistoryTypeFilter.File,
+                    ClipKind.Image => HistoryTypeFilter.Image,
+                    _ => HistoryTypeFilter.Text
+                };
+                window.Refresh();
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                await Task.Delay(250);
+            }
+            if (filtered)
+            {
+                store.Settings.HistoryTypeFilter = HistoryTypeFilter.Text;
+                window.Refresh();
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                await Task.Delay(250);
+            }
 
             IScrollInfo panel;
             UIElement wheelTarget;
@@ -226,8 +267,21 @@ public static class SmoothnessProbe
             };
             CompositionTarget.Rendering += handler;
 
-            int wheelDelta = (fineWheel ? 15 : 120) * (direction == ScrollProbeDirection.Up ? 1 : -1);
-            for (int index = 0; index < 50; index++) { Packet(wheelDelta); await Task.Delay(80); }
+            if (scenario == "filter-animation")
+            {
+                ((Button)window.FindName("FilterImageButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await Task.Delay(420);
+            }
+            else
+            {
+                int wheelDelta = (fineWheel ? 15 : 120) * (direction == ScrollProbeDirection.Up ? 1 : -1);
+                for (int index = 0; index < 50; index++)
+                {
+                    int packet = scenario is "filtered-pinned" or "filtered-unpinned" or "all-pinned" or "real"
+                        ? (index < 25 ? -120 : 120) : wheelDelta;
+                    Packet(packet); await Task.Delay(80);
+                }
+            }
 
             CompositionTarget.Rendering -= handler; handler = null;
             await Task.Delay(400);

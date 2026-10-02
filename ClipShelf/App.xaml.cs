@@ -69,6 +69,7 @@ public partial class App : Application
         if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-resume-test") { await SmoothnessProbe.RunAsync(e.Args[1], pauseBeforeMeasurement: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-settings-test") { await SmoothnessProbe.RunAsync(e.Args[1], settings: true, pauseBeforeMeasurement: true); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-undo-up-test") { await SmoothnessProbe.RunAsync(e.Args[1], direction: ScrollProbeDirection.Up, undoBeforeMeasurement: true); return; }
+        if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-filtered-pin-test") { await SmoothnessProbe.RunAsync(e.Args[1], scenario: e.Args.ElementAtOrDefault(2) ?? "filtered-pinned"); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--smoothness-regression-test") { await SmoothnessRegressionTests.RunAsync(e.Args[1]); return; }
         DispatcherUnhandledException += (_, args) =>
         {
@@ -170,7 +171,7 @@ public partial class App : Application
             "--scroll-render-test" or "--multi-scroll-test" or "--fine-scroll-test" or "--preview-scroll-test" or
             "--smoothness-test" or "--smoothness-multi-test" or "--smoothness-fine-test" or
             "--smoothness-up-test" or "--smoothness-resume-test" or "--smoothness-settings-test" or
-            "--smoothness-undo-up-test" or "--smoothness-regression-test"
+            "--smoothness-undo-up-test" or "--smoothness-filtered-pin-test" or "--smoothness-regression-test"
             ? Path.GetFullPath(args[1]) : null;
     }
 }
