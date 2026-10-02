@@ -35,6 +35,7 @@ internal static class HistoryTypeFilterTests
             var search = (TextBox)window.FindName("SearchBox");
             var emptyTitle = (TextBlock)window.FindName("EmptyTitle");
             var historyBorder = (FrameworkElement)window.FindName("HistoryBorder");
+            var transitionOverlay = (FrameworkElement)window.FindName("HistoryTransitionOverlay");
             var filterSelection = (FrameworkElement)window.FindName("TypeFilterSelection");
             Button Filter(string name) => (Button)window.FindName(name);
             void Click(string name) => Filter(name).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -58,21 +59,23 @@ internal static class HistoryTypeFilterTests
             Check(ReferenceEquals(Filter("FilterFileButton").ReadLocalValue(Control.BorderBrushProperty), Brushes.Transparent),
                 "Destination filter border stays hidden while the shared surface is moving");
             var contentHost = Descendants<ScrollContentPresenter>(list).First();
-            var listShift = contentHost.RenderTransform as TranslateTransform ?? new TranslateTransform();
             var indicatorShift = (TranslateTransform)filterSelection.RenderTransform;
             Rect frameFirst = BoundsInWindow(historyBorder, window);
-            double listFirstY = listShift.Y, listFirstOpacity = contentHost.Opacity, indicatorFirst = indicatorShift.X;
-            Check(Math.Abs(listShift.X) < .01, "Type filtering starts without horizontal history motion");
+            double overlayFirstOpacity = transitionOverlay.Opacity, indicatorFirst = indicatorShift.X;
+            Check(contentHost.ReadLocalValue(UIElement.RenderTransformProperty) == DependencyProperty.UnsetValue,
+                "Type filtering creates no horizontal or vertical history transform");
             await Task.Delay(55); Rect frameMiddle = BoundsInWindow(historyBorder, window);
-            double listMiddleY = listShift.Y, listMiddleOpacity = contentHost.Opacity, indicatorMiddle = indicatorShift.X;
+            double overlayMiddleOpacity = transitionOverlay.Opacity, indicatorMiddle = indicatorShift.X;
             await Task.Delay(230); await Idle();
             Rect frameFinal = BoundsInWindow(historyBorder, window);
-            Check(!SystemParameters.ClientAreaAnimation || (new[] { listFirstY, listMiddleY, listShift.Y }.Distinct().Count() >= 2
-                && new[] { listFirstOpacity, listMiddleOpacity, contentHost.Opacity }.Distinct().Count() >= 2
+            Check(!SystemParameters.ClientAreaAnimation || (new[] { overlayFirstOpacity, overlayMiddleOpacity, transitionOverlay.Opacity }.Distinct().Count() >= 2
+                && overlayFirstOpacity >= overlayMiddleOpacity && overlayMiddleOpacity >= transitionOverlay.Opacity
                 && new[] { indicatorFirst, indicatorMiddle, indicatorShift.X }.Distinct().Count() >= 2),
-                "Type selection slides while history rises and fades through intermediate values");
-            Check(Math.Abs(listShift.X) < .01 && Math.Abs(listShift.Y) < .01 && Math.Abs(contentHost.Opacity - 1) < .01,
-                "History filter motion settles at neutral X/Y and full opacity");
+                "Type selection slides while the history overlay fades monotonically through intermediate values");
+            Check(contentHost.ReadLocalValue(UIElement.RenderTransformProperty) == DependencyProperty.UnsetValue
+                && Math.Abs(contentHost.Opacity - 1) < .01 && Math.Abs(transitionOverlay.Opacity) < .01
+                && transitionOverlay.Visibility == Visibility.Hidden,
+                "History filter transition settles without transforms or a residual animation layer");
             Check(historyBorder.ReadLocalValue(UIElement.RenderTransformProperty) == DependencyProperty.UnsetValue
                 && Math.Abs(historyBorder.Opacity - 1) < .01
                 && Near(frameFirst, frameMiddle) && Near(frameFirst, frameFinal),
@@ -94,8 +97,10 @@ internal static class HistoryTypeFilterTests
 
             Click("FilterImageButton");
             Check(Visible().Length == 1 && Visible()[0].Kind == ClipKind.Image, "Image filter works on the empty-query fast path");
-            store.Remove(new[] { image.Id }); window.Refresh();
+            store.Remove(new[] { image.Id }); Click("FilterAllButton"); Click("FilterImageButton");
             Check(Visible().Length == 0 && emptyTitle.Text == "没有此类型的记录", "Type-only empty state is distinct from empty history");
+            Check(transitionOverlay.Visibility == Visibility.Hidden && Math.Abs(transitionOverlay.Opacity) < .01,
+                "Empty filter results do not play a transition");
             Click("FilterAllButton"); search.Text = "绝不匹配"; await window.PendingSearch;
             Check(Visible().Length == 0 && emptyTitle.Text == "没有匹配的记录", "Search empty state is distinct from type filtering");
             search.Clear(); store.Clear(); window.Refresh();

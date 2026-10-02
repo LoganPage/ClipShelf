@@ -43,7 +43,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private bool dragRendering;
     private bool typeFilterAnimationActive, typeFilterResizePending;
-    private int typeFilterAnimationVersion;
+    private int typeFilterAnimationVersion, filteredListAnimationVersion;
     private long dragFrameTick;
     private TimeSpan dragRenderingTime = TimeSpan.MinValue;
     private bool quitting, refreshing, dragging, pointerDown, suppressDragRelease;
@@ -386,31 +386,29 @@ public partial class MainWindow : Window
     }
     private void AnimateFilteredList()
     {
-        FrameworkElement? content = FilteredListAnimationTarget();
-        if (content is null) return;
-        if (content.RenderTransform is not TranslateTransform shift)
-            content.RenderTransform = shift = new TranslateTransform();
-        shift.BeginAnimation(TranslateTransform.XProperty, null);
-        shift.BeginAnimation(TranslateTransform.YProperty, null);
-        content.BeginAnimation(OpacityProperty, null);
-        shift.X = 0;
-        shift.Y = 0;
-        content.Opacity = 1;
-        if (!IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
-        var easing = new SineEase { EasingMode = EasingMode.EaseInOut };
-        shift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(18, 0, TimeSpan.FromMilliseconds(240))
-        {
-            EasingFunction = easing,
-            FillBehavior = FillBehavior.Stop
-        }, HandoffBehavior.SnapshotAndReplace);
-        content.BeginAnimation(OpacityProperty, new DoubleAnimation(.6, 1, TimeSpan.FromMilliseconds(240))
+        int version = ++filteredListAnimationVersion;
+        HistoryTransitionOverlay.BeginAnimation(OpacityProperty, null);
+        HistoryTransitionOverlay.Opacity = 0;
+        HistoryTransitionOverlay.Visibility = Visibility.Hidden;
+        if (HistoryList.Items.Count == 0 || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
+        HistoryTransitionOverlay.Visibility = Visibility.Visible;
+        HistoryTransitionOverlay.Opacity = .45;
+        var animation = new DoubleAnimation(.45, 0, TimeSpan.FromMilliseconds(120))
         {
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             FillBehavior = FillBehavior.Stop
-        }, HandoffBehavior.SnapshotAndReplace);
+        };
+        animation.Completed += (_, _) =>
+        {
+            if (version != filteredListAnimationVersion) return;
+            HistoryTransitionOverlay.BeginAnimation(OpacityProperty, null);
+            HistoryTransitionOverlay.Opacity = 0;
+            HistoryTransitionOverlay.Visibility = Visibility.Hidden;
+        };
+        HistoryTransitionOverlay.BeginAnimation(OpacityProperty, animation, HandoffBehavior.SnapshotAndReplace);
     }
 
-    private FrameworkElement? FilteredListAnimationTarget()
+    internal FrameworkElement? FilteredListAnimationTarget()
     {
         FrameworkElement? presenter = Descendant<ScrollContentPresenter>(HistoryList);
         if (CanOwnFilterAnimation(presenter)) return presenter;
