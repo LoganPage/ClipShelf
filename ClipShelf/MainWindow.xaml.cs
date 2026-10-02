@@ -24,6 +24,7 @@ namespace ClipShelf;
 
 public partial class MainWindow : Window
 {
+    internal bool SuppressApplicationShutdownForDiagnostics { get; set; }
     public HistoryStore Store { get; }
     public WindowsIntegration? Integration { get; private set; }
     private readonly bool demo;
@@ -385,17 +386,16 @@ public partial class MainWindow : Window
     }
     private void AnimateFilteredList()
     {
-        if (HistoryBorder.RenderTransform is not TranslateTransform shift)
-        {
-            shift = new TranslateTransform();
-            HistoryBorder.RenderTransform = shift;
-        }
+        FrameworkElement? content = FilteredListAnimationTarget();
+        if (content is null) return;
+        if (content.RenderTransform is not TranslateTransform shift)
+            content.RenderTransform = shift = new TranslateTransform();
         shift.BeginAnimation(TranslateTransform.XProperty, null);
         shift.BeginAnimation(TranslateTransform.YProperty, null);
-        HistoryBorder.BeginAnimation(OpacityProperty, null);
+        content.BeginAnimation(OpacityProperty, null);
         shift.X = 0;
         shift.Y = 0;
-        HistoryBorder.Opacity = 1;
+        content.Opacity = 1;
         if (!IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
         var easing = new SineEase { EasingMode = EasingMode.EaseInOut };
         shift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(18, 0, TimeSpan.FromMilliseconds(240))
@@ -403,12 +403,24 @@ public partial class MainWindow : Window
             EasingFunction = easing,
             FillBehavior = FillBehavior.Stop
         }, HandoffBehavior.SnapshotAndReplace);
-        HistoryBorder.BeginAnimation(OpacityProperty, new DoubleAnimation(.6, 1, TimeSpan.FromMilliseconds(240))
+        content.BeginAnimation(OpacityProperty, new DoubleAnimation(.6, 1, TimeSpan.FromMilliseconds(240))
         {
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             FillBehavior = FillBehavior.Stop
         }, HandoffBehavior.SnapshotAndReplace);
     }
+
+    private FrameworkElement? FilteredListAnimationTarget()
+    {
+        FrameworkElement? presenter = Descendant<ScrollContentPresenter>(HistoryList);
+        if (CanOwnFilterAnimation(presenter)) return presenter;
+        FrameworkElement? items = Descendant<ItemsPresenter>(HistoryList);
+        return CanOwnFilterAnimation(items) ? items : null;
+    }
+
+    private static bool CanOwnFilterAnimation(FrameworkElement? element) => element is not null
+        && (element.ReadLocalValue(RenderTransformProperty) == DependencyProperty.UnsetValue
+            || element.RenderTransform is TranslateTransform);
     private void AlwaysOnTop_Click(object sender, RoutedEventArgs e)
     {
         Store.Settings.AlwaysOnTop = !Store.Settings.AlwaysOnTop;
@@ -702,7 +714,8 @@ public partial class MainWindow : Window
         Store.Changed -= StoreChanged; SystemEvents.UserPreferenceChanged -= SystemAppearanceChanged;
         toastTimer.Stop(); StopDragFrames(); DisposeTray();
         if (preview is { } activePreview) await activePreview.CloseAndReleaseAsync();
-        previewCache.Dispose(); Close(); Application.Current.Shutdown();
+        previewCache.Dispose(); Close();
+        if (!SuppressApplicationShutdownForDiagnostics) Application.Current.Shutdown();
     }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int RegisterWindowMessage(string name);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
