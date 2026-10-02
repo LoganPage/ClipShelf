@@ -28,10 +28,35 @@ enum ClipKindFilter: String, CaseIterable, Identifiable {
 }
 
 enum ClipHistoryFilter {
+    private static let searchIndexCache = ClipSearchIndexCache()
+
     static func items(_ items: [ClipItem], kind: ClipKindFilter, query: String) -> [ClipItem] {
+        filteredItems(items, kind: kind, query: query, indexCache: searchIndexCache)
+    }
+
+    static func items(
+        _ items: [ClipItem],
+        kind: ClipKindFilter,
+        query: String,
+        indexCache: ClipSearchIndexCache
+    ) -> [ClipItem] {
+        filteredItems(items, kind: kind, query: query, indexCache: indexCache)
+    }
+
+    private static func filteredItems(
+        _ items: [ClipItem],
+        kind: ClipKindFilter,
+        query: String,
+        indexCache: ClipSearchIndexCache
+    ) -> [ClipItem] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        indexCache.setMaximumEntryCount(items.count + 8)
+        guard !trimmedQuery.isEmpty else {
+            return items.filter { kind.matches($0) }
+        }
         return items.filter { item in
-            kind.matches(item) && SearchMatcher.matches(item, query: trimmedQuery)
+            kind.matches(item)
+                && indexCache.matches(item, query: trimmedQuery)
         }
     }
 }

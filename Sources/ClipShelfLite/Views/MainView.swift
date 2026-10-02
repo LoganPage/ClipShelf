@@ -2,6 +2,12 @@ import AppKit
 import SwiftUI
 
 struct MainView: View {
+    private struct SearchSignature: Equatable {
+        let ids: [ClipItem.ID]
+        let kind: ClipKindFilter
+        let query: String
+    }
+
     @ObservedObject var store: ClipStore
     @ObservedObject var watcher: ScreenshotFolderWatcher
     @State private var searchText = ""
@@ -31,13 +37,20 @@ struct MainView: View {
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
     @State private var showingClearHistoryConfirmation = false
     @State private var lastRevealedNewest: Date?
+    @State private var filteredItemsCache = [ClipItem]()
+    @State private var filteredItemsSignature: SearchSignature?
+    @State private var searchIndexCache = ClipSearchIndexCache()
     @FocusState private var isSearchFocused: Bool
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = 10
     private let historyListVerticalInset: CGFloat = 8
 
+    private var searchSignature: SearchSignature {
+        SearchSignature(ids: store.items.map(\.id), kind: kindFilter, query: searchText)
+    }
+
     private var liveFilteredItems: [ClipItem] {
-        ClipHistoryFilter.items(store.items, kind: kindFilter, query: searchText)
+        filteredItemsCache
     }
 
     private var filteredItems: [ClipItem] {
@@ -93,6 +106,8 @@ struct MainView: View {
             Text(ClearHistoryConfirmation.message(itemCount: store.items.count))
         }
         .onAppear {
+            refreshFilteredItemsIfNeeded()
+            prewarmSearchIndexes(for: store.items)
             lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
             installCommandKeyMonitorIfNeeded()
             updateChecker.checkIfNeeded()
@@ -225,10 +240,18 @@ struct MainView: View {
                 }
                 lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
             }
+            .onChange(of: searchSignature) { _ in
+                refreshFilteredItemsIfNeeded()
+            }
+            .onChange(of: store.items.map(\.id)) { _ in
+                prewarmSearchIndexes(for: store.items)
+            }
             .onChange(of: searchText) { _ in
+                refreshFilteredItemsIfNeeded()
                 clearSelection()
             }
             .onChange(of: kindFilter) { _ in
+                refreshFilteredItemsIfNeeded()
                 clearSelection()
                 HistoryFilterPreferences.value = kindFilter
                 DispatchQueue.main.async {
@@ -427,6 +450,25 @@ struct MainView: View {
     private func closeSettings() {
         withAnimation(.easeOut(duration: 0.16)) {
             showingSettings = false
+        }
+    }
+
+    private func refreshFilteredItemsIfNeeded() {
+        let signature = searchSignature
+        guard filteredItemsSignature != signature else { return }
+        filteredItemsCache = ClipHistoryFilter.items(
+            store.items,
+            kind: kindFilter,
+            query: searchText,
+            indexCache: searchIndexCache
+        )
+        filteredItemsSignature = signature
+    }
+
+    private func prewarmSearchIndexes(for items: [ClipItem]) {
+        let cache = searchIndexCache
+        DispatchQueue.global(qos: .utility).async {
+            cache.prewarm(items)
         }
     }
 

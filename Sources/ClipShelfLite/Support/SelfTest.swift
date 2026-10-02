@@ -1125,6 +1125,113 @@ enum ClipShelfSelfTest {
             failure: "The selection animation changed curve or escaped the background surface layer"
         ))
 
+        let searchEquivalenceFixtures: [(String, ClipItem)] = [
+            (
+                "chinese-title",
+                ClipItem(kind: .text, title: "李永乐讲比特币", text: "课程摘要")
+            ),
+            (
+                "long-text",
+                ClipItem(
+                    kind: .text,
+                    title: "Meeting Notes",
+                    text: String(repeating: "这是一段用于搜索索引等价验证的长文本。", count: 300) + " project nebula"
+                )
+            ),
+            (
+                "file-path",
+                ClipItem(kind: .file, title: "Document", filePaths: ["/tmp/BTC-Résumé.PDF"])
+            ),
+            (
+                "source-path",
+                ClipItem(kind: .image, title: "Picture", sourcePath: "/Pictures/截图😀Ｆｕｌｌ.png")
+            ),
+            (
+                "emoji-fullwidth-diacritic",
+                ClipItem(kind: .text, title: "✨ Ｃａｆé НАБОР", text: "Emoji 😀 and naïve façade")
+            ),
+            (
+                "negative-control",
+                ClipItem(kind: .text, title: "Completely unrelated", text: "quiet archive")
+            )
+        ]
+        let searchEquivalenceQueries = [
+            "", "liyongle", "lyl", "ygl", "比特", "Meeting Notes", "metingnotes",
+            "PROJECTNEBULA", "ｂｔｃ", "resume", "截图", "full", "cafe", "naive", "not-present"
+        ]
+        var searchEquivalenceMismatch: String?
+        for (fixtureName, item) in searchEquivalenceFixtures where searchEquivalenceMismatch == nil {
+            for query in searchEquivalenceQueries {
+                let indexed = SearchMatcher.matches(item, query: query)
+                let unindexed = SearchMatcher.matchesUnindexed(item, query: query)
+                if indexed != unindexed {
+                    searchEquivalenceMismatch = "fixture=\(fixtureName), query=\(query), indexed=\(indexed), unindexed=\(unindexed)"
+                    break
+                }
+            }
+        }
+        if searchEquivalenceMismatch == nil {
+            for filter in ClipKindFilter.allCases where searchEquivalenceMismatch == nil {
+                for query in searchEquivalenceQueries {
+                    let indexedIDs = ClipHistoryFilter.items(
+                        searchEquivalenceFixtures.map(\.1),
+                        kind: filter,
+                        query: query
+                    ).map(\.id)
+                    let unindexedIDs = searchEquivalenceFixtures.map(\.1).filter {
+                        filter.matches($0) && SearchMatcher.matchesUnindexed($0, query: query)
+                    }.map(\.id)
+                    if indexedIDs != unindexedIDs {
+                        searchEquivalenceMismatch = "fixture=kind-filter-\(filter.rawValue), query=\(query)"
+                        break
+                    }
+                }
+            }
+        }
+        results.append(check(
+            name: "search index path stays equivalent to the unindexed path for pinyin queries",
+            condition: searchEquivalenceMismatch == nil,
+            success: "Every fixture and query matches identically through indexed and unindexed paths",
+            failure: "Search path mismatch: \(searchEquivalenceMismatch ?? "unknown fixture/query")"
+        ))
+
+        let reuseIndexCache = ClipSearchIndexCache(maximumEntryCount: 2)
+        let reuseItem = ClipItem(kind: .image, title: "索引复用", imageData: Data([1, 2, 3]))
+        let firstReuseIndex = reuseIndexCache.index(for: reuseItem)
+        var imageOnlyChange = reuseItem
+        imageOnlyChange.imageData = Data([9, 8, 7, 6])
+        let secondReuseIndex = reuseIndexCache.index(for: imageOnlyChange)
+        results.append(check(
+            name: "search index is reused across queries for the same record",
+            condition: reuseIndexCache.buildCount == 1 && firstReuseIndex == secondReuseIndex,
+            success: "Repeated access and image-only changes reuse one searchable index",
+            failure: "The same searchable fields rebuilt the index \(reuseIndexCache.buildCount) times"
+        ))
+
+        let rebuildIndexCache = ClipSearchIndexCache(maximumEntryCount: 2)
+        var replaceableItem = ClipItem(kind: .text, title: "Mutable", text: "original text")
+        _ = rebuildIndexCache.index(for: replaceableItem)
+        replaceableItem.text = "李永乐 replacement text"
+        let rebuiltIndex = rebuildIndexCache.index(for: replaceableItem)
+        results.append(check(
+            name: "search index rebuilds when a record's searchable text changes",
+            condition: rebuildIndexCache.buildCount == 2
+                && SearchMatcher.matches(rebuiltIndex, query: "liyongle"),
+            success: "Replacing searchable text invalidates and rebuilds the cached index",
+            failure: "A searchable-text replacement reused stale index content"
+        ))
+
+        let boundedIndexCache = ClipSearchIndexCache(maximumEntryCount: 3)
+        for number in 0..<8 {
+            _ = boundedIndexCache.index(for: ClipItem(kind: .text, title: "bounded-\(number)"))
+        }
+        results.append(check(
+            name: "search index cache stays within its bound",
+            condition: boundedIndexCache.count == 3 && boundedIndexCache.buildCount == 8,
+            success: "Least-recently-used eviction keeps the index cache at its configured limit",
+            failure: "Index cache count was \(boundedIndexCache.count) instead of 3"
+        ))
+
         _ = CFPreferencesAppSynchronize(suiteName as CFString)
         let unexpectedSelfTestDefaultsFiles = selfTestDefaultsFiles()
             .subtracting(allowedSelfTestDefaultsFiles)
