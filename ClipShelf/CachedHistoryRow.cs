@@ -1,3 +1,4 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -17,8 +18,15 @@ public sealed class CachedHistoryRow : Grid
     }
     private void UpdateCache(DpiScale dpi)
     {
-        CacheMode = !DiagnosticsDisableCache && !RuntimeFeatureSwitches.NoRowCache && (RenderCapability.Tier >> 16) > 0
-            ? new BitmapCache { RenderAtScale = dpi.DpiScaleX, EnableClearType = true, SnapsToDevicePixels = true }
-            : null;
+        bool enabled = !DiagnosticsDisableCache && !RuntimeFeatureSwitches.NoRowCache && (RenderCapability.Tier >> 16) > 0;
+        if (!enabled)
+        {
+            if (CacheMode is not null) CacheMode = null;
+            return;
+        }
+        if (CacheMode is BitmapCache current
+            && Math.Abs(current.RenderAtScale - dpi.DpiScaleX) < .001
+            && current.EnableClearType && current.SnapsToDevicePixels) return;
+        CacheMode = new BitmapCache { RenderAtScale = dpi.DpiScaleX, EnableClearType = true, SnapsToDevicePixels = true };
     }
 }

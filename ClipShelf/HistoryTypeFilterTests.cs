@@ -51,11 +51,21 @@ internal static class HistoryTypeFilterTests
             }
 
             Check(Visible().Length == 4, "All filter initially shows every record");
+            var adjacentTransition = MainWindow.FilteredListTransition(0, 1);
+            var distantTransition = MainWindow.FilteredListTransition(0, 3);
+            Check(adjacentTransition.DurationMilliseconds > distantTransition.DurationMilliseconds
+                && adjacentTransition.PeakOpacity < distantTransition.PeakOpacity,
+                "Adjacent filters use a longer, lower-intensity fade than distant filters");
+            Check(Math.Abs(distantTransition.DurationMilliseconds - 120) < .01
+                && Math.Abs(distantTransition.PeakOpacity - .45) < .001,
+                "The established All-to-Image transition remains the distant-filter baseline");
             var changes = (System.Collections.Specialized.INotifyCollectionChanged)list.ItemsSource;
             int resets = 0;
             changes.CollectionChanged += (_, e) => { if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) resets++; };
             Click("FilterFileButton");
             Check(Visible().Length == 1 && Visible()[0].Kind == ClipKind.File, "File filter shows only file records");
+            Check(list.VirtualizedContainerResetCount == 1,
+                "Changing record type clears stale visual containers exactly once");
             Check(ReferenceEquals(Filter("FilterFileButton").ReadLocalValue(Control.BorderBrushProperty), Brushes.Transparent),
                 "Destination filter border stays hidden while the shared surface is moving");
             var contentHost = Descendants<ScrollContentPresenter>(list).First();
@@ -121,6 +131,10 @@ internal static class HistoryTypeFilterTests
             scroll.ScrollToVerticalOffset(350); await Idle(); double repeatedOffset = scroll.VerticalOffset;
             await KeyboardActivate("FilterFileButton");
             Check(repeatedOffset > 0 && Math.Abs(scroll.VerticalOffset - repeatedOffset) < .01, "Keyboard activation of the selected filter preserves scroll position");
+            int resetCountAfterRepeatedFilter = list.VirtualizedContainerResetCount;
+            await KeyboardActivate("FilterFileButton");
+            Check(list.VirtualizedContainerResetCount == resetCountAfterRepeatedFilter,
+                "Reactivating the current type does not rebuild visual containers");
             search.Text = "Alpha"; await window.PendingSearch; await Idle();
             Check(scroll.VerticalOffset == 0, "Keyword search still resets the filtered list to the top");
             scroll.ScrollToVerticalOffset(250); await Idle();

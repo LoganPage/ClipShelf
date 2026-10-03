@@ -37,7 +37,7 @@ public partial class MainWindow : Window
     private ScrollViewer? HistoryScroll => historyScroll ??= Descendant<ScrollViewer>(HistoryList);
     private CancellationTokenSource? searchCancellation;
     internal Task PendingSearch { get; private set; } = Task.CompletedTask;
-    private bool refreshPending, refreshQueued, resetScroll, suppressViewportCompensation;
+    private bool refreshPending, refreshQueued, resetScroll, suppressViewportCompensation, resetFilterContainers;
     private int rangeStart = -1, rangeEnd = -1;
     private const double RowHeight = 74;
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(3) };
@@ -233,6 +233,11 @@ public partial class MainWindow : Window
                 else displayed.Insert(i, next[i]);
             }
             visible = next;
+            if (resetFilterContainers)
+            {
+                resetFilterContainers = false;
+                HistoryList.ResetVirtualizedContainers();
+            }
             HistoryList.ReplaceSelection(visible.Where(x => selected.Contains(x.Id)).ToArray());
             ResetRangeCache();
             if (focusedId is Guid oldFocus && !wanted.Contains(oldFocus))
@@ -315,9 +320,10 @@ public partial class MainWindow : Window
         Store.SaveSettings();
         UpdateTypeFilterButtons();
         resetScroll = true;
+        resetFilterContainers = true;
         Refresh();
         PositionTypeFilterSelection(animate: true, previousIndex: previousIndex);
-        AnimateFilteredList();
+        AnimateFilteredList(previousIndex);
     }
     private IEnumerable<Button> TypeFilterButtons() => new[] { FilterAllButton, FilterTextButton, FilterFileButton, FilterImageButton };
     private void ClearTypeFilterBorderOverrides()
@@ -384,16 +390,22 @@ public partial class MainWindow : Window
         };
         shift.BeginAnimation(TranslateTransform.XProperty, animation, HandoffBehavior.SnapshotAndReplace);
     }
-    private void AnimateFilteredList()
+    internal static (double PeakOpacity, double DurationMilliseconds) FilteredListTransition(int previousIndex, int targetIndex)
+    {
+        int distance = Math.Clamp(Math.Abs(targetIndex - previousIndex), 1, 3);
+        return (.28 + .17 * distance / 3.0, 210 - 30 * distance);
+    }
+    private void AnimateFilteredList(int previousIndex)
     {
         int version = ++filteredListAnimationVersion;
         HistoryTransitionOverlay.BeginAnimation(OpacityProperty, null);
         HistoryTransitionOverlay.Opacity = 0;
         HistoryTransitionOverlay.Visibility = Visibility.Hidden;
         if (HistoryList.Items.Count == 0 || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
+        var transition = FilteredListTransition(previousIndex, FilterIndex(Store.Settings.HistoryTypeFilter));
         HistoryTransitionOverlay.Visibility = Visibility.Visible;
-        HistoryTransitionOverlay.Opacity = .45;
-        var animation = new DoubleAnimation(.45, 0, TimeSpan.FromMilliseconds(120))
+        HistoryTransitionOverlay.Opacity = transition.PeakOpacity;
+        var animation = new DoubleAnimation(transition.PeakOpacity, 0, TimeSpan.FromMilliseconds(transition.DurationMilliseconds))
         {
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             FillBehavior = FillBehavior.Stop

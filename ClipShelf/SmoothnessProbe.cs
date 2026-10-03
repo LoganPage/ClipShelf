@@ -124,7 +124,8 @@ public static class SmoothnessProbe
         Directory.CreateDirectory(fixture);
         bool createImages = !realFixture && variant != "text";
 
-        bool filtered = scenario is "filtered-pinned" or "filtered-pinned-fine" or "filtered-unpinned";
+        bool filtered = scenario is "filtered-pinned" or "filtered-pinned-fine" or "filtered-unpinned"
+            or "filtered-reset-source" or "filtered-reset-containers" or "filtered-product" or "filtered-product-image";
         bool pinned = scenario is "filtered-pinned" or "filtered-pinned-fine" or "all-pinned";
         if (realFixture)
         {
@@ -205,9 +206,28 @@ public static class SmoothnessProbe
             }
             if (filtered)
             {
-                store.Settings.HistoryTypeFilter = HistoryTypeFilter.Text;
-                window.Refresh();
+                if (scenario is "filtered-product" or "filtered-product-image")
+                    ((Button)window.FindName(scenario == "filtered-product-image" ? "FilterImageButton" : "FilterTextButton")!)
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                else
+                {
+                    store.Settings.HistoryTypeFilter = HistoryTypeFilter.Text;
+                    window.Refresh();
+                }
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                if (scenario == "filtered-reset-source")
+                {
+                    object? source = list.ItemsSource;
+                    list.ItemsSource = null;
+                    list.ItemsSource = source as System.Collections.IEnumerable;
+                    await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                }
+                else if (scenario == "filtered-reset-containers")
+                {
+                    ((IItemContainerGenerator)list.ItemContainerGenerator).RemoveAll();
+                    list.InvalidateMeasure();
+                    await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                }
                 await Task.Delay(250);
             }
 

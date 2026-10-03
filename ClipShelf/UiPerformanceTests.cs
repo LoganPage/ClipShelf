@@ -80,6 +80,11 @@ public static class UiPerformanceTests
             Check(ReferenceEquals(brush, Application.Current.Resources["SurfaceBrush"]), "unchanged theme does not invalidate brushes");
             Check(ReferenceEquals(ThemeManager.Icon(1), ThemeManager.Icon(1)), "application icons use stable frozen cache");
             IconAssetTests.Verify(Check);
+            var cachedRow = Find<CachedHistoryRow>(list) ?? throw new InvalidOperationException("No cached history row");
+            CacheMode? existingRowCache = cachedRow.CacheMode;
+            cachedRow.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent, cachedRow));
+            Check(existingRowCache is null || ReferenceEquals(existingRowCache, cachedRow.CacheMode),
+                "A recycled row reuses its matching bitmap cache instead of allocating another one");
             for (int i = 0; i < 80; i++) { scroll.ScrollToVerticalOffset(i * 113.5); await Idle(); }
             Check(Enumerable.Range(0, 1000).Count(i => list.ItemContainerGenerator.ContainerFromIndex(i) is not null) < 40, "scroll stress retains bounded recycled containers");
             Check(await ThumbnailLoader.LoadAsync(Path.Combine(directory, "missing.png")) is null, "missing thumbnail degrades without UI exception");
@@ -91,6 +96,11 @@ public static class UiPerformanceTests
                 var thumbnail = await ThumbnailLoader.LoadAsync(path);
                 Check(thumbnail is not null && thumbnail.IsFrozen && thumbnail.PixelWidth <= 156 && thumbnail.PixelHeight <= 120, $"Thumbnail {size.Width}x{size.Height} has bounded decoded width AND height");
                 Check(ReferenceEquals(thumbnail, await ThumbnailLoader.LoadAsync(path)), "Thumbnail cache avoids repeated decoding");
+                var recycledImage = new Image();
+                ThumbnailLoader.SetPath(recycledImage, path);
+                recycledImage.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent, recycledImage));
+                Check(ReferenceEquals(thumbnail, recycledImage.Source), "A recycled image row binds a cached thumbnail synchronously");
+                recycledImage.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent, recycledImage));
             }
             var caption = window.FindResource("CaptionButton") as Style;
             Check(caption is not null && (double)caption.Setters.OfType<Setter>().Single(s => s.Property == Control.FontSizeProperty).Value == 10, "Caption icons use a separate compact style");

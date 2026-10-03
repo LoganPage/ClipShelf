@@ -158,6 +158,15 @@ public sealed class HistoryListBox : ListBox
 
     private double MaximumOffset => wheelPanel is null ? 0 : Math.Max(0, wheelPanel.ExtentHeight - wheelPanel.ViewportHeight);
     internal bool IsWheelAnimating => rendering;
+    internal int VirtualizedContainerResetCount { get; private set; }
+    internal void ResetVirtualizedContainers()
+    {
+        CancelWheelMotion();
+        ((IItemContainerGenerator)ItemContainerGenerator).RemoveAll();
+        VirtualizedContainerResetCount++;
+        InvalidateMeasure();
+    }
+
     internal static bool ShouldApplyWheelPrewarm(bool clientAreaAnimation, bool directInput)
         => clientAreaAnimation && !directInput && !RuntimeFeatureSwitches.NativeWheel
             && !RuntimeFeatureSwitches.InstantWheel && RuntimeFeatureSwitches.WheelPrewarmMs > 0;

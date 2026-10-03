@@ -104,7 +104,8 @@ public sealed class SmoothScrollViewer : ScrollViewer
         // synchronous SetVerticalOffset call makes the first wheel input after an idle
         // pause visibly hitch; a higher response frequency keeps it direct without
         // turning it into an instant jump.
-        motion.ResponseFrequency = WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28;
+        motion.ResponseFrequency = RuntimeFeatureSwitches.WheelResponse
+            ?? (WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28);
         double current = hasRequest ? requestedOffset : scrollInfo.VerticalOffset;
         if (directInput || !SystemParameters.ClientAreaAnimation)
         {
@@ -114,6 +115,8 @@ public sealed class SmoothScrollViewer : ScrollViewer
         {
             if (!motion.IsActive) motion.Reset(current, MaximumOffset);
             motion.AddDistance(distance, MaximumOffset);
+            if (HistoryListBox.ShouldApplyWheelPrewarm(SystemParameters.ClientAreaAnimation, directInput))
+                RequestOffset(motion.Advance(RuntimeFeatureSwitches.WheelPrewarmMs / 1000.0, MaximumOffset));
             if (motion.IsActive && !rendering)
             {
                 lastTimestamp = now; lastRenderingTime = TimeSpan.MinValue;

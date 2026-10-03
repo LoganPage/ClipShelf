@@ -39,6 +39,11 @@ public static class ThumbnailLoader
     {
         Cancel(image);
         if (GetPath(image) is not string path || string.IsNullOrWhiteSpace(path)) return;
+        if (TryGetCached(path, out BitmapImage? cached))
+        {
+            image.Source = cached;
+            return;
+        }
         var request = new CancellationTokenSource(); image.SetValue(RequestProperty, request);
         var cancellation = request.Token;
         try
@@ -51,7 +56,7 @@ public static class ThumbnailLoader
     }
     internal static async Task<BitmapImage?> LoadAsync(string path, CancellationToken cancellation = default)
     {
-        lock (gate) if (cache.TryGetValue(path, out var node)) { recent.Remove(node); recent.AddLast(node); return node.Value.Image; }
+        if (TryGetCached(path, out BitmapImage? cachedImage)) return cachedImage;
         await decodeSlots.WaitAsync(cancellation);
         try
         {
@@ -85,5 +90,21 @@ public static class ThumbnailLoader
             }, cancellation);
         }
         finally { decodeSlots.Release(); }
+    }
+
+    private static bool TryGetCached(string path, out BitmapImage? image)
+    {
+        lock (gate)
+        {
+            if (!cache.TryGetValue(path, out var node))
+            {
+                image = null;
+                return false;
+            }
+            recent.Remove(node);
+            recent.AddLast(node);
+            image = node.Value.Image;
+            return true;
+        }
     }
 }
