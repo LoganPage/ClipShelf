@@ -40,6 +40,7 @@ struct MainView: View {
     @State private var filteredItemsCache = [ClipItem]()
     @State private var filteredItemsSignature: SearchSignature?
     @State private var searchIndexCache = ClipSearchIndexCache()
+    @State private var imageThumbnailCache = ImageThumbnailCache()
     @FocusState private var isSearchFocused: Bool
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = 10
@@ -108,6 +109,7 @@ struct MainView: View {
         .onAppear {
             refreshFilteredItemsIfNeeded()
             prewarmSearchIndexes(for: store.items)
+            imageThumbnailCache.setMaximumEntryCount(store.items.count + 8)
             lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
             installCommandKeyMonitorIfNeeded()
             updateChecker.checkIfNeeded()
@@ -172,6 +174,7 @@ struct MainView: View {
                             isSelected: isSelected,
                             selectionColor: selectionColor,
                             selectionColorIsPreset: selectionColorPreset != nil,
+                            imageThumbnailCache: imageThumbnailCache,
                             showsSeparator: index < filteredItems.count - 1 && !isSelected && !isNextSelected,
                             handleClick: { event in handleRowClick(item, event: event) },
                             handleCopy: { store.copy(actionItems(for: item)) }
@@ -245,6 +248,7 @@ struct MainView: View {
             }
             .onChange(of: store.items.map(\.id)) { _ in
                 prewarmSearchIndexes(for: store.items)
+                imageThumbnailCache.setMaximumEntryCount(store.items.count + 8)
             }
             .onChange(of: searchText) { _ in
                 refreshFilteredItemsIfNeeded()
@@ -1028,6 +1032,7 @@ private struct ClipRow: View {
     let isSelected: Bool
     let selectionColor: Color
     let selectionColorIsPreset: Bool
+    let imageThumbnailCache: ImageThumbnailCache
     let showsSeparator: Bool
     let handleClick: (NSEvent?) -> Void
     let handleCopy: () -> Void
@@ -1142,21 +1147,7 @@ private struct ClipRow: View {
         case .file:
             FileTypePreview(path: item.filePaths.first)
         case .image:
-            if let data = item.imageData, let image = NSImage(data: data) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(AppTheme.imageThumbnailBackground)
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(2)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            } else {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(AppTheme.imagePreviewBackground)
-                    .overlay(Image(systemName: "photo").foregroundStyle(AppTheme.imagePreviewForeground))
-            }
+            CachedImageThumbnail(item: item, cache: imageThumbnailCache)
         }
     }
 
@@ -1165,6 +1156,34 @@ private struct ClipRow: View {
         case .text: "文字"
         case .file: item.filePaths.count > 1 ? "\(item.filePaths.count) 个文件" : "文件"
         case .image: item.sourcePath == nil ? "图片" : "截图"
+        }
+    }
+}
+
+private struct CachedImageThumbnail: View {
+    let item: ClipItem
+    let cache: ImageThumbnailCache
+    @State private var thumbnail: CGImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: thumbnail == nil ? 10 : 7)
+                .fill(thumbnail == nil ? AppTheme.imagePreviewBackground : AppTheme.imageThumbnailBackground)
+            if let thumbnail {
+                Image(decorative: thumbnail, scale: 2)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(2)
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(AppTheme.imagePreviewForeground)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .task(id: item.id) {
+            thumbnail = nil
+            guard let data = item.imageData else { return }
+            thumbnail = await cache.thumbnail(for: item.id, data: data)
         }
     }
 }

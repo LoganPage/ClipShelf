@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        store.flushHistory()
         NotificationCenter.default.removeObserver(self)
         DistributedNotificationCenter.default.removeObserver(self)
         HotKeyManager.shared.unregister()

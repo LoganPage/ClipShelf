@@ -22,8 +22,8 @@ export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/ModuleCache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$ROOT_DIR/.build/ModuleCache"
 mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
-swift build --disable-sandbox --scratch-path "$ROOT_DIR/.build" >&2
-BUILD_BINARY="$(swift build --disable-sandbox --scratch-path "$ROOT_DIR/.build" --show-bin-path)/$APP_NAME"
+swift build --disable-sandbox -c release --scratch-path "$ROOT_DIR/.build" >&2
+BUILD_BINARY="$(swift build --disable-sandbox -c release --scratch-path "$ROOT_DIR/.build" --show-bin-path)/$APP_NAME"
 
 rm -rf "$BUILD_APP_ROOT" "$DIST_APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"

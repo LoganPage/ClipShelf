@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 struct SelfTestResult: Codable, Equatable {
     let name: String
@@ -1230,6 +1232,143 @@ enum ClipShelfSelfTest {
             condition: boundedIndexCache.count == 3 && boundedIndexCache.buildCount == 8,
             success: "Least-recently-used eviction keeps the index cache at its configured limit",
             failure: "Index cache count was \(boundedIndexCache.count) instead of 3"
+        ))
+
+        let writerURL = temporaryRoot.appendingPathComponent("writer/coalesced-history.json")
+        let writer = HistoryWriter(destinationURL: writerURL, coalescingWindow: 0.05)
+        let writerSnapshots = (0..<5).map { number in
+            [ClipItem(kind: .text, title: "snapshot-\(number)", text: "snapshot-\(number)")]
+        }
+        for snapshot in writerSnapshots {
+            writer.schedule(snapshot)
+        }
+        writer.flush()
+        let coalescedData = try? Data(contentsOf: writerURL)
+        let coalescedItems = coalescedData.flatMap { try? JSONDecoder().decode([ClipItem].self, from: $0) }
+        writer.flush()
+        results.append(check(
+            name: "history writer coalesces saves and flushes the latest snapshot",
+            condition: writer.writeCount == 1 && coalescedItems == writerSnapshots.last,
+            success: "Five schedules produce one atomic write, flush persists the latest snapshot, and repeated flush is idempotent",
+            failure: "Writer produced \(writer.writeCount) writes or did not persist the fifth snapshot"
+        ))
+
+        let identicalWriterURL = temporaryRoot.appendingPathComponent("writer/identical-history.json")
+        let identicalWriter = HistoryWriter(destinationURL: identicalWriterURL, coalescingWindow: 0.05)
+        let identicalItems = [
+            ClipItem(kind: .text, title: "byte-identical", text: "字节一致"),
+            ClipItem(kind: .file, title: "report.pdf", filePaths: ["/tmp/report.pdf"])
+        ]
+        let directEncoder = JSONEncoder()
+        directEncoder.outputFormatting = [.sortedKeys]
+        let directEncodedItems = try? directEncoder.encode(identicalItems)
+        identicalWriter.schedule(identicalItems)
+        identicalWriter.flush()
+        let writerEncodedItems = try? Data(contentsOf: identicalWriterURL)
+        results.append(check(
+            name: "history writer persists bytes identical to a direct encode",
+            condition: directEncodedItems != nil && writerEncodedItems == directEncodedItems,
+            success: "Background atomic persistence is byte-for-byte identical to direct JSONEncoder output",
+            failure: "Background writer changed history JSON bytes or failed to write"
+        ))
+
+        let generatedEncoderTIFF: Data = {
+            guard let context = CGContext(
+                data: nil,
+                width: 12,
+                height: 7,
+                bitsPerComponent: 8,
+                bytesPerRow: 12 * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return Data() }
+            context.setFillColor(CGColor(red: 0.2, green: 0.8, blue: 0.6, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 7))
+            guard let image = context.makeImage() else { return Data() }
+            let output = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(
+                output,
+                UTType.tiff.identifier as CFString,
+                1,
+                nil
+            ) else { return Data() }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else { return Data() }
+            return output as Data
+        }()
+        let encodedPNG = ImageCaptureEncoder.pngData(fromTIFF: generatedEncoderTIFF)
+        let decodedEncoderImage = encodedPNG.flatMap { data in
+            CGImageSourceCreateWithData(data as CFData, nil)
+        }.flatMap { source in
+            CGImageSourceCreateImageAtIndex(source, 0, nil)
+        }
+        let encoderRunsOffMainThread = clipStoreSource.map { source in
+            SourceScan.contains(#"imageEncodingQueue\.async"#, in: SourceScan.codeOnly(source))
+        } ?? runningFromAppBundle
+        results.append(check(
+            name: "image capture encoder reuses png bytes without touching the main thread",
+            condition: encoderRunsOffMainThread
+                && encodedPNG != nil
+                && decodedEncoderImage?.width == 12
+                && decodedEncoderImage?.height == 7
+                && ImageCaptureEncoder.pngData(fromTIFF: Data([0x00, 0x01, 0x02])) == nil,
+            success: "TIFF encoding runs off-main, preserves dimensions, yields decodable PNG, and rejects damaged data",
+            failure: "Encoder details: tiff=\(generatedEncoderTIFF.count), png=\(encodedPNG?.count ?? -1), size=\(decodedEncoderImage?.width ?? -1)x\(decodedEncoderImage?.height ?? -1), async=\(encoderRunsOffMainThread), damaged=\(ImageCaptureEncoder.pngData(fromTIFF: Data([0x00, 0x01, 0x02])) != nil)"
+        ))
+
+        let thumbnailData = generatedEncoderTIFF
+        let thumbnailCache = ImageThumbnailCache(maximumEntryCount: 1)
+        let thumbnailItemID = UUID()
+        let firstThumbnail = thumbnailCache.thumbnailSynchronouslyForTesting(for: thumbnailItemID, data: thumbnailData)
+        let secondThumbnail = thumbnailCache.thumbnailSynchronouslyForTesting(for: thumbnailItemID, data: thumbnailData)
+        _ = thumbnailCache.thumbnailSynchronouslyForTesting(for: UUID(), data: thumbnailData)
+        results.append(check(
+            name: "search thumbnail cache returns the same image twice without re-decoding",
+            condition: firstThumbnail != nil
+                && secondThumbnail != nil
+                && firstThumbnail === secondThumbnail
+                && thumbnailCache.decodeCount == 2
+                && thumbnailCache.count == 1,
+            success: "A repeated ID reuses its 104x80 thumbnail and LRU eviction honors the configured bound",
+            failure: "Thumbnail details: data=\(thumbnailData.count), first=\(firstThumbnail != nil), second=\(secondThumbnail != nil), decoded=\(thumbnailCache.decodeCount), retained=\(thumbnailCache.count)"
+        ))
+
+        let screenshotWatcher = ScreenshotFolderWatcher.shared
+        results.append(check(
+            name: "screenshot folder watcher rescans on a slow fallback interval",
+            condition: ScreenshotFolderWatcher.minimumRescanInterval >= 5
+                && screenshotWatcher.isLikelyScreenshot(URL(fileURLWithPath: "/tmp/截屏 2026-10-02.png"))
+                && screenshotWatcher.isLikelyScreenshot(URL(fileURLWithPath: "/tmp/Screenshot 2026-10-02.HEIC"))
+                && !screenshotWatcher.isLikelyScreenshot(URL(fileURLWithPath: "/tmp/photo.png"))
+                && !screenshotWatcher.isLikelyScreenshot(URL(fileURLWithPath: "/tmp/截屏 2026-10-02.txt")),
+            success: "Event monitoring keeps a five-second fallback while screenshot name and extension rules stay intact",
+            failure: "Fallback interval or screenshot eligibility changed"
+        ))
+
+        let fuzzyLiteralResults = [
+            SearchMatcher.fuzzyContains("abcd", in: "abcx"),
+            SearchMatcher.fuzzyContains("abcd", in: "abxx"),
+            SearchMatcher.fuzzyContains("abcdef", in: "abcdxx"),
+            SearchMatcher.fuzzyContains("abcdef", in: "abcxxx"),
+            SearchMatcher.fuzzyContains("ab", in: "ab"),
+            SearchMatcher.fuzzyContains("abc", in: "abc"),
+            SearchMatcher.fuzzyContains("meeting", in: "xxmeetingxx"),
+            SearchMatcher.fuzzyContains("zzzz", in: "meetingnotes"),
+            SearchMatcher.fuzzyContains("metingnotes", in: "meetingnotes")
+        ]
+        results.append(check(
+            name: "fuzzy search tolerance is pinned by literal examples",
+            condition: SearchMatcher.fuzzyContains("abcd", in: "abcx") == true
+                && SearchMatcher.fuzzyContains("abcd", in: "abxx") == false
+                && SearchMatcher.fuzzyContains("abcdef", in: "abcdxx") == true
+                && SearchMatcher.fuzzyContains("abcdef", in: "abcxxx") == false
+                && SearchMatcher.fuzzyContains("ab", in: "ab") == false
+                && SearchMatcher.fuzzyContains("abc", in: "abc") == true
+                && SearchMatcher.fuzzyContains("meeting", in: "xxmeetingxx") == true
+                && SearchMatcher.fuzzyContains("zzzz", in: "meetingnotes") == false
+                && SearchMatcher.fuzzyContains("metingnotes", in: "meetingnotes") == true,
+            success: "Short and long fuzzy tolerances, activation threshold, exact, negative, and edit examples stay pinned",
+            failure: "Fuzzy literal results changed: \(fuzzyLiteralResults) expected [true, false, true, false, false, true, true, false, true]"
         ))
 
         _ = CFPreferencesAppSynchronize(suiteName as CFString)

@@ -100,7 +100,7 @@ enum SearchMatcher {
         return true
     }
 
-    private static func fuzzyContains(_ query: String, in text: String) -> Bool {
+    static func fuzzyContains(_ query: String, in text: String) -> Bool {
         guard query.count >= 3, text.count >= query.count else { return false }
         if text.contains(query) { return true }
 

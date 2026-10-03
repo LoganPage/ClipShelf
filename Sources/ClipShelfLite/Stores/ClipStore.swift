@@ -18,6 +18,8 @@ final class ClipStore: ObservableObject {
 
     private static let historyEnabledKey = "clipboardHistory.enabled"
     private let pasteboard: NSPasteboard
+    private let historyWriter: HistoryWriter
+    private let imageEncodingQueue = DispatchQueue(label: "ClipShelf.image-capture", qos: .userInitiated)
     private var changeCount: Int
     private var timer: Timer?
     private var deletionUndoStack = HistoryDeletionUndoStack()
@@ -29,6 +31,7 @@ final class ClipStore: ObservableObject {
         changeCount = pasteboard.changeCount
         isClipboardHistoryEnabled = AppEnvironment.userDefaults.object(forKey: Self.historyEnabledKey) as? Bool ?? true
         storageURL = AppEnvironment.historyURL
+        historyWriter = HistoryWriter(destinationURL: storageURL)
 
         load()
         if HistoryTrimmer.trim(&items, maxItems: maxItems) {
@@ -161,6 +164,10 @@ final class ClipStore: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([storageURL])
     }
 
+    func flushHistory() {
+        historyWriter.flush()
+    }
+
     private func pollPasteboard() {
         guard ClipboardHistoryPolicy.shouldCapture(
             historyEnabled: isClipboardHistoryEnabled,
@@ -180,8 +187,24 @@ final class ClipStore: ObservableObject {
             return
         }
 
-        if let imageData = currentImageData() {
-            add(ClipItem(kind: .image, title: "剪贴板图片", imageData: imageData))
+        if let imageCapture = currentImageCapture() {
+            switch imageCapture {
+            case .png(let data):
+                add(ClipItem(kind: .image, title: "剪贴板图片", imageData: data))
+            case .tiff(let data):
+                let capturedAt = Date()
+                imageEncodingQueue.async { [weak self] in
+                    guard let png = ImageCaptureEncoder.pngData(fromTIFF: data) else { return }
+                    DispatchQueue.main.async {
+                        self?.add(ClipItem(
+                            kind: .image,
+                            title: "剪贴板图片",
+                            imageData: png,
+                            createdAt: capturedAt
+                        ))
+                    }
+                }
+            }
         }
     }
 
@@ -200,18 +223,17 @@ final class ClipStore: ObservableObject {
         return paths
     }
 
-    private func currentImageData() -> Data? {
+    private func currentImageCapture() -> ImageCapture? {
         if let png = pasteboard.data(forType: .png) {
-            return png
+            return .png(png)
         }
 
-        if let tiff = pasteboard.data(forType: .tiff),
-           let image = NSImage(data: tiff) {
-            return pngData(from: image)
+        if let tiff = pasteboard.data(forType: .tiff) {
+            return .tiff(tiff)
         }
 
-        if let image = NSImage(pasteboard: pasteboard) {
-            return pngData(from: image)
+        if let tiff = NSImage(pasteboard: pasteboard)?.tiffRepresentation {
+            return .tiff(tiff)
         }
 
         return nil
@@ -332,15 +354,6 @@ final class ClipStore: ObservableObject {
             .joined(separator: "\n")
     }
 
-    private func pngData(from image: NSImage) -> Data? {
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff) else {
-            return nil
-        }
-
-        return bitmap.representation(using: .png, properties: [:])
-    }
-
     private func add(_ item: ClipItem) {
         if isDuplicate(items.first, item) {
             return
@@ -409,16 +422,7 @@ final class ClipStore: ObservableObject {
     }
 
     private func save() {
-        do {
-            try FileManager.default.createDirectory(
-                at: storageURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let data = try JSONEncoder().encode(items)
-            try data.write(to: storageURL, options: .atomic)
-        } catch {
-            NSLog("ClipShelf save failed: \(error.localizedDescription)")
-        }
+        historyWriter.schedule(items)
     }
 
     private func updateUndoAvailability() {
@@ -431,5 +435,10 @@ final class ClipStore: ObservableObject {
         } else {
             DispatchQueue.main.async(execute: action)
         }
+    }
+
+    private enum ImageCapture {
+        case png(Data)
+        case tiff(Data)
     }
 }

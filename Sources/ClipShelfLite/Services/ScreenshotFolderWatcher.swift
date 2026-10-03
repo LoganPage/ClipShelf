@@ -4,6 +4,7 @@ import ImageIO
 
 final class ScreenshotFolderWatcher: ObservableObject {
     static let shared = ScreenshotFolderWatcher()
+    static let minimumRescanInterval: TimeInterval = 5
 
     @Published private(set) var folderURL: URL?
     @Published private(set) var isRunning = false
@@ -143,7 +144,8 @@ final class ScreenshotFolderWatcher: ObservableObject {
 
     private func startTimer() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(500))
+        let interval = DispatchTimeInterval.milliseconds(Int(Self.minimumRescanInterval * 1_000))
+        timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { [weak self] in
             self?.scan()
         }
@@ -212,7 +214,7 @@ final class ScreenshotFolderWatcher: ObservableObject {
         ClipStore.shared.addScreenshot(data: data, sourceURL: url)
     }
 
-    private func isLikelyScreenshot(_ url: URL) -> Bool {
+    func isLikelyScreenshot(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         guard ["png", "jpg", "jpeg", "heic", "tiff"].contains(ext) else { return false }
 
