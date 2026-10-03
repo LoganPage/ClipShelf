@@ -8,13 +8,17 @@ namespace ClipShelf;
 
 /// <summary>
 /// Process-local diagnostic switches. Every value is deliberately false by default so a
-/// normal launch remains identical to the 1.4.5 interaction path.
+/// normal launch remains identical to the 1.4.6 interaction path.
 /// </summary>
 public static class RuntimeFeatureSwitches
 {
     public static bool NativeWheel { get; private set; }
     public static bool InstantWheel { get; private set; }
     public static double? WheelResponse { get; private set; }
+    public static double WheelPrewarmMs { get; private set; }
+    public static bool SnappyWheel { get; private set; }
+    public static bool BalancedWheel { get; private set; }
+    public static bool SoftWheel { get; private set; }
     public static bool WheelPixelSnap { get; private set; }
     public static bool NoRowCache { get; private set; }
     public static bool LowThumbnailQuality { get; private set; }
@@ -38,10 +42,25 @@ public static class RuntimeFeatureSwitches
         NoRowMotion = args.Contains("--no-row-motion", StringComparer.OrdinalIgnoreCase);
         NoDragRender = args.Contains("--no-drag-render", StringComparer.OrdinalIgnoreCase);
         foreach (string argument in args)
+        {
+            if (argument.Equals("--wheel=snappy", StringComparison.OrdinalIgnoreCase))
+                ApplyPreset(response: 90, prewarmMs: 90, snappy: true);
+            else if (argument.Equals("--wheel=balanced", StringComparison.OrdinalIgnoreCase))
+                ApplyPreset(response: 65, prewarmMs: 60, balanced: true);
+            else if (argument.Equals("--wheel=soft", StringComparison.OrdinalIgnoreCase))
+                ApplyPreset(response: 45, prewarmMs: 0, soft: true);
+        }
+        foreach (string argument in args)
+        {
             if (argument.StartsWith("--wheel-response=", StringComparison.OrdinalIgnoreCase)
                 && double.TryParse(argument[17..], NumberStyles.Float, CultureInfo.InvariantCulture, out double response)
                 && response is >= 1 and <= 240)
                 WheelResponse = response;
+            if (argument.StartsWith("--wheel-prewarm=", StringComparison.OrdinalIgnoreCase)
+                && double.TryParse(argument[16..], NumberStyles.Float, CultureInfo.InvariantCulture, out double prewarm)
+                && prewarm is >= 0 and <= 500)
+                WheelPrewarmMs = prewarm;
+        }
         int diagnostic = Array.FindIndex(args, argument => argument.Equals("--scroll-diag", StringComparison.OrdinalIgnoreCase));
         if (diagnostic >= 0 && diagnostic + 1 < args.Length)
             ScrollDiagnosticReport = System.IO.Path.GetFullPath(args[diagnostic + 1]);
@@ -50,13 +69,22 @@ public static class RuntimeFeatureSwitches
     internal static void Reset()
     {
         NativeWheel = InstantWheel = WheelPixelSnap = NoRowCache = LowThumbnailQuality = NoRowMotion = NoDragRender = false;
-        WheelResponse = null;
+        WheelResponse = null; WheelPrewarmMs = 0;
+        SnappyWheel = BalancedWheel = SoftWheel = false;
         ScrollDiagnosticReport = null;
+    }
+
+    private static void ApplyPreset(double response, double prewarmMs, bool snappy = false, bool balanced = false, bool soft = false)
+    {
+        WheelResponse = response; WheelPrewarmMs = prewarmMs;
+        SnappyWheel = snappy; BalancedWheel = balanced; SoftWheel = soft;
     }
 
     internal static object Snapshot() => new
     {
         nativeWheel = NativeWheel, instantWheel = InstantWheel, wheelResponse = WheelResponse,
+        wheelPrewarmMs = WheelPrewarmMs,
+        wheelPreset = SnappyWheel ? "snappy" : BalancedWheel ? "balanced" : SoftWheel ? "soft" : null,
         wheelPixelSnap = WheelPixelSnap, noRowCache = NoRowCache,
         lowThumbnailQuality = LowThumbnailQuality, noRowMotion = NoRowMotion, noDragRender = NoDragRender
     };

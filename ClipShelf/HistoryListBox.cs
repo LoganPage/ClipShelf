@@ -144,6 +144,8 @@ public sealed class HistoryListBox : ListBox
         {
             if (!wheelMotion.IsActive) wheelMotion.Reset(current, maximum);
             wheelMotion.AddDistance(distance, maximum);
+            if (ShouldApplyWheelPrewarm(SystemParameters.ClientAreaAnimation, directInput))
+                RequestOffset(wheelMotion.Advance(RuntimeFeatureSwitches.WheelPrewarmMs / 1000.0, maximum));
             if (wheelMotion.IsActive && !rendering)
             {
                 lastFrameTimestamp = now; lastRenderingTime = TimeSpan.MinValue;
@@ -156,6 +158,9 @@ public sealed class HistoryListBox : ListBox
 
     private double MaximumOffset => wheelPanel is null ? 0 : Math.Max(0, wheelPanel.ExtentHeight - wheelPanel.ViewportHeight);
     internal bool IsWheelAnimating => rendering;
+    internal static bool ShouldApplyWheelPrewarm(bool clientAreaAnimation, bool directInput)
+        => clientAreaAnimation && !directInput && !RuntimeFeatureSwitches.NativeWheel
+            && !RuntimeFeatureSwitches.InstantWheel && RuntimeFeatureSwitches.WheelPrewarmMs > 0;
 
     private void RenderWheelFrame(object? sender, EventArgs e)
     {
