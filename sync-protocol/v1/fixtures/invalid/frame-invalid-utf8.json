@@ -1,0 +1,9 @@
+{
+  "id": "frame-invalid-utf8",
+  "kind": "rawFrame",
+  "bytesBase64": "AAAAAsMo",
+  "expected": {
+    "accepted": false,
+    "errorCode": "invalid_frame"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "text-over-limit-generated",
+  "kind": "json",
+  "message": {
+    "protocolVersion": 1,
+    "messageType": "textEvent",
+    "messageId": "00000000-0000-4000-8000-000000000023",
+    "sentAtUtc": "2026-10-07T08:00:00.000Z",
+    "body": {
+      "eventId": "33333333-3333-4333-8333-000000000015",
+      "originDeviceId": "11111111-1111-4111-8111-111111111111",
+      "sequence": 2,
+      "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+      "contentHash": "sha256:beb895f40be745dc467c6a92373ea7d084e1dad38fa6fb12d17a3bee9107c135",
+      "payload": {
+        "text": "__GENERATED_TEXT__"
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "errorCode": "text_too_large"
+  },
+  "generatedText": {
+    "character": "a",
+    "repeatCount": 1048577
+  }
+}

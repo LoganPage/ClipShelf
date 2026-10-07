@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clipshelf.dev/sync/v1/schema/text-event.schema.json",
+  "title": "ClipShelf Sync Protocol v1 Text Event",
+  "allOf": [
+    { "$ref": "envelope.schema.json" },
+    {
+      "properties": {
+        "messageType": { "const": "textEvent" },
+        "body": {
+          "type": "object",
+          "required": ["eventId", "originDeviceId", "sequence", "capturedAtUtc", "contentHash", "payload"],
+          "properties": {
+            "eventId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "not": { "const": "00000000-0000-0000-0000-000000000000" } },
+            "originDeviceId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "not": { "const": "00000000-0000-0000-0000-000000000000" } },
+            "sequence": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+            "capturedAtUtc": { "type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$" },
+            "contentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "payload": {
+              "type": "object",
+              "required": ["text"],
+              "properties": { "text": { "type": "string", "minLength": 1 } },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  ],
+  "$comment": "The 1,048,576-byte UTF-8 text limit and non-whitespace rule are enforced by the reference validator because JSON Schema string length counts code points, not UTF-8 bytes."
+}

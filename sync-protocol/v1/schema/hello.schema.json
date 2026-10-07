@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clipshelf.dev/sync/v1/schema/hello.schema.json",
+  "title": "ClipShelf Sync Protocol v1 Hello",
+  "allOf": [
+    { "$ref": "envelope.schema.json" },
+    {
+      "properties": {
+        "messageType": { "const": "hello" },
+        "body": {
+          "type": "object",
+          "required": ["deviceId", "deviceName", "appVersion", "supportedProtocolVersions", "capabilities"],
+          "properties": {
+            "deviceId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "not": { "const": "00000000-0000-0000-0000-000000000000" } },
+            "deviceName": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "appVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "supportedProtocolVersions": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "integer", "minimum": 1 },
+              "contains": { "const": 1 },
+              "minContains": 1
+            },
+            "capabilities": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,31}$" }, "uniqueItems": true }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  ]
+}

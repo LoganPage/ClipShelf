@@ -1,0 +1,270 @@
+{
+  "protocolVersion": 1,
+  "status": "draft-1",
+  "generatedAtUtc": "2026-10-07T14:52:47.291Z",
+  "referenceValidatorVersion": "1.0.0",
+  "limits": {
+    "maxFrameBytes": 1200000,
+    "maxTextUtf8Bytes": 1048576
+  },
+  "schemas": [
+    {
+      "path": "schema/ack.schema.json",
+      "sha256": "fb7792501bab04c14f87c87060e8bb6a5854d9e8275e884cc2a40c25145b109c"
+    },
+    {
+      "path": "schema/envelope.schema.json",
+      "sha256": "488a24c4cf13bd3290c1f7c58ed889a7a6f6564ab10e3920a2e348197cfaff41"
+    },
+    {
+      "path": "schema/error.schema.json",
+      "sha256": "828ba993880a3738c12e692cf5b4b2816fd171b98fcfc2c582b4abd8b432cc70"
+    },
+    {
+      "path": "schema/hello.schema.json",
+      "sha256": "a02181705954ffbda06fb9bddb1d235b6e995673b61b30c21605eb116d6eeef1"
+    },
+    {
+      "path": "schema/text-event.schema.json",
+      "sha256": "6c6b4a59c1e0dfdcb2218e16b9a9f6cae7954c13d6f2ea5f6e73e4b536c983e0"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "fixtures/invalid/capability-duplicate.json",
+      "sha256": "6a4025f6fb53c686df3905009ca9e5e0ca3e8190288e56657b08c88c19c7e662"
+    },
+    {
+      "path": "fixtures/invalid/capability-uppercase.json",
+      "sha256": "d76931061d1eab29813c9a4f59c81803ac6580ea5c653ebda99bc86fafba8eeb"
+    },
+    {
+      "path": "fixtures/invalid/device-id-empty.json",
+      "sha256": "741825b0ef1c3a5c018163f62469348c1719eb9d631a0720a909f54680142602"
+    },
+    {
+      "path": "fixtures/invalid/empty-uuid.json",
+      "sha256": "85539fbf22d91593a529d3b5aeb050805695b6b3fa6d4a7a544bae04b7b8bd33"
+    },
+    {
+      "path": "fixtures/invalid/error-message-ascii-257.json",
+      "sha256": "835c7dc25494133325d950eeb268448f6c68596d9f7a295506d9d78f0802ab36"
+    },
+    {
+      "path": "fixtures/invalid/error-message-chinese-257.json",
+      "sha256": "41042b0ddf655b9ccf9c6feeceaeb59bae05b93061c7c02eccc3376f44ab3bf9"
+    },
+    {
+      "path": "fixtures/invalid/error-message-emoji-257.json",
+      "sha256": "8094c2d439843dd5e78fa7c84499ab0f12db8915afb565f41771672077a7c775"
+    },
+    {
+      "path": "fixtures/invalid/error-related-message-id-zero.json",
+      "sha256": "b5c9cb86ce1cc60703b6dc07c406e0f7eae6f84264b17e5ea0ba4cd89faac440"
+    },
+    {
+      "path": "fixtures/invalid/frame-invalid-utf8.json",
+      "sha256": "ffa75f5e616936608130cf4f0495c0532ff5c7b06d49893ff2c2cbeba8247612"
+    },
+    {
+      "path": "fixtures/invalid/frame-too-large.json",
+      "sha256": "359dd680c809b39fc2815890babecec0edce181aad03dfe3416213bf76b3ba12"
+    },
+    {
+      "path": "fixtures/invalid/frame-truncated.json",
+      "sha256": "882640c633bd51b9154b3ac14592f6bec4838ca4bc0f4e04b8f5e6fa4a509182"
+    },
+    {
+      "path": "fixtures/invalid/frame-utf8-bom.json",
+      "sha256": "685a21bd47e6d9443c30ea2271f4fe278fd0af9a2fc9c43df213f78e2455eef3"
+    },
+    {
+      "path": "fixtures/invalid/frame-zero-length.json",
+      "sha256": "245c67437602b91769484b522fae512ae4cb7eaef335aad6cada9643840a6d36"
+    },
+    {
+      "path": "fixtures/invalid/hash-format-invalid.json",
+      "sha256": "7180e48529ef2ac57a8660de954991866d56be51eeb9a606ff5b95cf13f19167"
+    },
+    {
+      "path": "fixtures/invalid/hash-mismatch.json",
+      "sha256": "39b7818cf74f54e2f22216f146bb8ae6a46f9ab62124b96beb33d1a1d987181a"
+    },
+    {
+      "path": "fixtures/invalid/illegal-uuid.json",
+      "sha256": "9467d08789b4444bf6a4f2a79d6174c36ed81f1e0ff00ad3f309c93d04adbdbb"
+    },
+    {
+      "path": "fixtures/invalid/json-damaged.json",
+      "sha256": "c50dd761007054ac92bcc3726544c2f4a06a9f739697c702a599b5c6d3a5bde6"
+    },
+    {
+      "path": "fixtures/invalid/missing-protocol-version.json",
+      "sha256": "d9bc8c6d97e7f4d4b06ea2c9683324ad798db3bfafc00ee6f58263917cabb3a5"
+    },
+    {
+      "path": "fixtures/invalid/protocol-version-not-integer.json",
+      "sha256": "eff5aa39c062d11ef70fdbeaa32bbe1803c96725d9ae8e8ec960491105799507"
+    },
+    {
+      "path": "fixtures/invalid/sequence-negative.json",
+      "sha256": "20275624a431e0e20a2e64580cd30d70e1a3d79639b6c9ecc884b0f41f36b887"
+    },
+    {
+      "path": "fixtures/invalid/sequence-overflow.json",
+      "sha256": "7d67a61afb5ea6600dfebddead138b149d6af4a5a0d4aabd7c4ac6eed20440da"
+    },
+    {
+      "path": "fixtures/invalid/sequence-zero.json",
+      "sha256": "9f55ffc96c6430771e2c417969134274c4628a64b6de2a68fa7a9feff2eb06be"
+    },
+    {
+      "path": "fixtures/invalid/state-event-conflict.json",
+      "sha256": "f3ae761f7169ad607c6df2476216a87fdba8eacce134608b3456dccb1c300fdc"
+    },
+    {
+      "path": "fixtures/invalid/state-gap-cannot-advance-ack.json",
+      "sha256": "ba03f439f20102dd214afd67b67868ad86893e25e4a189210dea9ba572f457be"
+    },
+    {
+      "path": "fixtures/invalid/state-sequence-conflict.json",
+      "sha256": "1eb66be39b6b27ddb82186f1b94036b00e3f110fec074398ca5eff3140706e4a"
+    },
+    {
+      "path": "fixtures/invalid/supported-version-empty.json",
+      "sha256": "e6337ab6d631e6b8241187f8afc915ccc59732e67c4ac36611b8c6177b068f47"
+    },
+    {
+      "path": "fixtures/invalid/supported-version-missing-v1.json",
+      "sha256": "9ff69e5b6a8737d2272b18ba241a59441a5b8baf7387e7a457858270b6d767d7"
+    },
+    {
+      "path": "fixtures/invalid/supported-version-negative.json",
+      "sha256": "129d2c2130c7b65f25d9860cbf086806d05220c23d9f384aace56cc45bffe9e0"
+    },
+    {
+      "path": "fixtures/invalid/supported-version-non-integer.json",
+      "sha256": "d90f524646ea6147c85c50f028ef6fcc37efa0c65a9f1ff6ab69a46f8bef5a26"
+    },
+    {
+      "path": "fixtures/invalid/supported-version-zero.json",
+      "sha256": "e584e55d2034bff23e6dba23dc1b2a1f6106d0d6e9f09ac612fde18e3830e55b"
+    },
+    {
+      "path": "fixtures/invalid/text-empty.json",
+      "sha256": "8e0128c7664092e530d115c95e50e2194a8f3f1b9b13832c8703d7934b5f81d4"
+    },
+    {
+      "path": "fixtures/invalid/text-over-limit-generated.json",
+      "sha256": "bb4ea719d309b7571b17e25e26278a9cbf52f6c5bd8d4f7cb476212c8363e2cb"
+    },
+    {
+      "path": "fixtures/invalid/text-whitespace.json",
+      "sha256": "76749396567a8388cc83a85a25eaf39de27f2de2d90f7d6ab6ed1a3ddf54782e"
+    },
+    {
+      "path": "fixtures/invalid/timestamp-invalid-calendar.json",
+      "sha256": "cddc14bf2ee0db3ace6b22d01ee43ddb00d49e866a3b85d6a615bdab88c596a6"
+    },
+    {
+      "path": "fixtures/invalid/timestamp-without-z.json",
+      "sha256": "c204b56be3c47337abdcf2823d2215f23d59915a622a6f81d99fa212fdf0db9a"
+    },
+    {
+      "path": "fixtures/invalid/unknown-message-type.json",
+      "sha256": "3efa3d3ff295a2a4d8d8225ecc58a0f7fbd2fd25ba1c340566a6bc6d436275fa"
+    },
+    {
+      "path": "fixtures/invalid/unsupported-image-file-disguise.json",
+      "sha256": "fc08ec4b4418723a291f797d73a72af07453e4851e1c83080800b51b220c4cea"
+    },
+    {
+      "path": "fixtures/invalid/unsupported-version.json",
+      "sha256": "bc0a27f068e24d382c19f8604d8009337adbad0a4c535fd72c0ef554167378ba"
+    },
+    {
+      "path": "fixtures/valid/ack-watermark.json",
+      "sha256": "1c79db4b45b97057873124151ebfaa16562e43dd4bdb4d44a830c308047420df"
+    },
+    {
+      "path": "fixtures/valid/error-message-ascii-256.json",
+      "sha256": "27905012d9ff1cd0946cbb77a11bb26a34c7dad6ca6fe3c50956bf1abba47b4f"
+    },
+    {
+      "path": "fixtures/valid/error-message-chinese-256.json",
+      "sha256": "791dcab04928a186fe51e835ded5206e085f0e5da4be055abf2d930c4a61f70f"
+    },
+    {
+      "path": "fixtures/valid/error-message-emoji-256.json",
+      "sha256": "53e3062a21173b64fd44246c898c806df4828e3cac92a83cbb626cc21006f4f5"
+    },
+    {
+      "path": "fixtures/valid/error-message.json",
+      "sha256": "f044d16660da4789159d0bd75560c870012a107b7eab7e4f4db978f64adc6a44"
+    },
+    {
+      "path": "fixtures/valid/framing-chunked.json",
+      "sha256": "e463f27d274debef1f45b56ffc2eace255278fb67fb557645df3748e05d029dd"
+    },
+    {
+      "path": "fixtures/valid/framing-two-consecutive.json",
+      "sha256": "1b62c8f8be434b1e6efb7b8711d68fc5cce05a437d9089f5f7820fd010b80c62"
+    },
+    {
+      "path": "fixtures/valid/hello-minimal.json",
+      "sha256": "c41cd23ed64f2d5efb63f8367ef268a4bd41b53843e32aac7812114db11008da"
+    },
+    {
+      "path": "fixtures/valid/hello-unknown-capability.json",
+      "sha256": "320a7557edd6e2a1d958210b2821608cffe92e989b3c88fc975cb5938f460c3b"
+    },
+    {
+      "path": "fixtures/valid/sequence-gap-duplicate-fill.json",
+      "sha256": "1acd64c2c1432ec660a4d47610a0d3afdd72aed6572f90935a82c4534e691098"
+    },
+    {
+      "path": "fixtures/valid/text-ascii.json",
+      "sha256": "1de5b7f59820de89f6559c3b844b353a90b9dd695e3fbf510fb2f8d5a8e59d78"
+    },
+    {
+      "path": "fixtures/valid/text-chinese.json",
+      "sha256": "00caf28e019366373c58aab0e0b901820dc84b292869d1eb3325dc85e89b3bc5"
+    },
+    {
+      "path": "fixtures/valid/text-combining.json",
+      "sha256": "d7d4db6a9fcd7ee25b4b964582fd7809e6530f8b2cc31ef6840a49f0353f7290"
+    },
+    {
+      "path": "fixtures/valid/text-crlf.json",
+      "sha256": "b091874bbd6ba017fb189348930acb98462ef1e3866dfd34475ad318dd71dc96"
+    },
+    {
+      "path": "fixtures/valid/text-emoji.json",
+      "sha256": "5267de70cafa2dc22d2ac3d28e0c0ad4bcdae2d9b36900acec65de14d14f5259"
+    },
+    {
+      "path": "fixtures/valid/text-leading-trailing-spaces.json",
+      "sha256": "cf33403ff90e37eb616f1020a1b684a4875dcb9a3f50d57e46bd97bda4446f8b"
+    },
+    {
+      "path": "fixtures/valid/text-lf.json",
+      "sha256": "4b16826f7aefe8a8d56de6e4d83fb7e146deb2ef67f14bee7c99fb105f4b4841"
+    },
+    {
+      "path": "fixtures/valid/text-multilingual.json",
+      "sha256": "feb0b0df165ab85f08b92ffe61bdc462689d8e324743be2340a8feb85e1357a1"
+    },
+    {
+      "path": "fixtures/valid/text-near-limit-generated.json",
+      "sha256": "633aa11260363912def57687e8d540d236fc1a2c37b5d4161333eba2c3dca9ab"
+    },
+    {
+      "path": "fixtures/valid/text-precomposed.json",
+      "sha256": "fc45d0e5a1f5e7a90de4031190b4f679edc90e193abe95d443d59fc26e0436bb"
+    },
+    {
+      "path": "fixtures/valid/unknown-optional-field.json",
+      "sha256": "f55bdeb7e692319dc9f2c35156d52c65739491e80f1dd9ac8bc5fc2e68acd8f0"
+    }
+  ]
+}

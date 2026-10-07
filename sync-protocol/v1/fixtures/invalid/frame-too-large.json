@@ -1,0 +1,9 @@
+{
+  "id": "frame-too-large",
+  "kind": "rawFrame",
+  "bytesBase64": "ABJPgQ==",
+  "expected": {
+    "accepted": false,
+    "errorCode": "frame_too_large"
+  }
+}
