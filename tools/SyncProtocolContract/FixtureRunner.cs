@@ -455,20 +455,41 @@ internal static class FixtureRunner
 
     private static void ValidateManifest(string protocolRoot)
     {
-        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(protocolRoot, "manifest.json")));
+        string manifestPath = Path.Combine(protocolRoot, "manifest.json");
+        ValidateProtocolJsonBytes(manifestPath);
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
         JsonElement root = manifest.RootElement;
         if (root.GetProperty("limits").GetProperty("maxFrameBytes").GetInt32() != ProtocolConstants.MaxFrameBytes ||
             root.GetProperty("limits").GetProperty("maxTextUtf8Bytes").GetInt32() != ProtocolConstants.MaxTextUtf8Bytes)
             throw new InvalidDataException("Manifest limits differ from validator.");
+        var listedPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (string section in new[] { "schemas", "fixtures" })
         foreach (JsonElement entry in root.GetProperty(section).EnumerateArray())
         {
             string relative = entry.GetProperty("path").GetString()!;
             if (Path.IsPathRooted(relative) || relative.Contains("..", StringComparison.Ordinal)) throw new InvalidDataException("Manifest contains a non-portable path.");
+            if (!listedPaths.Add(relative)) throw new InvalidDataException($"Manifest contains a duplicate path: {relative}");
             string path = Path.Combine(protocolRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+            ValidateProtocolJsonBytes(path);
             string actual = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
             if (actual != entry.GetProperty("sha256").GetString()) throw new InvalidDataException($"Manifest hash mismatch: {relative}");
         }
+        if (listedPaths.Count != 64) throw new InvalidDataException($"Manifest must contain exactly 64 schema/fixture entries; found {listedPaths.Count}.");
+
+        HashSet<string> actualPaths = Directory.EnumerateFiles(protocolRoot, "*.json", SearchOption.AllDirectories)
+            .Where(path => !string.Equals(path, manifestPath, StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(protocolRoot, path).Replace('\\', '/'))
+            .ToHashSet(StringComparer.Ordinal);
+        if (!actualPaths.SetEquals(listedPaths)) throw new InvalidDataException("Manifest paths differ from the protocol schema/fixture JSON files on disk.");
+    }
+
+    private static void ValidateProtocolJsonBytes(string path)
+    {
+        byte[] bytes = File.ReadAllBytes(path);
+        if (bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble)) throw new InvalidDataException($"Protocol JSON contains a UTF-8 BOM: {path}");
+        if (bytes.Contains((byte)'\r')) throw new InvalidDataException($"Protocol JSON contains a CR or CRLF line ending: {path}");
+        if (bytes.Length == 0 || bytes[^1] != (byte)'\n' || (bytes.Length > 1 && bytes[^2] == (byte)'\n'))
+            throw new InvalidDataException($"Protocol JSON must end with exactly one LF: {path}");
     }
 
     private static void ValidateAdversarialCoverage(string protocolRoot)

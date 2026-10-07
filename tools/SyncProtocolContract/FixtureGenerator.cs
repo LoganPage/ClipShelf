@@ -292,7 +292,14 @@ internal static class FixtureGenerator
     private static string NextMessageId() => $"00000000-0000-4000-8000-{++messageCounter:000000000000}";
     private static string NextEventId() => $"33333333-3333-4333-8333-{++eventCounter:000000000000}";
 
-    private static void WriteJson(string path, JsonNode node) => File.WriteAllText(path, node.ToJsonString(Pretty) + Environment.NewLine, new UTF8Encoding(false));
+    private static void WriteJson(string path, JsonNode node)
+    {
+        string json = node.ToJsonString(Pretty)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .TrimEnd('\n') + "\n";
+        File.WriteAllText(path, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
 
     private static void WriteManifest(string protocolRoot)
     {
