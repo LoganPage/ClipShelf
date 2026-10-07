@@ -257,10 +257,10 @@ public sealed class SettingsPanel : UserControl
             if (shift.IsFrozen) { shift = shift.Clone(); knob.RenderTransform = shift; }
             double target = b.IsChecked == true ? 20 : 0;
             double from = shift.X;
-            shift.BeginAnimation(TranslateTransform.XProperty, null); shift.X = target;
-            if (animate && b.IsVisible && SystemParameters.ClientAreaAnimation)
-                shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(110)) {
-                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.Stop });
+            shift.BeginAnimation(TranslateTransform.XProperty, null);
+            if (animate && b.IsVisible && MotionPolicy.Allows(MotionDomain.MicroInteraction))
+                MotionDriver.Current.Animate(knob, "toggle-x", from, target, MotionTokens.Selection, value => shift.X = value);
+            else { MotionDriver.Current.Cancel(knob, "toggle-x"); shift.X = target; }
         }
         b.Loaded += (_, _) => MoveKnob(false);
         // React to state, not only Click, so keyboard and accessibility toggles save too.

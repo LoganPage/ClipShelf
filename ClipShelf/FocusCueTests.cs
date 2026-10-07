@@ -156,7 +156,12 @@ public static class FocusCueTests
             Check(settings.IsKeyboardFocusWithin, "Calling ShowShelf while settings is open keeps the modal focus boundary");
             row.Focus(); await Idle();
             Check(settings.IsKeyboardFocusWithin && !row.IsKeyboardFocused, "Focus restoration into background history is redirected into settings");
-            window.CloseSettings(); await Idle();
+            window.CloseSettings();
+            for (int attempt = 0; attempt < 40 && ((Grid)window.FindName("SettingsOverlay")).Visibility != Visibility.Collapsed; attempt++)
+            {
+                await Task.Delay(20);
+                await Idle();
+            }
             Check(((Grid)window.FindName("SettingsOverlay")).Visibility == Visibility.Collapsed, "Closing settings releases its modal boundary");
             FocusCuePolicy.RecordKey(window, Key.Tab, ModifierKeys.None);
             window.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent, Source = window });

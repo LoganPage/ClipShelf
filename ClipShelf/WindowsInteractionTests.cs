@@ -66,6 +66,7 @@ public static class WindowsInteractionTests
             var toolbarPin = Named<Button>(window, "PinButton");
             var toolbarDelete = Named<Button>(window, "DeleteButton");
             var toolbarUndo = Named<Button>(window, "UndoDeleteButton");
+            var historyExitLayer = Named<Canvas>(window, "HistoryExitLayer");
             var selectionCount = Named<TextBlock>(window, "SelectionCountText");
             Check(window.Integration is null && list.Items.Count == seed.Length,
                 "Demo fixture has no native clipboard integration and contains only synthetic records");
@@ -147,6 +148,8 @@ public static class WindowsInteractionTests
             SelectExactly(0, 2);
             var rowDelete = await RowButtonAsync(list, first, "Delete");
             rowDelete.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, rowDelete));
+            Check(!MotionPolicy.Allows(MotionDomain.ListLayout) || historyExitLayer.Children.Count == 1,
+                "Deleting a realized row starts one bounded exit visual without rebuilding the list");
             await IdleAsync();
             Check(store.Items.Count == seed.Length - 1 && store.Items.All(item => item.Id != first.Id) && store.Items.Any(item => item.Id == third.Id),
                 "The inline delete button removes one row even while several rows are selected");
@@ -155,6 +158,8 @@ public static class WindowsInteractionTests
             Check(await window.HandleHistoryKeyAsync(Key.Z, ModifierKeys.Control, list), "List Ctrl+Z is handled as deletion undo");
             await IdleAsync();
             Check(store.Items.Count == seed.Length && store.Items.Any(item => item.Id == first.Id), "Ctrl+Z restores the deleted inline row");
+            await Task.Delay(650); await IdleAsync();
+            Check(historyExitLayer.Children.Count == 0, "Deleted-row exit visuals release their bitmap and leave no residual overlay");
 
             SelectExactly(0, 2);
             var batch = SelectedIds(list);
@@ -335,6 +340,11 @@ public static class WindowsInteractionTests
                     gate.TrySetResult();
                     SetPendingSearch(window, previousPending);
                     restore();
+                    // Settings now remains visible while its interruptible exit is
+                    // presented. Wait for the behavior-level closed state before
+                    // the next independent delayed-key scenario begins.
+                    for (int wait = 0; wait < 50 && settingsOverlay.Visibility == Visibility.Visible; wait++)
+                        await Task.Delay(20);
                     await IdleAsync();
                 }
             }

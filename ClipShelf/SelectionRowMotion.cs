@@ -2,16 +2,12 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Media.Animation;
 
 namespace ClipShelf;
 
 // Only the two flat row surfaces animate. The cached row's text and icons stay static.
 internal static class SelectionRowMotion
 {
-    private static readonly Duration duration = new(TimeSpan.FromMilliseconds(110));
-    private static readonly CubicEase easing = new() { EasingMode = EasingMode.EaseOut };
-
     public static readonly DependencyProperty IsEnabledProperty = DependencyProperty.RegisterAttached(
         "IsEnabled", typeof(bool), typeof(SelectionRowMotion),
         new PropertyMetadata(false, OnIsEnabledChanged));
@@ -53,7 +49,8 @@ internal static class SelectionRowMotion
     private static void SelectionChanged(object sender, RoutedEventArgs e)
     {
         if (sender is ListBoxItem row && ReferenceEquals(e.OriginalSource, row))
-            Update(row, animate: row.IsLoaded && row.IsVisible && SystemParameters.ClientAreaAnimation);
+            Update(row, animate: row.IsLoaded && row.IsVisible && RuntimeFeatureSwitches.RowMotionEnabled
+                && MotionPolicy.Allows(MotionDomain.MicroInteraction));
     }
 
     private static void Update(ListBoxItem row, bool animate)
@@ -67,24 +64,19 @@ internal static class SelectionRowMotion
     private static void StopAnimations(ListBoxItem row)
     {
         if (row.Template.FindName("RowBg", row) is Border layer)
-            layer.BeginAnimation(UIElement.OpacityProperty, null);
+            MotionDriver.Current.Cancel(layer, "selection-opacity");
         if (row.Template.FindName("RowSeparator", row) is Border separator)
-            separator.BeginAnimation(UIElement.OpacityProperty, null);
+            MotionDriver.Current.Cancel(separator, "selection-opacity");
     }
 
     private static void SetOpacity(Border surface, double target, bool animate)
     {
         if (!animate)
         {
-            surface.BeginAnimation(UIElement.OpacityProperty, null);
             surface.Opacity = target;
             return;
         }
-        // SnapshotAndReplace makes a rapid reverse selection start from the current
-        // displayed value. Each row owns at most one active transition per surface.
-        surface.BeginAnimation(UIElement.OpacityProperty,
-            new DoubleAnimation(surface.Opacity, target, duration) { EasingFunction = easing, FillBehavior = FillBehavior.Stop },
-            HandoffBehavior.SnapshotAndReplace);
-        surface.Opacity = target;
+        MotionDriver.Current.Animate(surface, "selection-opacity", surface.Opacity, target,
+            MotionTokens.Selection, value => surface.Opacity = value);
     }
 }

@@ -191,6 +191,9 @@ public static class DragSelectionTests
                     if (scroll.VerticalOffset > previous) moved++; previous = scroll.VerticalOffset;
                 }
                 metrics[$"drag-{hz}Hz-distance"] = scroll.VerticalOffset;
+                metrics[$"drag-{hz}Hz-scrollable"] = scroll.ScrollableHeight;
+                metrics[$"drag-{hz}Hz-list-height"] = list.ActualHeight;
+                metrics[$"drag-{hz}Hz-moved-frames"] = moved;
                 Check(moved == hz && Math.Abs(scroll.VerticalOffset - 22 / .03) < 4,
                     $"{hz} Hz frame steps all advance, with the same one-second drag distance");
                 double top = scroll.VerticalOffset;

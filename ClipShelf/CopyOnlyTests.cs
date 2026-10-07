@@ -102,13 +102,22 @@ public static class CopyOnlyTests
                 await Idle(); await preview.PendingRender;
                 Check(preview.IsVisible && preview.Session.Error is null && (i < 2 ? preview.Session.Presented?.Image.PixelWidth == 320 : preview.Session.PresentedText?.Text == "Synthetic clipboard-free record"), $"Record {i + 1}: Space displays image/text without pasting");
                 Check(sequence == NativeMethods.GetClipboardSequenceNumber() && window.IsVisible && window.WindowState == WindowState.Normal, $"Record {i + 1}: preview never writes the clipboard or hides/minimizes the shelf");
-                preview.Close(); await Task.Delay(210); await preview.Cleanup; await Idle();
+                preview.Close();
+                for (int attempt = 0; attempt < 50 && preview.IsVisible; attempt++)
+                {
+                    await Task.Delay(20);
+                    await Idle();
+                }
+                Check(!preview.IsVisible, $"Record {i + 1}: preview close animation completes without leaving a ghost window");
+                await preview.Cleanup; await Idle();
             }
             var menu = window.BuildHistoryContextMenu((ClipItem)list.Items[1]);
             Check(menu.Items.OfType<MenuItem>().Count() == 5 && menu.Items.OfType<MenuItem>().All(item => item.InputGestureText != "Ctrl+V" && !(item.Header?.ToString() ?? "").Contains("粘贴")), "Record menu has five labelled actions without paste");
             Check(!window.HandleHistoryMenuKey(menu, Key.V, ModifierKeys.Control), "Ctrl+V in the record menu cannot dispatch a stale paste command");
             Check(await window.HandleHistoryKeyAsync(Key.C, ModifierKeys.Control, row), "Ctrl+C still dispatches the selected record's copy command");
-            Check(((TextBlock)window.FindName("ToastText")).Text == "界面预览模式" && window.IsVisible && window.WindowState == WindowState.Normal, "Isolated copy reaches the expected demo guard and keeps the window open");
+            string copyStatus = ((TextBlock)window.FindName("ToastText")).Text;
+            Check(copyStatus == "界面预览模式" && window.IsVisible && window.WindowState == WindowState.Normal,
+                $"Isolated copy reaches the expected demo guard and keeps the window open (status='{copyStatus}', selected={list.SelectedItems.Count}, visible={window.IsVisible}, state={window.WindowState})");
             Check(!await window.HandleHistoryKeyAsync(Key.Space, ModifierKeys.None, search), "Search owns literal spaces instead of opening previews");
             Check(!await window.HandleHistoryKeyAsync(Key.Space, ModifierKeys.None, copy), "An actual focused button retains standard Space activation without list-command fallthrough");
         }

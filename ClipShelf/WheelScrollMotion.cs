@@ -5,12 +5,13 @@ namespace ClipShelf;
 /// <summary>Pure, elapsed-time scrolling state. No timer, WPF dependency, or fixed frame-rate assumption.</summary>
 internal sealed class WheelScrollMotion
 {
+    private MotionValue state = new(0, new MotionSpec(28, 1, .04, .5));
     // A short critically damped response for wheel notches; units are radians/second, not frames.
     internal double ResponseFrequency { get; set; } = 28;
-    internal double Position { get; private set; }
-    internal double Target { get; private set; }
-    internal double Velocity { get; private set; }
-    internal bool IsActive { get; private set; }
+    internal double Position => state.Current;
+    internal double Target => state.Target;
+    internal double Velocity => state.Velocity;
+    internal bool IsActive => state.IsActive;
 
     internal static double WheelDistance(int delta, int lines, double viewportHeight)
     {
@@ -24,7 +25,7 @@ internal sealed class WheelScrollMotion
 
     internal void Reset(double position, double maximum)
     {
-        Position = Target = Clamp(position, maximum); Velocity = 0; IsActive = false;
+        state.Snap(Clamp(position, maximum));
     }
 
     internal void AddDistance(double distance, double maximum)
@@ -34,29 +35,20 @@ internal sealed class WheelScrollMotion
         // A reversal cancels old-direction backlog immediately. Retarget from the
         // presented position while carrying velocity into the new damped response.
         bool reverses = distance != 0 && Math.Abs(remaining) > 0.01 && Math.Sign(distance) != Math.Sign(remaining);
-        Target = Clamp((reverses ? Position : Target) + distance, maximum);
-        Position = Clamp(Position, maximum);
-        IsActive = Math.Abs(Target - Position) > 0.01 || Math.Abs(Velocity) > 0.1;
+        double target = Clamp((reverses ? Position : Target) + distance, maximum);
+        state.Retarget(target, new MotionSpec(ResponseFrequency, 1, .04, .5));
     }
 
     internal double Advance(double elapsedSeconds, double maximum)
     {
         maximum = SafeMaximum(maximum);
-        Target = Clamp(Target, maximum); Position = Clamp(Position, maximum);
-        if (!IsActive || !double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0) return Position;
-        // Exact critically damped spring solution: identical elapsed time gives identical
-        // motion at 60, 120, 144, 240 Hz, or irregular callback intervals.
-        double displacement = Position - Target;
-        double AngularFrequency = ResponseFrequency;
-        double coefficient = Velocity + AngularFrequency * displacement;
-        double decay = Math.Exp(-AngularFrequency * elapsedSeconds);
-        if (decay == 0) { Reset(Target, maximum); return Position; }
-        double next = Target + (displacement + coefficient * elapsedSeconds) * decay;
-        double nextVelocity = (Velocity - AngularFrequency * coefficient * elapsedSeconds) * decay;
-        Position = Clamp(next, maximum); Velocity = Position == next ? nextVelocity : 0;
-        if (Math.Abs(Target - Position) <= 0.04 && Math.Abs(Velocity) <= 0.5)
-        { Position = Target; Velocity = 0; IsActive = false; }
-        return Position;
+        double target = Clamp(Target, maximum), current = Clamp(Position, maximum);
+        if (current != Position) state.Snap(current);
+        if (target != state.Target) state.Retarget(target, new MotionSpec(ResponseFrequency, 1, .04, .5));
+        double next = state.Advance(elapsedSeconds);
+        double bounded = Clamp(next, maximum);
+        if (bounded != next) state.Snap(bounded);
+        return state.Current;
     }
 
     private static double SafeMaximum(double value) => double.IsFinite(value) ? Math.Max(0, value) : 0;

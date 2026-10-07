@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private Forms.NotifyIcon? tray;
     private List<ClipItem> visible = new();
     private readonly ObservableCollection<ClipItem> displayed = new();
+    private readonly VisibleRowLayoutTransition rowLayoutTransition = new();
     private ScrollViewer? historyScroll;
     private ScrollViewer? HistoryScroll => historyScroll ??= Descendant<ScrollViewer>(HistoryList);
     private CancellationTokenSource? searchCancellation;
@@ -43,7 +44,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer toastTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private bool dragRendering;
     private bool typeFilterAnimationActive, typeFilterResizePending;
-    private int typeFilterAnimationVersion, filteredListAnimationVersion;
+    private int typeFilterAnimationVersion;
+    private int settingsTransitionVersion;
+    private bool settingsClosing;
     private long dragFrameTick;
     private TimeSpan dragRenderingTime = TimeSpan.MinValue;
     private bool quitting, refreshing, dragging, pointerDown, suppressDragRelease;
@@ -210,6 +213,8 @@ public partial class MainWindow : Window
     private void ApplyVisible(List<ClipItem> next, string query)
     {
         HistoryList.CancelWheelMotion();
+        var rowMotion = rowLayoutTransition.Capture(HistoryList,
+            enabled: !pointerDown && !dragging && !HistoryList.IsWheelAnimating);
         bool keepViewportOffset = suppressViewportCompensation;
         suppressViewportCompensation = false;
         var selected = HistoryList.SelectedItems.Cast<ClipItem>().Select(x => x.Id).ToHashSet();
@@ -273,6 +278,7 @@ public partial class MainWindow : Window
             EmptyDetail.Text = "切换到“全部”，或复制一条该类型的内容。";
         }
         UpdateActions();
+        rowLayoutTransition.Play(HistoryList, rowMotion);
         if (hadRowFocus && IsActive && !pointerDown && !dragging
             && SettingsOverlay.Visibility != Visibility.Visible) RestoreHistoryFocus(scrollIntoView: false);
     }
@@ -323,7 +329,6 @@ public partial class MainWindow : Window
         resetFilterContainers = true;
         Refresh();
         PositionTypeFilterSelection(animate: true, previousIndex: previousIndex);
-        AnimateFilteredList(previousIndex);
     }
     private IEnumerable<Button> TypeFilterButtons() => new[] { FilterAllButton, FilterTextButton, FilterFileButton, FilterImageButton };
     private void ClearTypeFilterBorderOverrides()
@@ -364,22 +369,18 @@ public partial class MainWindow : Window
         double target = targetIndex * width;
         double current = shift.X;
         shift.BeginAnimation(TranslateTransform.XProperty, null);
-        shift.X = target;
-        if (!animate || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation)
+        if (!animate || !IsLoaded || !IsVisible || !MotionPolicy.Allows(MotionDomain.SharedIndicator))
         {
+            MotionDriver.Current.Snap(TypeFilterSelection, "filter-x", target, value => shift.X = value);
             typeFilterAnimationActive = false;
             typeFilterResizePending = false;
             return;
         }
         TypeFilterButtons().ElementAt(targetIndex).SetValue(BorderBrushProperty, Brushes.Transparent);
         int animationVersion = ++typeFilterAnimationVersion;
-        var animation = new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(240))
-        {
-            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-            FillBehavior = FillBehavior.Stop
-        };
         typeFilterAnimationActive = true;
-        animation.Completed += (_, _) =>
+        MotionDriver.Current.Animate(TypeFilterSelection, "filter-x", current, target, MotionTokens.SharedIndicator,
+            value => shift.X = value, () =>
         {
             if (animationVersion != typeFilterAnimationVersion) return;
             ClearTypeFilterBorderOverrides();
@@ -387,39 +388,8 @@ public partial class MainWindow : Window
             if (!typeFilterResizePending) return;
             typeFilterResizePending = false;
             PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
-        };
-        shift.BeginAnimation(TranslateTransform.XProperty, animation, HandoffBehavior.SnapshotAndReplace);
+        });
     }
-    internal static (double PeakOpacity, double DurationMilliseconds) FilteredListTransition(int previousIndex, int targetIndex)
-    {
-        int distance = Math.Clamp(Math.Abs(targetIndex - previousIndex), 1, 3);
-        return (.28 + .17 * distance / 3.0, 210 - 30 * distance);
-    }
-    private void AnimateFilteredList(int previousIndex)
-    {
-        int version = ++filteredListAnimationVersion;
-        HistoryTransitionOverlay.BeginAnimation(OpacityProperty, null);
-        HistoryTransitionOverlay.Opacity = 0;
-        HistoryTransitionOverlay.Visibility = Visibility.Hidden;
-        if (HistoryList.Items.Count == 0 || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation) return;
-        var transition = FilteredListTransition(previousIndex, FilterIndex(Store.Settings.HistoryTypeFilter));
-        HistoryTransitionOverlay.Visibility = Visibility.Visible;
-        HistoryTransitionOverlay.Opacity = transition.PeakOpacity;
-        var animation = new DoubleAnimation(transition.PeakOpacity, 0, TimeSpan.FromMilliseconds(transition.DurationMilliseconds))
-        {
-            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-            FillBehavior = FillBehavior.Stop
-        };
-        animation.Completed += (_, _) =>
-        {
-            if (version != filteredListAnimationVersion) return;
-            HistoryTransitionOverlay.BeginAnimation(OpacityProperty, null);
-            HistoryTransitionOverlay.Opacity = 0;
-            HistoryTransitionOverlay.Visibility = Visibility.Hidden;
-        };
-        HistoryTransitionOverlay.BeginAnimation(OpacityProperty, animation, HandoffBehavior.SnapshotAndReplace);
-    }
-
     internal FrameworkElement? FilteredListAnimationTarget()
     {
         FrameworkElement? presenter = Descendant<ScrollContentPresenter>(HistoryList);
@@ -447,13 +417,10 @@ public partial class MainWindow : Window
         double target = Store.Settings.AlwaysOnTop ? 0 : 35;
         double current = AlwaysOnTopPinRotation.Angle;
         AlwaysOnTopPinRotation.BeginAnimation(RotateTransform.AngleProperty, null);
-        AlwaysOnTopPinRotation.Angle = target;
-        if (!animate || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation || Math.Abs(current - target) < .01) return;
-        AlwaysOnTopPinRotation.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(200))
-        {
-            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-            FillBehavior = FillBehavior.Stop
-        }, HandoffBehavior.SnapshotAndReplace);
+        if (!animate || !IsLoaded || !IsVisible || !MotionPolicy.Allows(MotionDomain.MicroInteraction) || Math.Abs(current - target) < .01)
+        { AlwaysOnTopPinRotation.Angle = target; return; }
+        MotionDriver.Current.Animate(AlwaysOnTopButton, "pin-angle", current, target, MotionTokens.Selection,
+            value => AlwaysOnTopPinRotation.Angle = value);
     }
     private async void Copy_Click(object sender, RoutedEventArgs e) => await CopyItems(Selected());
     private void Pin_Click(object sender, RoutedEventArgs e)
@@ -650,7 +617,9 @@ public partial class MainWindow : Window
     }
     private void TogglePreview()
     {
-        if (preview?.IsVisible == true) { preview.Close(); preview = null; return; }
+        // Keep the reference until Closed. The preview exit is interruptible, so a
+        // second Space may reverse the close while this is still the live window.
+        if (preview?.IsVisible == true) { preview.Close(); return; }
         var selected = Selected(); if (selected.Count != 1) return;
         OpenDocumentPreview(visible.IndexOf(selected[0]));
     }
@@ -664,39 +633,80 @@ public partial class MainWindow : Window
     private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
     public void OpenSettings()
     {
-        if (SettingsOverlay.Visibility == Visibility.Visible) { EnsureSettingsFocus(); return; }
+        if (SettingsOverlay.Visibility == Visibility.Visible && !settingsClosing) { EnsureSettingsFocus(); return; }
         HistoryList.CancelWheelMotion();
         interactionVersion++;
-        settingsReturnFocus = Keyboard.FocusedElement;
+        if (SettingsOverlay.Visibility != Visibility.Visible) settingsReturnFocus = Keyboard.FocusedElement;
         if (SettingsContent.Content is not SettingsPanel) SettingsContent.Content = new SettingsPanel(this);
         ((SettingsPanel)SettingsContent.Content).RefreshFromSettings();
+        bool firstShow = SettingsOverlay.Visibility != Visibility.Visible;
         SettingsOverlay.Visibility = Visibility.Visible;
-        SettingsCard.BeginAnimation(OpacityProperty, null);
-        SettingsOverlay.BeginAnimation(OpacityProperty, null);
-        if (SystemParameters.ClientAreaAnimation)
-            SettingsOverlay.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)) {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.Stop });
+        settingsClosing = false;
+        int version = ++settingsTransitionVersion;
+        if (firstShow)
+        {
+            SettingsBackdrop.Opacity = SettingsCard.Opacity = SettingsShadow.Opacity = 0;
+            SettingsCardScale.ScaleX = SettingsCardScale.ScaleY = MotionTokens.SheetScale;
+            SettingsCardShift.Y = MotionTokens.SheetOffset;
+        }
+        if (!MotionPolicy.Allows(MotionDomain.Overlay))
+        {
+            MotionDriver.Current.Cancel(SettingsOverlay);
+            SettingsBackdrop.Opacity = SettingsCard.Opacity = SettingsShadow.Opacity = 1;
+            SettingsCardScale.ScaleX = SettingsCardScale.ScaleY = 1;
+            SettingsCardShift.Y = 0;
+        }
+        else
+        {
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-backdrop", SettingsBackdrop.Opacity, 1, MotionTokens.Overlay, value => SettingsBackdrop.Opacity = value);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-shadow", SettingsShadow.Opacity, 1, MotionTokens.Overlay, value => SettingsShadow.Opacity = value);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-opacity", SettingsCard.Opacity, 1, MotionTokens.Sheet, value => SettingsCard.Opacity = value);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-x", SettingsCardScale.ScaleX, 1, MotionTokens.Sheet, value => SettingsCardScale.ScaleX = value);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-y", SettingsCardScale.ScaleY, 1, MotionTokens.Sheet, value => SettingsCardScale.ScaleY = value);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-shift", SettingsCardShift.Y, 0, MotionTokens.Sheet, value => SettingsCardShift.Y = value,
+                () => { if (version == settingsTransitionVersion && !settingsClosing) EnsureSettingsFocus(); });
+        }
         // Let the normal layout pass finish; never force a full settings layout on the click path.
         int request = ++settingsFocusRequest;
         Dispatcher.BeginInvoke(() => { if (request == settingsFocusRequest) EnsureSettingsFocus(); }, DispatcherPriority.Loaded);
     }
     public void CloseSettings()
     {
+        if (SettingsOverlay.Visibility != Visibility.Visible || settingsClosing) return;
         interactionVersion++;
         settingsFocusRequest++;
-        SettingsOverlay.BeginAnimation(OpacityProperty, null);
+        settingsClosing = true;
+        int version = ++settingsTransitionVersion;
+        if (!MotionPolicy.Allows(MotionDomain.Overlay)) { FinishCloseSettings(version); return; }
+        MotionDriver.Current.Animate(SettingsOverlay, "settings-backdrop", SettingsBackdrop.Opacity, 0, MotionTokens.Overlay, value => SettingsBackdrop.Opacity = value);
+        MotionDriver.Current.Animate(SettingsOverlay, "settings-shadow", SettingsShadow.Opacity, 0, MotionTokens.Overlay, value => SettingsShadow.Opacity = value);
+        MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-x", SettingsCardScale.ScaleX, MotionTokens.SheetScale, MotionTokens.Sheet, value => SettingsCardScale.ScaleX = value);
+        MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-y", SettingsCardScale.ScaleY, MotionTokens.SheetScale, MotionTokens.Sheet, value => SettingsCardScale.ScaleY = value);
+        MotionDriver.Current.Animate(SettingsOverlay, "settings-shift", SettingsCardShift.Y, MotionTokens.SheetOffset, MotionTokens.Sheet, value => SettingsCardShift.Y = value);
+        MotionDriver.Current.Animate(SettingsOverlay, "settings-opacity", SettingsCard.Opacity, 0, MotionTokens.Sheet, value => SettingsCard.Opacity = value,
+            () => FinishCloseSettings(version));
+    }
+    private void FinishCloseSettings(int version)
+    {
+        if (version != settingsTransitionVersion || !settingsClosing) return;
+        MotionDriver.Current.Cancel(SettingsOverlay);
         SettingsOverlay.Visibility = Visibility.Collapsed; Integration?.RegisterHotKey(Store.Settings.GlobalHotKey);
         if (settingsReturnFocus is DependencyObject previous && IsWithin(previous, HistoryList)) RestoreHistoryFocus();
         else if (settingsReturnFocus is UIElement { IsVisible: true, IsEnabled: true } control) control.Focus();
         else RestoreHistoryFocus();
         settingsReturnFocus = null;
+        settingsClosing = false;
     }
-    private void Overlay_MouseDown(object sender, MouseButtonEventArgs e) { if (e.OriginalSource == SettingsOverlay) CloseSettings(); }
+    private void Overlay_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (ReferenceEquals(e.OriginalSource, SettingsOverlay) || ReferenceEquals(e.OriginalSource, SettingsBackdrop)
+            || ReferenceEquals(e.OriginalSource, SettingsShadow)) CloseSettings();
+    }
     private void Card_MouseDown(object sender, MouseButtonEventArgs e) { e.Handled = true; }
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
     private void Maximize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-    private void Hide_Click(object sender, RoutedEventArgs e) { if (Store.Settings.CloseToTray) Hide(); else Quit(); }
-    private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; if (Store.Settings.CloseToTray) Hide(); else Quit(); } }
+    private void Hide_Click(object sender, RoutedEventArgs e) { if (Store.Settings.CloseToTray) { HandleApplicationDeactivated(); Hide(); } else Quit(); }
+    private void OnClosing(object? sender, CancelEventArgs e) { if (!quitting) { e.Cancel = true; if (Store.Settings.CloseToTray) { HandleApplicationDeactivated(); Hide(); } else Quit(); } }
     public async void Quit()
     {
         if (quitting) return;
@@ -725,6 +735,7 @@ public partial class MainWindow : Window
         Store.Changed -= StoreChanged; SystemEvents.UserPreferenceChanged -= SystemAppearanceChanged;
         toastTimer.Stop(); StopDragFrames(); DisposeTray();
         if (preview is { } activePreview) await activePreview.CloseAndReleaseAsync();
+        MotionDriver.Current.CancelAll();
         previewCache.Dispose(); Close();
         if (!SuppressApplicationShutdownForDiagnostics) Application.Current.Shutdown();
     }

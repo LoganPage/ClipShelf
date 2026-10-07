@@ -283,7 +283,10 @@ public static class SettingsExperienceTests
             window.OpenSettings(); await Idle();
             Check(ReferenceEquals(livePanel, liveContent.Content) && Math.Abs(liveScroll.VerticalOffset - rememberedOffset) < .1,
                 "Repeated OpenSettings while already open is idempotent");
-            window.CloseSettings(); window.OpenSettings(); window.CloseSettings(); await Task.Delay(200); await Idle();
+            window.CloseSettings(); window.OpenSettings(); window.CloseSettings();
+            for (int attempt = 0; attempt < 50 && ((Grid)window.FindName("SettingsOverlay")).Visibility == Visibility.Visible; attempt++)
+                await Task.Delay(20);
+            await Idle();
             var liveOverlay = (Grid)window.FindName("SettingsOverlay");
             Check(liveOverlay.Visibility == Visibility.Collapsed && !liveOverlay.HasAnimatedProperties && !liveScroll.IsWheelMotionActive,
                 "Closing during the entrance transition removes animations and wheel callbacks; delayed focus cannot reopen it");
@@ -293,7 +296,11 @@ public static class SettingsExperienceTests
                 FindAll<TextBlock>(livePanel).Any(t => t.Text == store.Settings.ScreenshotFolder) &&
                 ReferenceEquals(livePanel, liveContent.Content) && Math.Abs(liveScroll.VerticalOffset - rememberedOffset) < .1,
                 "Cached controls refresh changed preferences and folder labels in place without resetting position");
-            window.CloseSettings();
+            var backdrop = (Border)window.FindName("SettingsBackdrop");
+            backdrop.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                { RoutedEvent = Mouse.MouseDownEvent, Source = backdrop });
+            for (int attempt = 0; attempt < 50 && liveOverlay.Visibility == Visibility.Visible; attempt++) await Task.Delay(20);
+            Check(liveOverlay.Visibility == Visibility.Collapsed, "Clicking the animated backdrop closes settings after its exit instead of leaving a dead overlay");
         }
         catch (Exception exception) { error = exception.ToString(); }
         finally

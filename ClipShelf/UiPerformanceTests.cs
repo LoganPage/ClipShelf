@@ -55,10 +55,24 @@ public static class UiPerformanceTests
             Check(list.SelectedItems.Count == 40, "drag range retains exact selection");
             range(39, 10); Check(list.SelectedItems.Count == 30 && list.SelectedItems.Contains(list.Items[10]) && list.SelectedItems.Contains(list.Items[39]), "reversed range remains correct");
             list.UnselectAll();
-            var chosen = (ClipItem)list.Items[25]; list.ReplaceSelection(new[] { chosen });
+            var chosen = (ClipItem)list.Items[5]; list.ReplaceSelection(new[] { chosen });
             store.TogglePinned(new[] { chosen.Id }); await Idle();
             Check(ReferenceEquals(list.ItemsSource, originalSource) && resets == 0, "pin update preserves collection without resets");
             Check(list.SelectedItems.Cast<ClipItem>().Single().Id == chosen.Id && ((ClipItem)list.Items[0]).Id == chosen.Id, "pin moves row and preserves selection");
+            var movedRow = list.ItemContainerGenerator.ContainerFromItem(chosen) as ListBoxItem
+                ?? throw new InvalidOperationException("Pinned row was not realized after moving into the viewport");
+            metrics["pinnedRowInitialShift"] = (movedRow.RenderTransform as TranslateTransform)?.Y ?? 0;
+            metrics["pinnedRowInitialOpacity"] = movedRow.Opacity;
+            metrics["listMotionAllowed"] = MotionPolicy.Allows(MotionDomain.ListLayout) ? 1 : 0;
+            metrics["activeMotionChannels"] = MotionDriver.Current.ActiveCount;
+            Check(!MotionPolicy.Allows(MotionDomain.ListLayout)
+                || movedRow.RenderTransform is TranslateTransform { Y: not 0 } || movedRow.Opacity < 1,
+                "A realized pinned row continues from its previous layout instead of teleporting");
+            await Task.Delay(700); await Idle();
+            Check(movedRow.RenderTransform is not TranslateTransform settledShift || Math.Abs(settledShift.Y) < .01,
+                "Pinned-row layout motion settles without a residual transform");
+            Check(Enumerable.Range(0, list.Items.Count).Count(i => list.ItemContainerGenerator.ContainerFromIndex(i) is not null) < 40,
+                "Layout motion remains limited to realized containers after reordering");
             scroll.ScrollToVerticalOffset(740 + 17); await Idle();
             var topId = ((ClipItem)list.Items[(int)(scroll.VerticalOffset / 74)]).Id;
             double remainder = scroll.VerticalOffset % 74;

@@ -220,7 +220,12 @@ internal static class NativePreviewTests
                 foreach (bool dark in new[] { false, true }) { ThemeManager.Apply(new AppSettings { Theme = dark ? "Dark" : "Light" }); await Task.Delay(220); window.UpdateLayout();
                     foreach (double dpi in new[] { 1.25, 1.5, 2.0 }) { var capture = new RenderTargetBitmap((int)(width * dpi), (int)(height * dpi), 96 * dpi, 96 * dpi, PixelFormats.Pbgra32); capture.Render(window); Save(capture, Path.Combine(root, $"native-preview-{dark}-{dpi}.png")); Check(window.ActualWidth == width && window.ActualHeight == height, $"Native preview fixed layout simulated {dpi * 100}% / dark={dark}"); }
                 }
-                Send(window, Key.Escape); await Task.Delay(210); await window.Cleanup; Check(!window.IsVisible, "Esc closes and releases native preview");
+                Send(window, Key.Escape); await Task.Delay(60); Send(window, Key.Space); await Task.Delay(360);
+                Check(window.IsVisible, "Space during preview exit reverses the live transition without recreating the window");
+                Send(window, Key.Escape);
+                for (int wait = 0; wait < 20 && window.IsVisible; wait++) await Task.Delay(50);
+                await window.Cleanup;
+                Check(!window.IsVisible, "Esc closes and releases native preview after the interruptible exit completes");
             } finally { if (window.IsVisible) await window.CloseAndReleaseAsync(); }
             timing["peak-working-set-mb"] = Process.GetCurrentProcess().PeakWorkingSet64 / 1048576d;
             timing["cache-hit-ratio"] = cache.Hits / (double)Math.Max(1, cache.Hits + cache.Misses);

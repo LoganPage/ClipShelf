@@ -24,6 +24,11 @@ public static class RuntimeFeatureSwitches
     public static bool LowThumbnailQuality { get; private set; }
     public static bool NoRowMotion { get; private set; }
     public static bool NoDragRender { get; private set; }
+    public static bool NoMicroMotion { get; private set; }
+    public static bool NoIndicatorMotion { get; private set; }
+    public static bool NoOverlayMotion { get; private set; }
+    public static bool NoListLayoutMotion { get; private set; }
+    public static bool NoDirectMotion { get; private set; }
     public static string? ScrollDiagnosticReport { get; private set; }
 
     public static bool RowMotionEnabled => !NoRowMotion;
@@ -41,6 +46,12 @@ public static class RuntimeFeatureSwitches
         LowThumbnailQuality = args.Contains("--thumbnail-quality=low", StringComparer.OrdinalIgnoreCase);
         NoRowMotion = args.Contains("--no-row-motion", StringComparer.OrdinalIgnoreCase);
         NoDragRender = args.Contains("--no-drag-render", StringComparer.OrdinalIgnoreCase);
+        bool noMotion = args.Contains("--motion=off", StringComparer.OrdinalIgnoreCase);
+        NoMicroMotion = noMotion || args.Contains("--motion-micro=off", StringComparer.OrdinalIgnoreCase);
+        NoIndicatorMotion = noMotion || args.Contains("--motion-indicator=off", StringComparer.OrdinalIgnoreCase);
+        NoOverlayMotion = noMotion || args.Contains("--motion-overlay=off", StringComparer.OrdinalIgnoreCase);
+        NoListLayoutMotion = noMotion || args.Contains("--motion-list=off", StringComparer.OrdinalIgnoreCase);
+        NoDirectMotion = noMotion || args.Contains("--motion-direct=off", StringComparer.OrdinalIgnoreCase);
         foreach (string argument in args)
         {
             if (argument.Equals("--wheel=snappy", StringComparison.OrdinalIgnoreCase))
@@ -69,6 +80,7 @@ public static class RuntimeFeatureSwitches
     internal static void Reset()
     {
         NativeWheel = InstantWheel = WheelPixelSnap = NoRowCache = LowThumbnailQuality = NoRowMotion = NoDragRender = false;
+        NoMicroMotion = NoIndicatorMotion = NoOverlayMotion = NoListLayoutMotion = NoDirectMotion = false;
         WheelResponse = null; WheelPrewarmMs = 0;
         SnappyWheel = BalancedWheel = SoftWheel = false;
         ScrollDiagnosticReport = null;
@@ -86,6 +98,8 @@ public static class RuntimeFeatureSwitches
         wheelPrewarmMs = WheelPrewarmMs,
         wheelPreset = SnappyWheel ? "snappy" : BalancedWheel ? "balanced" : SoftWheel ? "soft" : null,
         wheelPixelSnap = WheelPixelSnap, noRowCache = NoRowCache,
-        lowThumbnailQuality = LowThumbnailQuality, noRowMotion = NoRowMotion, noDragRender = NoDragRender
+        lowThumbnailQuality = LowThumbnailQuality, noRowMotion = NoRowMotion, noDragRender = NoDragRender,
+        noMicroMotion = NoMicroMotion, noIndicatorMotion = NoIndicatorMotion, noOverlayMotion = NoOverlayMotion,
+        noListLayoutMotion = NoListLayoutMotion, noDirectMotion = NoDirectMotion
     };
 }

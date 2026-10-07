@@ -22,8 +22,10 @@ public partial class MainWindow
 
     private void InitializeHistoryInteraction()
     {
-        PreviewMouseDown += (_, _) => { activationPointer = activationClickPending; activationClickPending = false; interactionVersion++; HistoryList.CancelWheelMotion(); };
-        PreviewMouseWheel += (_, _) => interactionVersion++;
+        PreviewMouseDown += (_, e) => { activationPointer = activationClickPending; activationClickPending = false; interactionVersion++; HistoryList.CancelWheelMotion();
+            if (IsWithin(e.OriginalSource as DependencyObject, HistoryList)) rowLayoutTransition.Cancel(HistoryList); };
+        PreviewMouseWheel += (_, e) => { interactionVersion++;
+            if (IsWithin(e.OriginalSource as DependencyObject, HistoryList)) rowLayoutTransition.Cancel(HistoryList); };
         GotKeyboardFocus += (_, e) => { interactionVersion++; KeepFocusInsideSettings(e); };
         Activated += (_, _) => { interactionVersion++; EnsureSettingsFocus(); };
         Deactivated += (_, _) => { interactionVersion++; HistoryList.CancelWheelMotion(); };
@@ -55,7 +57,24 @@ public partial class MainWindow
         };
     }
 
-    internal void HandleApplicationDeactivated() { FocusCuePolicy.Reset(this); interactionVersion++; HistoryList.CancelWheelMotion(); EndDrag(); }
+    internal void HandleApplicationDeactivated()
+    {
+        FocusCuePolicy.Reset(this); interactionVersion++; HistoryList.CancelWheelMotion(); EndDrag();
+        rowLayoutTransition.Cancel(HistoryList);
+        PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
+        if (SettingsOverlay.Visibility == Visibility.Visible && settingsClosing)
+        {
+            // A hidden owner stops receiving composition frames. Complete the pending exit now
+            // so reopening the window cannot inherit a half-closed sheet or stale input state.
+            FinishCloseSettings(settingsTransitionVersion);
+        }
+        else if (SettingsOverlay.Visibility == Visibility.Visible)
+        {
+            MotionDriver.Current.Cancel(SettingsOverlay);
+            SettingsBackdrop.Opacity = SettingsCard.Opacity = SettingsShadow.Opacity = 1;
+            SettingsCardScale.ScaleX = SettingsCardScale.ScaleY = 1; SettingsCardShift.Y = 0;
+        }
+    }
 
     private void ResetRangeCache() { rangeStart = rangeEnd = -1; cachedRangeBase = null; }
 
@@ -316,6 +335,7 @@ public partial class MainWindow
         var ids = items.Select(item => item.Id).ToHashSet();
         int count = Store.Items.Count(item => ids.Contains(item.Id));
         if (count == 0) return;
+        rowLayoutTransition.CaptureExits(HistoryList, ids, HistoryExitLayer);
         Store.Remove(ids); UpdateActions();
         ShowStatus($"已删除 {count} 条记录 · Ctrl+Z 撤销");
     }

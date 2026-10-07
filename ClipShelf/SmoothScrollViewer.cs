@@ -107,7 +107,7 @@ public sealed class SmoothScrollViewer : ScrollViewer
         motion.ResponseFrequency = RuntimeFeatureSwitches.WheelResponse
             ?? (WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28);
         double current = hasRequest ? requestedOffset : scrollInfo.VerticalOffset;
-        if (directInput || !SystemParameters.ClientAreaAnimation)
+        if (directInput || !MotionPolicy.Allows(MotionDomain.DirectManipulation))
         {
             StopRendering(); motion.Reset(current + distance, MaximumOffset); RequestOffset(motion.Position);
         }
@@ -133,7 +133,7 @@ public sealed class SmoothScrollViewer : ScrollViewer
             if (frame.RenderingTime == lastRenderingTime) return;
             lastRenderingTime = frame.RenderingTime;
         }
-        if (!IsVisible || !IsEnabled || !IsLoaded || scrollInfo is null || !SystemParameters.ClientAreaAnimation
+        if (!IsVisible || !IsEnabled || !IsLoaded || scrollInfo is null || !MotionPolicy.Allows(MotionDomain.DirectManipulation)
             || IsMouseCaptureWithin || Mouse.LeftButton == MouseButtonState.Pressed)
         { CancelWheelMotion(); return; }
         long now = Stopwatch.GetTimestamp();

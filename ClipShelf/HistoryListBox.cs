@@ -130,7 +130,7 @@ public sealed class HistoryListBox : ListBox
         // A quicker response keeps small packets responsive without per-packet jumps.
         wheelMotion.ResponseFrequency = RuntimeFeatureSwitches.WheelResponse
             ?? (WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28);
-        bool immediate = !SystemParameters.ClientAreaAnimation || directInput || RuntimeFeatureSwitches.InstantWheel;
+        bool immediate = !MotionPolicy.Allows(MotionDomain.DirectManipulation) || directInput || RuntimeFeatureSwitches.InstantWheel;
         double current = hasRequestedOffset ? requestedOffset : wheelPanel.VerticalOffset;
         double target = Math.Clamp(current + distance, 0, maximum);
         DiagnosticWheelPacket?.Invoke(new WheelDiagnosticPacket(now, current, target, delta));
@@ -169,7 +169,8 @@ public sealed class HistoryListBox : ListBox
 
     internal static bool ShouldApplyWheelPrewarm(bool clientAreaAnimation, bool directInput)
         => clientAreaAnimation && !directInput && !RuntimeFeatureSwitches.NativeWheel
-            && !RuntimeFeatureSwitches.InstantWheel && RuntimeFeatureSwitches.WheelPrewarmMs > 0;
+            && !RuntimeFeatureSwitches.InstantWheel && !RuntimeFeatureSwitches.NoDirectMotion
+            && RuntimeFeatureSwitches.WheelPrewarmMs > 0;
 
     private void RenderWheelFrame(object? sender, EventArgs e)
     {
@@ -178,7 +179,7 @@ public sealed class HistoryListBox : ListBox
             if (frame.RenderingTime == lastRenderingTime) return;
             lastRenderingTime = frame.RenderingTime;
         }
-        if (!IsVisible || !IsEnabled || !IsLoaded || wheelPanel is null || !SystemParameters.ClientAreaAnimation
+        if (!IsVisible || !IsEnabled || !IsLoaded || wheelPanel is null || !MotionPolicy.Allows(MotionDomain.DirectManipulation)
             || IsMouseCaptureWithin)
         { CancelWheelMotion(); return; }
         long now = Stopwatch.GetTimestamp();

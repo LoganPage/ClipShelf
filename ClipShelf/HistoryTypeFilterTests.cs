@@ -51,14 +51,8 @@ internal static class HistoryTypeFilterTests
             }
 
             Check(Visible().Length == 4, "All filter initially shows every record");
-            var adjacentTransition = MainWindow.FilteredListTransition(0, 1);
-            var distantTransition = MainWindow.FilteredListTransition(0, 3);
-            Check(adjacentTransition.DurationMilliseconds > distantTransition.DurationMilliseconds
-                && adjacentTransition.PeakOpacity < distantTransition.PeakOpacity,
-                "Adjacent filters use a longer, lower-intensity fade than distant filters");
-            Check(Math.Abs(distantTransition.DurationMilliseconds - 120) < .01
-                && Math.Abs(distantTransition.PeakOpacity - .45) < .001,
-                "The established All-to-Image transition remains the distant-filter baseline");
+            Check(transitionOverlay.Visibility == Visibility.Hidden && transitionOverlay.Opacity == 0,
+                "Filtering starts without a full-list flash layer");
             var changes = (System.Collections.Specialized.INotifyCollectionChanged)list.ItemsSource;
             int resets = 0;
             changes.CollectionChanged += (_, e) => { if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) resets++; };
@@ -71,21 +65,20 @@ internal static class HistoryTypeFilterTests
             var contentHost = Descendants<ScrollContentPresenter>(list).First();
             var indicatorShift = (TranslateTransform)filterSelection.RenderTransform;
             Rect frameFirst = BoundsInWindow(historyBorder, window);
-            double overlayFirstOpacity = transitionOverlay.Opacity, indicatorFirst = indicatorShift.X;
+            double indicatorFirst = indicatorShift.X;
             Check(contentHost.ReadLocalValue(UIElement.RenderTransformProperty) == DependencyProperty.UnsetValue,
                 "Type filtering creates no horizontal or vertical history transform");
             await Task.Delay(55); Rect frameMiddle = BoundsInWindow(historyBorder, window);
-            double overlayMiddleOpacity = transitionOverlay.Opacity, indicatorMiddle = indicatorShift.X;
-            await Task.Delay(230); await Idle();
+            double indicatorMiddle = indicatorShift.X;
+            await Task.Delay(900); await Idle();
             Rect frameFinal = BoundsInWindow(historyBorder, window);
-            Check(!SystemParameters.ClientAreaAnimation || (new[] { overlayFirstOpacity, overlayMiddleOpacity, transitionOverlay.Opacity }.Distinct().Count() >= 2
-                && overlayFirstOpacity >= overlayMiddleOpacity && overlayMiddleOpacity >= transitionOverlay.Opacity
-                && new[] { indicatorFirst, indicatorMiddle, indicatorShift.X }.Distinct().Count() >= 2),
-                "Type selection slides while the history overlay fades monotonically through intermediate values");
+            Check(!MotionPolicy.Allows(MotionDomain.SharedIndicator)
+                || new[] { indicatorFirst, indicatorMiddle, indicatorShift.X }.Distinct().Count() >= 2,
+                "Type selection uses an interruptible shared indicator with intermediate values");
             Check(contentHost.ReadLocalValue(UIElement.RenderTransformProperty) == DependencyProperty.UnsetValue
                 && Math.Abs(contentHost.Opacity - 1) < .01 && Math.Abs(transitionOverlay.Opacity) < .01
                 && transitionOverlay.Visibility == Visibility.Hidden,
-                "History filter transition settles without transforms or a residual animation layer");
+                "History filtering never flashes a full-list overlay or leaves a residual layer");
             Check(historyBorder.ReadLocalValue(UIElement.RenderTransformProperty) == DependencyProperty.UnsetValue
                 && Math.Abs(historyBorder.Opacity - 1) < .01
                 && Near(frameFirst, frameMiddle) && Near(frameFirst, frameFinal),
@@ -159,12 +152,12 @@ internal static class HistoryTypeFilterTests
             await Task.Delay(90);
             Check(!SystemParameters.ClientAreaAnimation || topmostRotation.Angle is > 0 and < 35,
                 "Always-on-top pin exposes an interruptible intermediate rotation");
-            await Task.Delay(150);
+            await Task.Delay(420);
             Check(Math.Abs(topmostRotation.Angle) < .01, "Always-on-top pin settles vertically when enabled");
             Check(new HistoryStore(data).Settings.AlwaysOnTop, "Always-on-top survives a settings reload");
             topmost.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(!window.Topmost && !store.Settings.AlwaysOnTop, "Always-on-top can be switched off without affecting the window");
-            await Task.Delay(240);
+            await Task.Delay(520);
             Check(Math.Abs(topmostRotation.Angle - 35) < .01, "Always-on-top pin returns to its tilted disabled angle");
         }
         catch (Exception ex) { error = ex.ToString(); }

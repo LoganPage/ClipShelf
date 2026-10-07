@@ -23,7 +23,9 @@ public sealed class PreviewWindow : Window
     private readonly IImageOcrService ocrService;
     private readonly IOcrClipboard ocrClipboard;
     private readonly bool ownsCache;
-    private readonly Border card = new() { CornerRadius = new(12), Margin = new(12), RenderTransformOrigin = new(.5, .35), RenderTransform = new ScaleTransform(1, 1) };
+    private readonly Border card = new() { CornerRadius = new(12), Margin = new(12), RenderTransformOrigin = new(.5, .35), Opacity = 0 };
+    private readonly ScaleTransform cardScale = new(.97, .97);
+    private readonly TranslateTransform cardShift = new(0, 8);
     private readonly TextBlock title = new() { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold };
     private readonly TextBlock pages = new() { Width = 128, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly RecordTypeIcon icon = new() { Width = 32, Height = 28, Margin = new(0, 0, 10, 0) };
@@ -77,6 +79,7 @@ public sealed class PreviewWindow : Window
     private CancellationTokenSource? ocrCancellation;
     private int lastRecordIndex;
     private bool closing, finishedClose;
+    private int closeTransitionVersion;
     private readonly DispatcherTimer resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly DispatcherTimer zoomTimer = new() { Interval = TimeSpan.FromMilliseconds(220) };
     private double visualZoom = 1;
@@ -121,6 +124,7 @@ public sealed class PreviewWindow : Window
         SetResourceReference(BackgroundProperty, "BackgroundBrush"); SetResourceReference(ForegroundProperty, "TextBrush");
         FocusCuePolicy.SetIsEnabled(this, true);
         var appearance = new WindowAppearance(this);
+        var cardTransforms = new TransformGroup(); cardTransforms.Children.Add(cardScale); cardTransforms.Children.Add(cardShift); card.RenderTransform = cardTransforms;
         card.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
         var layout = new Grid(); layout.RowDefinitions.Add(new() { Height = new GridLength(56) }); layout.RowDefinitions.Add(new());
         var toolbar = new DockPanel { Margin = new(14, 8, 14, 8) };
@@ -202,7 +206,7 @@ public sealed class PreviewWindow : Window
         image.SizeChanged += (_, _) => ocrSelection.InvalidateVisual();
         ocrSelection.SelectionChanged += OnOcrSelectionChanged;
         Closing += OnClosing;
-        Closed += (_, _) => { ResetOcrState(); resizeTimer.Stop(); zoomTimer.Stop(); scroll.CancelWheelMotion(); session.Changed -= Update; ocrSelection.SelectionChanged -= OnOcrSelectionChanged; PreviewKeyDown -= OnPreviewKey; PreviewMouseWheel -= OnPreviewWheel; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); ocrText.Clear(); spreadsheet.ItemsSource = null; Cleanup = ReleaseAsync(); };
+        Closed += (_, _) => { ResetOcrState(); resizeTimer.Stop(); zoomTimer.Stop(); scroll.CancelWheelMotion(); MotionDriver.Current.Cancel(card); MotionDriver.Current.Cancel(image); MotionDriver.Current.Cancel(textPanel); MotionDriver.Current.Cancel(spreadsheet); session.Changed -= Update; ocrSelection.SelectionChanged -= OnOcrSelectionChanged; PreviewKeyDown -= OnPreviewKey; PreviewMouseWheel -= OnPreviewWheel; appearance.Dispose(); image.Source = previous.Source = null; textContent.Clear(); ocrText.Clear(); spreadsheet.ItemsSource = null; Cleanup = ReleaseAsync(); };
     }
     private static string ColumnName(int index) { string name = ""; for (int n = index + 1; n > 0; n = (n - 1) / 26) name = (char)('A' + (n - 1) % 26) + name; return name; }
     private static Button Button(string glyph, string tooltip, Action action)
@@ -228,7 +232,10 @@ public sealed class PreviewWindow : Window
             e.Handled = true; return;
         }
         if (e.Key == Key.Escape && searchPanel.IsVisible) { HideTextSearch(); e.Handled = true; return; }
-        if (e.Key is Key.Space or Key.Escape) { if (!e.IsRepeat) Close(); e.Handled = true; return; }
+        if (e.Key is Key.Space or Key.Escape) {
+            if (!e.IsRepeat) { if (closing) ReverseClose(); else Close(); }
+            e.Handled = true; return;
+        }
         if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F && session.PresentedTextViewModel is not null) { ShowTextSearch(); e.Handled = true; return; }
         if (e.Key == Key.F3 && session.PresentedTextViewModel is not null) { FindText(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)); e.Handled = true; return; }
         if (Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.Up or Key.Down) { RememberTextViewState(); session.HandleKey(e.Key); e.Handled = true; return; }
@@ -426,7 +433,7 @@ public sealed class PreviewWindow : Window
             image.Source = previous.Source = null; image.Visibility = Visibility.Collapsed; textPanel.Visibility = Visibility.Collapsed;
             scroll.Visibility = Visibility.Collapsed; spreadsheet.ItemsSource = sheet.Rows; spreadsheet.Visibility = Visibility.Visible;
             title.Text = Path.GetFileName(session.Path) + " · " + sheet.SheetName;
-            spreadsheet.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1)));
+            FadeContent(spreadsheet, "spreadsheet-content");
             return;
         }
         spreadsheet.Visibility = Visibility.Collapsed; scroll.Visibility = Visibility.Visible;
@@ -440,7 +447,7 @@ public sealed class PreviewWindow : Window
             segmentControls.Visibility = text.IsLarge ? Visibility.Visible : Visibility.Collapsed;
             if (displayedTextViewModel is { } view) { ApplyTextOptions(view); UpdateTextButtonState(view); updatingSearch = true; previewSearch.Text = view.SearchText; updatingSearch = false; }
             Dispatcher.BeginInvoke(new Action(() => scroll.ScrollToVerticalOffset(displayedTextViewModel?.ScrollOffset ?? 0)), DispatcherPriority.Loaded);
-            textPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1)));
+            FadeContent(textPanel, "text-content");
             return;
         }
         if (session.Presented is not { } page || ReferenceEquals(displayed, page)) return;
@@ -451,9 +458,17 @@ public sealed class PreviewWindow : Window
         scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
         if (changedPage) scroll.ScrollToTop();
         displayedText = null; displayedTextViewModel = null; displayedSpreadsheet = null; textPanel.Visibility = Visibility.Collapsed; textContent.Clear(); image.Visibility = Visibility.Visible;
-        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 130 : 1));
-        fade.Completed += (_, _) => { if (ReferenceEquals(displayed, page)) previous.Source = null; };
-        image.BeginAnimation(OpacityProperty, fade, HandoffBehavior.SnapshotAndReplace);
+        image.Opacity = 0;
+        if (!MotionPolicy.Allows(MotionDomain.Overlay)) { image.Opacity = 1; previous.Source = null; }
+        else MotionDriver.Current.Animate(image, "image-content", 0, 1, MotionTokens.Selection, value => image.Opacity = value,
+            () => { if (ReferenceEquals(displayed, page)) previous.Source = null; });
+    }
+    private static void FadeContent(UIElement element, string channel)
+    {
+        MotionDriver.Current.Cancel(element, channel);
+        if (!MotionPolicy.Allows(MotionDomain.Overlay)) { element.Opacity = 1; return; }
+        element.Opacity = .18;
+        MotionDriver.Current.Animate(element, channel, element.Opacity, 1, MotionTokens.Selection, value => element.Opacity = value);
     }
     private void ApplyTextOptions(TextPreviewViewModel view)
     {
@@ -481,26 +496,46 @@ public sealed class PreviewWindow : Window
         try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
         catch { errorText.Text = "默认应用无法打开此文件。"; errorLayer.Visibility = Visibility.Visible; }
     }
-    private void AnimateCard(bool opening)
+    private void AnimateCard(bool opening, Action? completed = null)
     {
-        int duration = SystemParameters.ClientAreaAnimation ? opening ? 200 : 160 : 1;
-        var easing = new CubicEase { EasingMode = opening ? EasingMode.EaseOut : EasingMode.EaseIn };
-        card.BeginAnimation(OpacityProperty, new DoubleAnimation(opening ? 0 : card.Opacity, opening ? 1 : 0, TimeSpan.FromMilliseconds(duration)) { EasingFunction = easing });
-        if (SystemParameters.ClientAreaAnimation) {
-            var scale = (ScaleTransform)card.RenderTransform;
-            scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(opening ? .97 : scale.ScaleX, opening ? 1 : .97, TimeSpan.FromMilliseconds(duration)) { EasingFunction = easing });
-            scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(opening ? .97 : scale.ScaleY, opening ? 1 : .97, TimeSpan.FromMilliseconds(duration)) { EasingFunction = easing });
+        double opacity = opening ? 1 : 0;
+        double scale = opening ? 1 : .97;
+        double shift = opening ? 0 : 8;
+        if (!MotionPolicy.Allows(MotionDomain.Overlay))
+        {
+            MotionDriver.Current.Cancel(card);
+            card.Opacity = opacity; cardScale.ScaleX = cardScale.ScaleY = scale; cardShift.Y = shift;
+            completed?.Invoke();
+            return;
         }
+        MotionSpec spec = MotionTokens.Preview;
+        MotionDriver.Current.Animate(card, "preview-scale-x", cardScale.ScaleX, scale, spec, value => cardScale.ScaleX = value);
+        MotionDriver.Current.Animate(card, "preview-scale-y", cardScale.ScaleY, scale, spec, value => cardScale.ScaleY = value);
+        MotionDriver.Current.Animate(card, "preview-shift", cardShift.Y, shift, spec, value => cardShift.Y = value);
+        MotionDriver.Current.Animate(card, "preview-opacity", card.Opacity, opacity, spec, value => card.Opacity = value, completed);
     }
-    private async void OnClosing(object? sender, CancelEventArgs e)
+    private void ReverseClose()
+    {
+        if (!closing || finishedClose) return;
+        closing = false;
+        closeTransitionVersion++;
+        AnimateCard(true);
+        Focus();
+    }
+    private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (finishedClose) return;
-        e.Cancel = true; if (closing) return; closing = true; ResetOcrState(); session.Cancel(); AnimateCard(false);
-        await Task.Delay(SystemParameters.ClientAreaAnimation ? 160 : 1); finishedClose = true; Close();
+        e.Cancel = true; if (closing) return;
+        closing = true; ResetOcrState();
+        int version = ++closeTransitionVersion;
+        AnimateCard(false, () => {
+            if (!closing || version != closeTransitionVersion) return;
+            session.Cancel(); finishedClose = true; Close();
+        });
     }
     private async Task ReleaseAsync() { try { await PendingOcr; } catch (OperationCanceledException) { } await session.DisposeAsync(); displayed = null; displayedText = null; if (ownsCache) cache.Dispose(); }
     internal async Task CloseAndReleaseAsync()
     {
-        session.Cancel(); closing = finishedClose = true; Close(); await Cleanup;
+        MotionDriver.Current.Cancel(card); session.Cancel(); closing = finishedClose = true; Close(); await Cleanup;
     }
 }

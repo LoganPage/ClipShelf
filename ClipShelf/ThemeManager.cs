@@ -6,7 +6,6 @@ using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Media.Animation;
 using Microsoft.Win32;
 
 namespace ClipShelf;

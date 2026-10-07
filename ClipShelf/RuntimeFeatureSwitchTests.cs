@@ -20,6 +20,8 @@ public static class RuntimeFeatureSwitchTests
             Check(!RuntimeFeatureSwitches.NativeWheel && !RuntimeFeatureSwitches.InstantWheel && RuntimeFeatureSwitches.WheelResponse is null
                 && !RuntimeFeatureSwitches.WheelPixelSnap && !RuntimeFeatureSwitches.NoRowCache && !RuntimeFeatureSwitches.LowThumbnailQuality
                 && !RuntimeFeatureSwitches.NoRowMotion && !RuntimeFeatureSwitches.NoDragRender
+                && !RuntimeFeatureSwitches.NoMicroMotion && !RuntimeFeatureSwitches.NoIndicatorMotion
+                && !RuntimeFeatureSwitches.NoOverlayMotion && !RuntimeFeatureSwitches.NoListLayoutMotion && !RuntimeFeatureSwitches.NoDirectMotion
                 && RuntimeFeatureSwitches.WheelPrewarmMs == 0 && !RuntimeFeatureSwitches.SnappyWheel
                 && !RuntimeFeatureSwitches.BalancedWheel && !RuntimeFeatureSwitches.SoftWheel,
                 "all diagnostic switches and wheel presets default off");
@@ -33,7 +35,12 @@ public static class RuntimeFeatureSwitchTests
                 ("--no-row-cache", () => RuntimeFeatureSwitches.NoRowCache),
                 ("--thumbnail-quality=low", () => RuntimeFeatureSwitches.LowThumbnailQuality),
                 ("--no-row-motion", () => RuntimeFeatureSwitches.NoRowMotion),
-                ("--no-drag-render", () => RuntimeFeatureSwitches.NoDragRender)
+                ("--no-drag-render", () => RuntimeFeatureSwitches.NoDragRender),
+                ("--motion-micro=off", () => RuntimeFeatureSwitches.NoMicroMotion),
+                ("--motion-indicator=off", () => RuntimeFeatureSwitches.NoIndicatorMotion),
+                ("--motion-overlay=off", () => RuntimeFeatureSwitches.NoOverlayMotion),
+                ("--motion-list=off", () => RuntimeFeatureSwitches.NoListLayoutMotion),
+                ("--motion-direct=off", () => RuntimeFeatureSwitches.NoDirectMotion)
             };
             foreach (var item in cases)
             {
@@ -43,6 +50,10 @@ public static class RuntimeFeatureSwitchTests
             string diagnostic = Path.Combine(Path.GetTempPath(), "clipshelf-scroll-diag.json");
             RuntimeFeatureSwitches.Configure(["--scroll-diag", diagnostic]);
             Check(RuntimeFeatureSwitches.ScrollDiagnosticReport == Path.GetFullPath(diagnostic), "scroll diagnostic report path is normalized");
+            RuntimeFeatureSwitches.Configure(["--motion=off"]);
+            Check(RuntimeFeatureSwitches.NoMicroMotion && RuntimeFeatureSwitches.NoIndicatorMotion && RuntimeFeatureSwitches.NoOverlayMotion
+                && RuntimeFeatureSwitches.NoListLayoutMotion && RuntimeFeatureSwitches.NoDirectMotion,
+                "global motion off expands to every isolated motion domain");
 
             RuntimeFeatureSwitches.Configure(["--wheel=snappy"]);
             Check(RuntimeFeatureSwitches.SnappyWheel && RuntimeFeatureSwitches.WheelResponse == 90 && RuntimeFeatureSwitches.WheelPrewarmMs == 90,
