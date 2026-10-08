@@ -1,0 +1,9 @@
+{
+  "id": "frame-truncated",
+  "kind": "rawFrame",
+  "bytesBase64": "AAABpnsicHJvdG9jb2xWZXJzaW9uIjoxLCJtZXNzYWdlVHlwZSI6InRleHRFdmVudCIsIm1lc3NhZ2VJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAyMiIsInNlbnRBdFV0YyI6IjIwMjYtMTAtMDdUMDg6MDA6MDAuMDAwWiIsImJvZHkiOnsiZXZlbnRJZCI6IjMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTAwMDAwMDAwMDAxNCIsIm9yaWdpbkRldmljZUlkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2VxdWVuY2UiOjEsImNhcHR1cmVkQXRVdGMiOiIyMDI2LTEwLTA3VDA4OjAwOjAwLjAwMFoiLCJjb250ZW50SGFzaCI6InNoYTI1NjoxOTI2YmQ5NjIyN2FkNjFhNTc3NTJkZjBjY2JkZjVjYjc1YzJjNDA1MjAyNzVhMzdhYTAxZDZmZWQzZTdhZjM5IiwicGF5bG9hZCI6eyJ0ZXh0IjoidmFsaWQi",
+  "expected": {
+    "accepted": false,
+    "errorCode": "invalid_frame"
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "id": "sequence-gap-duplicate-fill",
+  "kind": "state",
+  "operations": [
+    {
+      "message": {
+        "protocolVersion": 1,
+        "messageType": "textEvent",
+        "messageId": "00000000-0000-4000-8000-000000000019",
+        "sentAtUtc": "2026-10-07T08:00:00.000Z",
+        "body": {
+          "eventId": "33333333-3333-4333-8333-000000000011",
+          "originDeviceId": "22222222-2222-4222-8222-222222222222",
+          "sequence": 1,
+          "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+          "contentHash": "sha256:9b0d54c195ba0d7c39e81951d3fe8ebc797b77f1618d361f872ac95753196cea",
+          "payload": {
+            "text": "one"
+          }
+        }
+      },
+      "expectedAck": 1,
+      "imported": true,
+      "duplicate": false
+    },
+    {
+      "message": {
+        "protocolVersion": 1,
+        "messageType": "textEvent",
+        "messageId": "00000000-0000-4000-8000-000000000020",
+        "sentAtUtc": "2026-10-07T08:00:00.000Z",
+        "body": {
+          "eventId": "33333333-3333-4333-8333-000000000012",
+          "originDeviceId": "22222222-2222-4222-8222-222222222222",
+          "sequence": 3,
+          "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+          "contentHash": "sha256:7b3585d17d98c7f6adb00e4e6f0232a3762cc7cf4036b16678e5327b2888ddb9",
+          "payload": {
+            "text": "three"
+          }
+        }
+      },
+      "expectedAck": 1,
+      "imported": true,
+      "duplicate": false
+    },
+    {
+      "message": {
+        "protocolVersion": 1,
+        "messageType": "textEvent",
+        "messageId": "00000000-0000-4000-8000-000000000020",
+        "sentAtUtc": "2026-10-07T08:00:00.000Z",
+        "body": {
+          "eventId": "33333333-3333-4333-8333-000000000012",
+          "originDeviceId": "22222222-2222-4222-8222-222222222222",
+          "sequence": 3,
+          "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+          "contentHash": "sha256:7b3585d17d98c7f6adb00e4e6f0232a3762cc7cf4036b16678e5327b2888ddb9",
+          "payload": {
+            "text": "three"
+          }
+        }
+      },
+      "expectedAck": 1,
+      "imported": false,
+      "duplicate": true
+    },
+    {
+      "message": {
+        "protocolVersion": 1,
+        "messageType": "textEvent",
+        "messageId": "00000000-0000-4000-8000-000000000021",
+        "sentAtUtc": "2026-10-07T08:00:00.000Z",
+        "body": {
+          "eventId": "33333333-3333-4333-8333-000000000013",
+          "originDeviceId": "22222222-2222-4222-8222-222222222222",
+          "sequence": 2,
+          "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+          "contentHash": "sha256:e0e30bc9aec990bcfacc089cd754babaf66cdbd4d55ce3d8b06a83d66933ac85",
+          "payload": {
+            "text": "two"
+          }
+        }
+      },
+      "expectedAck": 3,
+      "imported": true,
+      "duplicate": false
+    },
+    {
+      "message": {
+        "protocolVersion": 1,
+        "messageType": "textEvent",
+        "messageId": "00000000-0000-4000-8000-000000000019",
+        "sentAtUtc": "2026-10-07T08:00:00.000Z",
+        "body": {
+          "eventId": "33333333-3333-4333-8333-000000000011",
+          "originDeviceId": "22222222-2222-4222-8222-222222222222",
+          "sequence": 1,
+          "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+          "contentHash": "sha256:9b0d54c195ba0d7c39e81951d3fe8ebc797b77f1618d361f872ac95753196cea",
+          "payload": {
+            "text": "one"
+          }
+        }
+      },
+      "expectedAck": 3,
+      "imported": false,
+      "duplicate": true
+    }
+  ],
+  "expected": {
+    "accepted": true,
+    "finalAck": 3
+  }
+}

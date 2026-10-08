@@ -1,0 +1,46 @@
+{
+  "id": "framing-two-consecutive",
+  "kind": "framing",
+  "messages": [
+    {
+      "protocolVersion": 1,
+      "messageType": "hello",
+      "messageId": "00000000-0000-4000-8000-000000000001",
+      "sentAtUtc": "2026-10-07T08:00:00.000Z",
+      "body": {
+        "deviceId": "11111111-1111-4111-8111-111111111111",
+        "deviceName": "Windows PC",
+        "appVersion": "1.4.9",
+        "supportedProtocolVersions": [
+          1
+        ],
+        "capabilities": [
+          "text"
+        ]
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "messageType": "textEvent",
+      "messageId": "00000000-0000-4000-8000-000000000003",
+      "sentAtUtc": "2026-10-07T08:00:00.000Z",
+      "body": {
+        "eventId": "33333333-3333-4333-8333-000000000001",
+        "originDeviceId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 1,
+        "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+        "contentHash": "sha256:c9951c15713b1c557156101a694a50c4fd4c323b15876bd4b4532eb40242342f",
+        "payload": {
+          "text": "example"
+        }
+      }
+    }
+  ],
+  "chunkSizes": [
+    2000000
+  ],
+  "expected": {
+    "accepted": true,
+    "messageCount": 2
+  }
+}

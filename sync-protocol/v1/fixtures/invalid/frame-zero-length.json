@@ -1,0 +1,9 @@
+{
+  "id": "frame-zero-length",
+  "kind": "rawFrame",
+  "bytesBase64": "AAAAAA==",
+  "expected": {
+    "accepted": false,
+    "errorCode": "invalid_frame"
+  }
+}

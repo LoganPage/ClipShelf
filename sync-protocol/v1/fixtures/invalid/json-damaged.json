@@ -1,0 +1,9 @@
+{
+  "id": "json-damaged",
+  "kind": "rawJson",
+  "rawUtf8Base64": "eyJwcm90b2NvbFZlcnNpb24iOjEs",
+  "expected": {
+    "accepted": false,
+    "errorCode": "invalid_message"
+  }
+}

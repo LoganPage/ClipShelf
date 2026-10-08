@@ -1,0 +1,19 @@
+{
+  "id": "error-message",
+  "kind": "json",
+  "message": {
+    "protocolVersion": 1,
+    "messageType": "error",
+    "messageId": "00000000-0000-4000-8000-000000000015",
+    "sentAtUtc": "2026-10-07T08:00:00.000Z",
+    "body": {
+      "code": "invalid_text",
+      "relatedMessageId": "00000000-0000-4000-8000-000000000003",
+      "message": "Text payload was rejected."
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "messageType": "error"
+  }
+}

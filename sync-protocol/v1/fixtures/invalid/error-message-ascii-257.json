@@ -1,0 +1,19 @@
+{
+  "id": "error-message-ascii-257",
+  "kind": "json",
+  "message": {
+    "protocolVersion": 1,
+    "messageType": "error",
+    "messageId": "00000000-0000-4000-8000-000000000026",
+    "sentAtUtc": "2026-10-07T08:00:00.000Z",
+    "body": {
+      "code": "invalid_message",
+      "relatedMessageId": "00000000-0000-4000-8000-000000000001",
+      "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "errorCode": "invalid_message"
+  }
+}

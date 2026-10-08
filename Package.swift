@@ -7,9 +7,14 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "ClipShelf", targets: ["ClipShelfLite"])
+        .executable(name: "ClipShelf", targets: ["ClipShelfLite"]),
+        .library(name: "ClipShelfSyncProtocol", targets: ["ClipShelfSyncProtocol"])
     ],
     targets: [
+        .target(
+            name: "ClipShelfSyncProtocol",
+            path: "Sources/ClipShelfSyncProtocol"
+        ),
         .executableTarget(
             name: "ClipShelfLite",
             path: "Sources/ClipShelfLite"
@@ -18,6 +23,11 @@ let package = Package(
             name: "ClipShelfLiteTests",
             dependencies: ["ClipShelfLite"],
             path: "MacTests/ClipShelfLiteTests"
+        ),
+        .testTarget(
+            name: "ClipShelfSyncProtocolTests",
+            dependencies: ["ClipShelfSyncProtocol"],
+            path: "MacTests/ClipShelfSyncProtocolTests"
         )
     ]
 )

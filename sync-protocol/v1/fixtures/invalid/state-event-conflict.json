@@ -1,0 +1,42 @@
+{
+  "id": "state-event-conflict",
+  "kind": "stateConflict",
+  "operations": [
+    {
+      "protocolVersion": 1,
+      "messageType": "textEvent",
+      "messageId": "00000000-0000-4000-8000-000000000031",
+      "sentAtUtc": "2026-10-07T08:00:00.000Z",
+      "body": {
+        "eventId": "33333333-3333-4333-8333-000000000018",
+        "originDeviceId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 1,
+        "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+        "contentHash": "sha256:0e9e69653d26a05deda211e3f77e66e523b0f6c096706396035a49d529993dcc",
+        "payload": {
+          "text": "original"
+        }
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "messageType": "textEvent",
+      "messageId": "00000000-0000-4000-8000-000000000032",
+      "sentAtUtc": "2026-10-07T08:00:00.000Z",
+      "body": {
+        "eventId": "33333333-3333-4333-8333-000000000018",
+        "originDeviceId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 2,
+        "capturedAtUtc": "2026-10-07T08:00:00.000Z",
+        "contentHash": "sha256:be4246f356e66800f21f1b47cf14ad1d03644d0208e98a9dc66ceedf4c502961",
+        "payload": {
+          "text": "changed"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "accepted": false,
+    "errorCode": "sequence_conflict"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "sequence-overflow",
+  "kind": "rawJson",
+  "rawUtf8Base64": "eyJwcm90b2NvbFZlcnNpb24iOjEsIm1lc3NhZ2VUeXBlIjoidGV4dEV2ZW50IiwibWVzc2FnZUlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDIyIiwic2VudEF0VXRjIjoiMjAyNi0xMC0wN1QwODowMDowMC4wMDBaIiwiYm9keSI6eyJldmVudElkIjoiMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMDAwMDAwMDAwMDE0Iiwib3JpZ2luRGV2aWNlSWQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJzZXF1ZW5jZSI6MTg0NDY3NDQwNzM3MDk1NTE2MTYsImNhcHR1cmVkQXRVdGMiOiIyMDI2LTEwLTA3VDA4OjAwOjAwLjAwMFoiLCJjb250ZW50SGFzaCI6InNoYTI1NjoxOTI2YmQ5NjIyN2FkNjFhNTc3NTJkZjBjY2JkZjVjYjc1YzJjNDA1MjAyNzVhMzdhYTAxZDZmZWQzZTdhZjM5IiwicGF5bG9hZCI6eyJ0ZXh0IjoidmFsaWQifX19",
+  "expected": {
+    "accepted": false,
+    "errorCode": "invalid_sequence"
+  }
+}

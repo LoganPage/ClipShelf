@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clipshelf.dev/sync/v1/schema/error.schema.json",
+  "title": "ClipShelf Sync Protocol v1 Error",
+  "allOf": [
+    { "$ref": "envelope.schema.json" },
+    {
+      "properties": {
+        "messageType": { "const": "error" },
+        "body": {
+          "type": "object",
+          "required": ["code"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": ["invalid_message", "invalid_frame", "frame_too_large", "unsupported_protocol_version", "unsupported_message_type", "unsupported_capability", "invalid_device_id", "invalid_event_id", "invalid_sequence", "invalid_timestamp", "invalid_text", "text_too_large", "invalid_content_hash", "content_hash_mismatch", "sequence_conflict"]
+            },
+            "relatedMessageId": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "not": { "const": "00000000-0000-0000-0000-000000000000" }
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 256,
+              "$comment": "Length is counted in Unicode scalar values (JSON Schema code points)."
+            }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  ]
+}
