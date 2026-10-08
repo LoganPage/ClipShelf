@@ -53,9 +53,6 @@ public struct SyncProtocolCodec: Sendable {
     }
 
     public func encode(_ envelope: Envelope) throws -> Data {
-        guard envelope.protocolVersion == SyncProtocolV1.version else {
-            throw ProtocolViolation(.unsupportedProtocolVersion)
-        }
         let object: [String: Any] = [
             "protocolVersion": envelope.protocolVersion,
             "messageType": envelope.messageType.rawValue,
@@ -64,8 +61,9 @@ public struct SyncProtocolCodec: Sendable {
             "body": bodyObject(envelope.body)
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
-        guard data.count <= SyncProtocolV1.maximumFrameBytes else {
-            throw ProtocolViolation(.frameTooLarge)
+        let validatedEnvelope = try decode(data)
+        guard validatedEnvelope == envelope else {
+            throw ProtocolViolation(.invalidMessage, "Encoded message changed envelope semantics")
         }
         return data
     }

@@ -144,6 +144,106 @@ final class SyncProtocolV1Tests: XCTestCase {
         XCTAssertEqual(try codec.decode(codec.encode(envelope)), envelope)
     }
 
+    func testEncodePreservesValidEnvelopeSemanticsForEveryMessageType() throws {
+        let deviceID = try ProtocolUUID("11111111-1111-4111-8111-111111111111")
+        let eventID = try ProtocolUUID("22222222-2222-4222-8222-222222222222")
+        let messageID = try ProtocolUUID("33333333-3333-4333-8333-333333333333")
+        let timestamp = try UTCTimestamp("2026-10-07T08:00:00.000Z")
+        let text = " outbound text \r\n中文😀 "
+        let envelopes = [
+            Envelope(
+                messageID: messageID,
+                sentAtUTC: timestamp,
+                body: .hello(Hello(
+                    deviceID: deviceID,
+                    deviceName: "Mac",
+                    appVersion: "1.0",
+                    supportedProtocolVersions: [1],
+                    capabilities: ["text", "future-note"]
+                ))
+            ),
+            Envelope(
+                messageID: messageID,
+                sentAtUTC: timestamp,
+                body: .textEvent(TextEvent(
+                    eventID: eventID,
+                    originDeviceID: deviceID,
+                    sequence: 1,
+                    capturedAtUTC: timestamp,
+                    contentHash: ContentHasher.textHash(text),
+                    payload: TextPayload(text: text)
+                ))
+            ),
+            Envelope(
+                messageID: messageID,
+                sentAtUTC: timestamp,
+                body: .ack(Ack(originDeviceID: deviceID, acceptedThroughSequence: UInt64.max))
+            ),
+            Envelope(
+                messageID: messageID,
+                sentAtUTC: timestamp,
+                body: .error(ProtocolErrorMessage(
+                    code: .invalidText,
+                    relatedMessageID: eventID,
+                    message: "Rejected"
+                ))
+            )
+        ]
+
+        for envelope in envelopes {
+            XCTAssertEqual(try codec.decode(codec.encode(envelope)), envelope)
+        }
+    }
+
+    func testEncodeRejectsInvalidHelloModelsWithDecodeErrorCodes() throws {
+        let deviceID = try ProtocolUUID("11111111-1111-4111-8111-111111111111")
+
+        XCTAssertEqual(
+            encodeViolationCode(for: try makeHelloEnvelope(deviceID: deviceID, deviceName: "")),
+            .invalidMessage
+        )
+        XCTAssertEqual(
+            encodeViolationCode(for: try makeHelloEnvelope(deviceID: deviceID, supportedVersions: [2])),
+            .unsupportedProtocolVersion
+        )
+        XCTAssertEqual(
+            encodeViolationCode(for: try makeHelloEnvelope(deviceID: deviceID, capabilities: ["text", "text"])),
+            .unsupportedCapability
+        )
+    }
+
+    func testEncodeRejectsInvalidTextEventModelsWithDecodeErrorCodes() throws {
+        let validText = "valid"
+
+        XCTAssertEqual(
+            encodeViolationCode(for: try makeTextEnvelope(text: validText, sequence: 0)),
+            .invalidSequence
+        )
+        XCTAssertEqual(
+            encodeViolationCode(for: try makeTextEnvelope(text: validText, contentHash: ContentHasher.textHash("other"))),
+            .contentHashMismatch
+        )
+        XCTAssertEqual(
+            encodeViolationCode(for: try makeTextEnvelope(text: " \t\n")),
+            .invalidText
+        )
+
+        let oversizedText = String(repeating: "a", count: SyncProtocolV1.maximumTextUTF8Bytes + 1)
+        XCTAssertEqual(
+            encodeViolationCode(for: try makeTextEnvelope(text: oversizedText)),
+            .textTooLarge
+        )
+    }
+
+    func testEncodeRejectsErrorMessagesOverUnicodeScalarLimitIncludingEmoji() throws {
+        for scalar in ["a", "\u{4E2D}", "\u{1F600}"] {
+            let envelope = try makeErrorEnvelope(
+                message: String(repeating: scalar, count: SyncProtocolV1.maximumErrorMessageScalars + 1)
+            )
+            XCTAssertEqual(encodeViolationCode(for: envelope), .invalidMessage)
+        }
+    }
+
     private func validateFixture(_ fixture: [String: Any], path: String) throws {
         let id = try XCTUnwrap(fixture["id"] as? String)
         let kind = try XCTUnwrap(fixture["kind"] as? String)
@@ -317,6 +417,48 @@ final class SyncProtocolV1Tests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
             return nil
         }
+    }
+
+    private func encodeViolationCode(for envelope: Envelope) -> ErrorCode? {
+        violationCode { _ = try codec.encode(envelope) }
+    }
+
+    private func makeHelloEnvelope(
+        deviceID: ProtocolUUID,
+        deviceName: String = "Mac",
+        supportedVersions: [Int] = [1],
+        capabilities: [String] = ["text"]
+    ) throws -> Envelope {
+        Envelope(
+            messageID: try ProtocolUUID("00000000-0000-4000-8000-000000000001"),
+            sentAtUTC: try UTCTimestamp("2026-10-07T08:00:00.000Z"),
+            body: .hello(Hello(
+                deviceID: deviceID,
+                deviceName: deviceName,
+                appVersion: "1.0",
+                supportedProtocolVersions: supportedVersions,
+                capabilities: capabilities
+            ))
+        )
+    }
+
+    private func makeTextEnvelope(
+        text: String,
+        sequence: UInt64 = 1,
+        contentHash: String? = nil
+    ) throws -> Envelope {
+        Envelope(
+            messageID: try ProtocolUUID("00000000-0000-4000-8000-000000000001"),
+            sentAtUTC: try UTCTimestamp("2026-10-07T08:00:00.000Z"),
+            body: .textEvent(TextEvent(
+                eventID: try ProtocolUUID("22222222-2222-4222-8222-222222222222"),
+                originDeviceID: try ProtocolUUID("11111111-1111-4111-8111-111111111111"),
+                sequence: sequence,
+                capturedAtUTC: try UTCTimestamp("2026-10-07T08:00:00.000Z"),
+                contentHash: contentHash ?? ContentHasher.textHash(text),
+                payload: TextPayload(text: text)
+            ))
+        )
     }
 
     private func makeErrorEnvelope(message: String) throws -> Envelope {
