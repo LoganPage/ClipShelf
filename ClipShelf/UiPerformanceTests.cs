@@ -99,6 +99,17 @@ public static class UiPerformanceTests
             cachedRow.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent, cachedRow));
             Check(existingRowCache is null || ReferenceEquals(existingRowCache, cachedRow.CacheMode),
                 "A recycled row reuses its matching bitmap cache instead of allocating another one");
+            var inheritedContext = cachedRow.DataContext;
+            cachedRow.DataContext = new ClipItem { Title = "回收缓存刷新", Text = "replacement fixture" };
+            Check(cachedRow.CacheMode is null,
+                "A recycled row drops the previous item's bitmap before presenting replacement content");
+            await Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+            Check(cachedRow.CacheMode is BitmapCache,
+                "A recycled row rebuilds its bitmap cache after replacement bindings settle");
+            cachedRow.ClearValue(FrameworkElement.DataContextProperty);
+            await Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+            Check(ReferenceEquals(cachedRow.DataContext, inheritedContext),
+                "The cache regression check restores the row's inherited item context");
             for (int i = 0; i < 80; i++) { scroll.ScrollToVerticalOffset(i * 113.5); await Idle(); }
             Check(Enumerable.Range(0, 1000).Count(i => list.ItemContainerGenerator.ContainerFromIndex(i) is not null) < 40, "scroll stress retains bounded recycled containers");
             Check(await ThumbnailLoader.LoadAsync(Path.Combine(directory, "missing.png")) is null, "missing thumbnail degrades without UI exception");

@@ -218,7 +218,15 @@ public static class SettingsExperienceTests
                 scroll.HandleWheelDelta(-15); await Idle();
                 Check(!SystemParameters.ClientAreaAnimation || (scroll.IsWheelMotionActive && Math.Abs(scroll.VerticalOffset - stopped) < 1),
                     theme + ": precision wheel starts on the frame driver without a synchronous jump");
-                await Task.Delay(400); await Idle();
+                var precisionOffsets = new List<double>();
+                for (int frame = 0; frame < 20; frame++)
+                {
+                    await Task.Delay(10);
+                    precisionOffsets.Add(scroll.VerticalOffset);
+                }
+                Check(!SystemParameters.ClientAreaAnimation || precisionOffsets.Select(value => Math.Round(value, 2)).Distinct().Count() > 3,
+                    theme + ": precision wheel keeps presenting continuous intermediate offsets");
+                await Task.Delay(200); await Idle();
                 Check(Math.Abs(scroll.VerticalOffset - stopped - WheelScrollMotion.WheelDistance(-15, SystemParameters.WheelScrollLines, scroll.ViewportHeight)) < 1,
                     theme + ": precision wheel preserves its full small delta while settling");
                 scroll.CancelWheelMotion(); scroll.HandleWheelDelta(-120); await Task.Delay(30);

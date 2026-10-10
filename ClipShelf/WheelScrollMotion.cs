@@ -5,9 +5,10 @@ namespace ClipShelf;
 /// <summary>Pure, elapsed-time scrolling state. No timer, WPF dependency, or fixed frame-rate assumption.</summary>
 internal sealed class WheelScrollMotion
 {
-    private MotionValue state = new(0, new MotionSpec(28, 1, .04, .5));
+    internal const double DefaultResponseFrequency = 28;
+    private MotionValue state = new(0, new MotionSpec(DefaultResponseFrequency, 1, .04, .5));
     // A short critically damped response for wheel notches; units are radians/second, not frames.
-    internal double ResponseFrequency { get; set; } = 28;
+    internal double ResponseFrequency { get; set; } = DefaultResponseFrequency;
     internal double Position => state.Current;
     internal double Target => state.Target;
     internal double Velocity => state.Velocity;

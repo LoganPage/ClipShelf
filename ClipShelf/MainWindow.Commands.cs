@@ -23,9 +23,11 @@ public partial class MainWindow
     private void InitializeHistoryInteraction()
     {
         PreviewMouseDown += (_, e) => { activationPointer = activationClickPending; activationClickPending = false; interactionVersion++; HistoryList.CancelWheelMotion();
-            if (IsWithin(e.OriginalSource as DependencyObject, HistoryList)) rowLayoutTransition.Cancel(HistoryList); };
+            if (IsWithin(e.OriginalSource as DependencyObject, HistoryList))
+            { rowLayoutTransition.Cancel(HistoryList); rowLayoutTransition.ClearExits(HistoryExitLayer); } };
         PreviewMouseWheel += (_, e) => { interactionVersion++;
-            if (IsWithin(e.OriginalSource as DependencyObject, HistoryList)) rowLayoutTransition.Cancel(HistoryList); };
+            if (IsWithin(e.OriginalSource as DependencyObject, HistoryList))
+            { rowLayoutTransition.Cancel(HistoryList); rowLayoutTransition.ClearExits(HistoryExitLayer); } };
         GotKeyboardFocus += (_, e) => { interactionVersion++; KeepFocusInsideSettings(e); };
         Activated += (_, _) => { interactionVersion++; EnsureSettingsFocus(); };
         Deactivated += (_, _) => { interactionVersion++; HistoryList.CancelWheelMotion(); };
@@ -61,6 +63,7 @@ public partial class MainWindow
     {
         FocusCuePolicy.Reset(this); interactionVersion++; HistoryList.CancelWheelMotion(); EndDrag();
         rowLayoutTransition.Cancel(HistoryList);
+        rowLayoutTransition.ClearExits(HistoryExitLayer);
         PositionTypeFilterSelection(animate: false, previousIndex: FilterIndex(Store.Settings.HistoryTypeFilter));
         if (SettingsOverlay.Visibility == Visibility.Visible && settingsClosing)
         {

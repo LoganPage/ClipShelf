@@ -321,6 +321,7 @@ public partial class MainWindow : Window
         string filter = HistoryTypeFilter.Normalize(requested);
         if (filter == Store.Settings.HistoryTypeFilter) return;
         int previousIndex = FilterIndex(Store.Settings.HistoryTypeFilter);
+        rowLayoutTransition.ClearExits(HistoryExitLayer);
         PrepareTypeFilterBorderTransition(filter);
         Store.Settings.HistoryTypeFilter = filter;
         Store.SaveSettings();

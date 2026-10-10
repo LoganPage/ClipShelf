@@ -126,10 +126,11 @@ public sealed class HistoryListBox : ListBox
         double maximum = MaximumOffset;
         long now = Stopwatch.GetTimestamp();
         // A small delta does not identify a touchpad: high-resolution mouse wheels
-        // produce them too. All ordinary wheel packets share the same frame driver.
-        // A quicker response keeps small packets responsive without per-packet jumps.
+        // produce them too. Keep every packet on the same critically damped response;
+        // accelerating fractional packets made short moves finish between input packets
+        // and read as a sequence of tiny starts and stops.
         wheelMotion.ResponseFrequency = RuntimeFeatureSwitches.WheelResponse
-            ?? (WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28);
+            ?? WheelScrollMotion.DefaultResponseFrequency;
         bool immediate = !MotionPolicy.Allows(MotionDomain.DirectManipulation) || directInput || RuntimeFeatureSwitches.InstantWheel;
         double current = hasRequestedOffset ? requestedOffset : wheelPanel.VerticalOffset;
         double target = Math.Clamp(current + distance, 0, maximum);

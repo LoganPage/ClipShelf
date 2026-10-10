@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -14,7 +15,22 @@ internal sealed class VisibleRowLayoutTransition
     internal sealed record Snapshot(Dictionary<Guid, double> Positions, HashSet<Guid> Ids, bool Enabled);
     private static readonly DependencyProperty CleanupHookedProperty = DependencyProperty.RegisterAttached(
         "CleanupHooked", typeof(bool), typeof(VisibleRowLayoutTransition), new PropertyMetadata(false));
+    private readonly DispatcherTimer exitCleanupTimer;
+    private Canvas? exitOverlay;
     private int version;
+
+    internal VisibleRowLayoutTransition()
+    {
+        exitCleanupTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(600)
+        };
+        exitCleanupTimer.Tick += (_, _) =>
+        {
+            exitCleanupTimer.Stop();
+            if (exitOverlay is not null) ClearExits(exitOverlay);
+        };
+    }
 
     internal Snapshot Capture(ListBox list, bool enabled)
     {
@@ -79,7 +95,9 @@ internal sealed class VisibleRowLayoutTransition
 
     internal void CaptureExits(ListBox list, IEnumerable<Guid> ids, Canvas overlay)
     {
+        ClearExits(overlay);
         if (!MotionPolicy.Allows(MotionDomain.ListLayout) || !list.IsLoaded || !list.IsVisible) return;
+        exitOverlay = overlay;
         var wanted = new HashSet<Guid>(ids);
         foreach (ListBoxItem row in RealizedRows(list))
         {
@@ -102,6 +120,26 @@ internal sealed class VisibleRowLayoutTransition
             }
             catch (InvalidOperationException) { }
         }
+        if (overlay.Children.Count > 0)
+        {
+            // MotionDriver deliberately drops callbacks when an owner becomes
+            // hidden or unloaded. A bounded fallback prevents those interrupted
+            // exit snapshots from surviving as translucent ghost rows.
+            exitCleanupTimer.Stop();
+            exitCleanupTimer.Start();
+        }
+    }
+
+    internal void ClearExits(Canvas overlay)
+    {
+        exitCleanupTimer.Stop();
+        foreach (Image image in overlay.Children.OfType<Image>().ToArray())
+        {
+            MotionDriver.Current.Cancel(image);
+            image.Source = null;
+        }
+        overlay.Children.Clear();
+        if (ReferenceEquals(exitOverlay, overlay)) exitOverlay = null;
     }
 
     private static TranslateTransform EnsureShift(ListBoxItem row)

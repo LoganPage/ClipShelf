@@ -150,6 +150,9 @@ public static class WindowsInteractionTests
             rowDelete.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, rowDelete));
             Check(!MotionPolicy.Allows(MotionDomain.ListLayout) || historyExitLayer.Children.Count == 1,
                 "Deleting a realized row starts one bounded exit visual without rebuilding the list");
+            window.HandleApplicationDeactivated();
+            Check(historyExitLayer.Children.Count == 0,
+                "Interrupting a delete transition releases its snapshot instead of leaving a ghost row");
             await IdleAsync();
             Check(store.Items.Count == seed.Length - 1 && store.Items.All(item => item.Id != first.Id) && store.Items.Any(item => item.Id == third.Id),
                 "The inline delete button removes one row even while several rows are selected");

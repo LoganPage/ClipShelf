@@ -102,10 +102,10 @@ public sealed class SmoothScrollViewer : ScrollViewer
         long now = Stopwatch.GetTimestamp();
         // Small packets are also animated. Paying the first arrange/raster cost in a
         // synchronous SetVerticalOffset call makes the first wheel input after an idle
-        // pause visibly hitch; a higher response frequency keeps it direct without
-        // turning it into an instant jump.
+        // pause visibly hitch. Use the same continuous response for every packet so a
+        // precision wheel does not alternate between tiny jumps and idle frames.
         motion.ResponseFrequency = RuntimeFeatureSwitches.WheelResponse
-            ?? (WheelScrollMotion.IsFractionalWheelDelta(delta) ? 56 : 28);
+            ?? WheelScrollMotion.DefaultResponseFrequency;
         double current = hasRequest ? requestedOffset : scrollInfo.VerticalOffset;
         if (directInput || !MotionPolicy.Allows(MotionDomain.DirectManipulation))
         {
@@ -139,18 +139,13 @@ public sealed class SmoothScrollViewer : ScrollViewer
         long now = Stopwatch.GetTimestamp();
         double elapsed = (now - lastTimestamp) / (double)Stopwatch.Frequency;
         lastTimestamp = now;
-        double next = motion.Advance(elapsed, MaximumOffset);
-        RequestOffset(next, force: !motion.IsActive);
+        RequestOffset(motion.Advance(elapsed, MaximumOffset));
         if (!motion.IsActive) StopRendering();
     }
 
-    private void RequestOffset(double value, bool force = true)
+    private void RequestOffset(double value)
     {
         if (scrollInfo is null) return;
-        // Composition can report several sub-pixel steps in one display interval.
-        // Coalesce imperceptible intermediate offsets while always committing the
-        // final target; this avoids redundant full StackPanel arrange/raster passes.
-        if (!force && Math.Abs(scrollInfo.VerticalOffset - value) < .35) return;
         hasRequest = true; requestedOffset = value;
         // The presenter arranges translated content with valid hit testing. There is no
         // per-frame ScrollViewer command queue, UpdateLayout or render-transform illusion.

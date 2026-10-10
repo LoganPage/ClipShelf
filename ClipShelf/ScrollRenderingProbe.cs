@@ -165,6 +165,8 @@ public static class ScrollRenderingProbe
         check(WheelScrollMotion.WheelDistance(-15, 3, 500) == 6 && WheelScrollMotion.WheelDistance(-240, 3, 500) == 96, "Fractional and multi-notch packets retain their true magnitude");
         check(WheelScrollMotion.WheelDistance(-120, 0, 500) == 0 && WheelScrollMotion.WheelDistance(-120, -1, 500) == 500, "Zero-line and page-scroll system settings are honored");
         check(WheelScrollMotion.IsFractionalWheelDelta(-15) && !WheelScrollMotion.IsFractionalWheelDelta(240), "Precision packets are distinguished without truncating them");
+        check(WheelScrollMotion.DefaultResponseFrequency == 28,
+            "Ordinary and precision packets share one continuous critically damped response");
         double? reference = null;
         foreach (int rate in new[] { 60, 120, 144, 160, 240 })
         {
