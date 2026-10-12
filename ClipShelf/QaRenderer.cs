@@ -23,7 +23,7 @@ public static class QaRenderer
         await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         Capture(window, Path.Combine(output, "clipshelf-light.png"));
         store.Settings.Theme = "Dark"; window.ApplyPreferences();
-        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        await WaitForThemeTransitionAsync(window);
         Capture(window, Path.Combine(output, "clipshelf-dark.png"));
         window.OpenSettings();
         await Task.Delay(220);
@@ -38,11 +38,18 @@ public static class QaRenderer
         await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         Capture(window, Path.Combine(output, "clipshelf-settings-shortcuts-dark.png"));
         store.Settings.Theme = "Light"; window.ApplyPreferences();
+        await WaitForThemeTransitionAsync(window);
         window.OpenSettings();
         await Task.Delay(220);
         await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         Capture(window, Path.Combine(output, "clipshelf-settings-light.png"));
         window.Quit();
+    }
+    private static async Task WaitForThemeTransitionAsync(Window window)
+    {
+        for (int attempt = 0; ThemeTransition.ActiveCount > 0 && attempt < 20; attempt++)
+            await Task.Delay(25);
+        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
     }
     private static ScrollViewer? FindScroll(DependencyObject obj)
     {

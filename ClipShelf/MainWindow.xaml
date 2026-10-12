@@ -68,7 +68,7 @@
       <Button Grid.Column="3" Style="{StaticResource ToolbarButton}" Width="24" Height="20" Content="&#xE894;" FontSize="10" ToolTip="清除搜索" AutomationProperties.Name="清除搜索" Click="ClearSearch_Click"/>
      </Grid>
     </local:RoundedClipBorder>
-    <Grid x:Name="TypeFilterRow" Margin="0,9,0,0" Height="32">
+    <Grid x:Name="TypeFilterRow" Margin="0,10,0,0" Height="32">
      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
      <Border x:Name="TypeFilterBar" Grid.Column="0" Padding="0" HorizontalAlignment="Left" Background="{DynamicResource ActionBrush}" CornerRadius="{DynamicResource ControlCorners}" AutomationProperties.Name="按记录类型筛选" ClipToBounds="True">
       <Grid>
