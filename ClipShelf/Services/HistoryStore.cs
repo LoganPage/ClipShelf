@@ -380,6 +380,7 @@ public sealed class HistoryStore
         ClearSelectionHotKey = source.ClearSelectionHotKey,
         PinHotKey = source.PinHotKey,
         Theme = source.Theme,
+        VisualStyle = source.VisualStyle,
         SelectionPreset = source.SelectionPreset,
         SelectionColor = source.SelectionColor,
         AppIcon = source.AppIcon,

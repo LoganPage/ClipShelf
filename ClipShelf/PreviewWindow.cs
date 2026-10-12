@@ -126,6 +126,10 @@ public sealed class PreviewWindow : Window
         var appearance = new WindowAppearance(this);
         var cardTransforms = new TransformGroup(); cardTransforms.Children.Add(cardScale); cardTransforms.Children.Add(cardShift); card.RenderTransform = cardTransforms;
         card.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
+        card.SetResourceReference(Border.CornerRadiusProperty, "PreviewCardCorners");
+        card.SetResourceReference(Border.BorderBrushProperty, "PreviewCardBorderBrush");
+        card.SetResourceReference(Border.BorderThicknessProperty, "PreviewCardBorderThickness");
+        foreach (var overlay in new[] { searchPanel, ocrLayer, loading, skeleton, errorLayer }) overlay.SetResourceReference(Border.CornerRadiusProperty, "CardCorners");
         var layout = new Grid(); layout.RowDefinitions.Add(new() { Height = new GridLength(56) }); layout.RowDefinitions.Add(new());
         var toolbar = new DockPanel { Margin = new(14, 8, 14, 8) };
         var controls = new StackPanel { Orientation = Orientation.Horizontal };

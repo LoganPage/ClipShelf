@@ -6,6 +6,46 @@
    <CornerRadius x:Key="ControlCorners">4</CornerRadius>
    <CornerRadius x:Key="OverlayCorners">8</CornerRadius>
    <CornerRadius x:Key="SquareCorners">0</CornerRadius>
+    <!-- Visual-style tokens. These defaults are the Classic style; ThemeManager swaps them for Modern. -->
+    <CornerRadius x:Key="CardCorners">8</CornerRadius>
+    <CornerRadius x:Key="SearchCorners">4</CornerRadius>
+    <CornerRadius x:Key="ToastCorners">8</CornerRadius>
+    <CornerRadius x:Key="PreviewCardCorners">12</CornerRadius>
+    <CornerRadius x:Key="RowCorners">0</CornerRadius>
+    <Thickness x:Key="RowSurfaceMargin">0</Thickness>
+    <Thickness x:Key="RowAccentMargin">0</Thickness>
+    <Thickness x:Key="EmptyIconPadding">0</Thickness>
+    <Thickness x:Key="ToastBorderThickness">0</Thickness>
+    <Thickness x:Key="PreviewCardBorderThickness">0</Thickness>
+    <system:Double x:Key="RowAccentWidth">0</system:Double>
+    <system:Double x:Key="RowActionRestOpacity">1</system:Double>
+    <system:Double x:Key="BrandStripHeight">0</system:Double>
+    <system:Double x:Key="EmptyIconOpacity">0.5</system:Double>
+    <SolidColorBrush x:Key="TitleBarBrush" Color="Transparent"/>
+    <SolidColorBrush x:Key="BrandStripBrush" Color="Transparent"/>
+    <SolidColorBrush x:Key="BrandTextBrush" Color="#242830"/>
+    <SolidColorBrush x:Key="SectionTitleBrush" Color="#242830"/>
+    <SolidColorBrush x:Key="FocusLightActiveBrush" Color="#32B96B"/>
+    <SolidColorBrush x:Key="FocusLightInactiveBrush" Color="#92989F"/>
+    <SolidColorBrush x:Key="ScrimBrush" Color="#40000000"/>
+    <SolidColorBrush x:Key="ToastBrush" Color="#242830"/>
+    <SolidColorBrush x:Key="ToastTextBrush" Color="White"/>
+    <SolidColorBrush x:Key="ToastBorderBrush" Color="Transparent"/>
+    <SolidColorBrush x:Key="SearchFocusBorderBrush" Color="#D6D9E0"/>
+    <SolidColorBrush x:Key="FilterBarBrush" Color="#E9EBEF"/>
+    <SolidColorBrush x:Key="FilterSelectionBrush" Color="White"/>
+    <SolidColorBrush x:Key="FilterSelectionBorderBrush" Color="#D6D9E0"/>
+    <SolidColorBrush x:Key="FilterSelectedTextBrush" Color="#2870DB"/>
+    <SolidColorBrush x:Key="ToolbarPillBrush" Color="Transparent"/>
+    <SolidColorBrush x:Key="RowHoverBrush" Color="Transparent"/>
+    <SolidColorBrush x:Key="RowSelectedBrush" Color="#E8EFF7"/>
+    <SolidColorBrush x:Key="RowAccentBrush" Color="#2870DB"/>
+    <SolidColorBrush x:Key="RowFocusMarkerBrush" Color="#737985"/>
+    <SolidColorBrush x:Key="SelectionBadgeBrush" Color="#E8EFF7"/>
+    <SolidColorBrush x:Key="SelectionBadgeTextBrush" Color="#242830"/>
+    <SolidColorBrush x:Key="EmptyIconBrush" Color="#737985"/>
+    <SolidColorBrush x:Key="EmptyIconTileBrush" Color="Transparent"/>
+    <SolidColorBrush x:Key="PreviewCardBorderBrush" Color="Transparent"/>
    <!-- Track computes its thumb floor from half this value. Supplying 48 DIP makes the
         intended 24 DIP minimum part of Track layout instead of clipping a taller Thumb. -->
    <system:Double x:Key="{x:Static SystemParameters.VerticalScrollBarButtonHeightKey}">48</system:Double>
@@ -35,7 +75,7 @@
     <Setter Property="HorizontalOffset" Value="-8"/>
     <Setter Property="Focusable" Value="False"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToolTip">
-     <Border x:Name="TipSurface" Margin="8" Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" SnapsToDevicePixels="True">
+     <Border x:Name="TipSurface" Margin="8" Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource OverlayCorners}" SnapsToDevicePixels="True">
       <Border.Effect><DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.16"/></Border.Effect>
       <ContentPresenter ContentSource="Content" RecognizesAccessKey="False">
        <ContentPresenter.Resources><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Foreground" Value="{DynamicResource TextBrush}"/></Style></ContentPresenter.Resources>
@@ -75,7 +115,7 @@
    <Style x:Key="RowFocusCueMarker" TargetType="Border" BasedOn="{StaticResource FocusCueBorder}">
     <Style.Triggers><DataTrigger Binding="{Binding AdornedElement.IsSelected, RelativeSource={RelativeSource AncestorType={x:Type documents:Adorner}}}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
    </Style>
-   <Style x:Key="RowKeyboardFocusVisual" TargetType="Control"><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Control"><Border Style="{StaticResource RowFocusCueMarker}" Width="2" HorizontalAlignment="Left" Margin="4,6,0,6" Background="{DynamicResource MutedBrush}" BorderThickness="0" CornerRadius="{DynamicResource SquareCorners}" SnapsToDevicePixels="True" IsHitTestVisible="False"/></ControlTemplate></Setter.Value></Setter></Style>
+   <Style x:Key="RowKeyboardFocusVisual" TargetType="Control"><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Control"><Border Style="{StaticResource RowFocusCueMarker}" Width="2" HorizontalAlignment="Left" Margin="4,6,0,6" Background="{DynamicResource RowFocusMarkerBrush}" BorderThickness="0" CornerRadius="{DynamicResource SquareCorners}" SnapsToDevicePixels="True" IsHitTestVisible="False"/></ControlTemplate></Setter.Value></Setter></Style>
    <Style TargetType="Window"><Setter Property="local:FocusCuePolicy.IsEnabled" Value="True"/><Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei UI"/><Setter Property="FontSize" Value="13"/><Setter Property="Foreground" Value="{DynamicResource TextBrush}"/><Setter Property="Background" Value="{DynamicResource BackgroundBrush}"/></Style>
    <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource TextBrush}"/></Style>
    <Style TargetType="Button" x:Key="SoftButton">

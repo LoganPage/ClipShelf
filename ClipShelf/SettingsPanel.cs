@@ -65,6 +65,12 @@ public sealed class SettingsPanel : UserControl
         var segments = new UniformGridCompat(3);
         for (int i = 0; i < 3; i++) { string mode = modes[i]; var b = Button(labels[i], () => { S.Theme = mode; owner.ApplyPreferences(appearanceOnly: true); RefreshChoiceHighlights(); }); b.Margin = new Thickness(i == 0 ? 0 : 6, 12, 0, 0); appearanceChoices.Add((b, () => S.Theme == mode)); segments.Children.Add(b); }
         themeCard.Children.Add(segments);
+        var styleCard = Card(appearance);
+        styleCard.Children.Add(Label("界面风格", "经典保持现有外观；现代使用品牌色、更清晰的层级与选中标记。与浅色/深色相互独立。"));
+        var styleModes = new[] { ThemeManager.ClassicStyle, ThemeManager.ModernStyle }; var styleLabels = new[] { "经典", "现代" };
+        var styleSegments = new UniformGridCompat(2);
+        for (int i = 0; i < 2; i++) { string style = styleModes[i]; var b = Button(styleLabels[i], () => { S.VisualStyle = style; owner.ApplyPreferences(appearanceOnly: true); RefreshChoiceHighlights(); }); b.Name = "VisualStyle" + style + "Button"; b.Margin = new Thickness(i == 0 ? 0 : 6, 12, 0, 0); appearanceChoices.Add((b, () => ThemeManager.NormalizeVisualStyle(S.VisualStyle) == style)); styleSegments.Children.Add(b); }
+        styleCard.Children.Add(styleSegments);
 
 
         var shots = Card(Section("截图"));
@@ -206,7 +212,8 @@ public sealed class SettingsPanel : UserControl
     {
         var section = new StackPanel { Margin = new Thickness(0, body.Children.Count == 0 ? 0 : 20, 0, 0) };
         var titleRow = new DockPanel { Margin = new Thickness(2, 0, 0, 8), LastChildFill = false };
-        titleRow.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.SemiBold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center });
+        var sectionTitle = new TextBlock { Text = title, FontWeight = FontWeights.SemiBold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+        sectionTitle.SetResourceReference(TextBlock.ForegroundProperty, "SectionTitleBrush"); titleRow.Children.Add(sectionTitle);
         if (help is not null)
         {
             var helpButton = Button("?", () => { });
@@ -217,6 +224,7 @@ public sealed class SettingsPanel : UserControl
             var helpText = Note(help); helpText.Margin = new Thickness(0); helpText.MaxWidth = 400;
             var surface = new Border { Child = helpText, Padding = new Thickness(14, 12, 14, 12), MaxWidth = 430,
                 CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Focusable = true };
+            surface.SetResourceReference(Border.CornerRadiusProperty, "CardCorners");
             surface.SetResourceReference(Border.BackgroundProperty, "SettingsCardBrush");
             surface.SetResourceReference(Border.BorderBrushProperty, "SettingsStrokeBrush");
             var popup = new Popup { Name = "ShortcutsHelpPopup", PlacementTarget = helpButton, Placement = PlacementMode.Bottom,
@@ -235,6 +243,7 @@ public sealed class SettingsPanel : UserControl
     {
         var content = new StackPanel();
         var card = new Border { Name = "SettingsGroupCard", Child = content, CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Padding = new Thickness(16, 12, 16, 12), Margin = new Thickness(0, 0, 0, 4) };
+        card.SetResourceReference(Border.CornerRadiusProperty, "CardCorners");
         card.SetResourceReference(Border.BackgroundProperty, "SettingsCardBrush"); card.SetResourceReference(Border.BorderBrushProperty, "SettingsStrokeBrush");
         section.Children.Add(card); return content;
     }

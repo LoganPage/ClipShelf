@@ -13,6 +13,8 @@ public sealed class AppSettings
     public string ClearSelectionHotKey { get; set; } = "Ctrl+Shift+A";
     public string PinHotKey { get; set; } = "Ctrl+Shift+P";
     public string Theme { get; set; } = "System";
+    // Independent from Theme (light/dark): "Classic" or "Modern". Absent or unknown values mean Classic.
+    public string VisualStyle { get; set; } = "Classic";
     // Deprecated: retained only so older settings.json files round-trip without data loss.
     public string SelectionPreset { get; set; } = "coolGrayBlue";
     public string SelectionColor { get; set; } = "#2870DB";

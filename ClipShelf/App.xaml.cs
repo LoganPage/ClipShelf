@@ -41,6 +41,7 @@ public partial class App : Application
         if (e.Args.Length == 2 && e.Args[0] == "--type-filter-test") { await HistoryTypeFilterTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--native-preview-benchmark") { await NativePreviewBenchmark.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--theme-transition-test") { await ThemeTransitionTests.Run(e.Args[1]); return; }
+        if (e.Args.Length == 2 && e.Args[0] == "--visual-style-test") { await VisualStyleTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length == 2 && e.Args[0] == "--preview-interaction-test") { await PreviewInteractionTests.Run(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--common-preview-test") { await CommonPreviewTests.RunAsync(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--file-record-test") { await FileRecordTests.RunAsync(e.Args[1]); return; }
