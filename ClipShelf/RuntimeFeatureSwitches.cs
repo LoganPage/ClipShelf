@@ -7,8 +7,8 @@ using System.Windows.Media;
 namespace ClipShelf;
 
 /// <summary>
-/// Process-local diagnostic switches. Every value is deliberately false by default so a
-/// normal launch remains identical to the 1.4.6 interaction path.
+/// Process-local diagnostic switches. Every value is deliberately off by default so a
+/// normal launch uses the shipped interaction path.
 /// </summary>
 public static class RuntimeFeatureSwitches
 {
@@ -16,6 +16,9 @@ public static class RuntimeFeatureSwitches
     public static bool InstantWheel { get; private set; }
     public static double? WheelResponse { get; private set; }
     public static double WheelPrewarmMs { get; private set; }
+    /// <summary>Launch ratio override; 0 is the classic spring from rest. Null uses the shipped curve.</summary>
+    public static double? WheelLaunch { get; private set; }
+    public static bool ClassicWheel { get; private set; }
     public static bool SnappyWheel { get; private set; }
     public static bool BalancedWheel { get; private set; }
     public static bool SoftWheel { get; private set; }
@@ -60,6 +63,11 @@ public static class RuntimeFeatureSwitches
                 ApplyPreset(response: 65, prewarmMs: 60, balanced: true);
             else if (argument.Equals("--wheel=soft", StringComparison.OrdinalIgnoreCase))
                 ApplyPreset(response: 45, prewarmMs: 0, soft: true);
+            else if (argument.Equals("--wheel=classic", StringComparison.OrdinalIgnoreCase))
+            {
+                ApplyPreset(response: WheelScrollMotion.DefaultResponseFrequency, prewarmMs: 0);
+                ClassicWheel = true;
+            }
         }
         foreach (string argument in args)
         {
@@ -71,6 +79,10 @@ public static class RuntimeFeatureSwitches
                 && double.TryParse(argument[16..], NumberStyles.Float, CultureInfo.InvariantCulture, out double prewarm)
                 && prewarm is >= 0 and <= 500)
                 WheelPrewarmMs = prewarm;
+            if (argument.StartsWith("--wheel-launch=", StringComparison.OrdinalIgnoreCase)
+                && double.TryParse(argument[15..], NumberStyles.Float, CultureInfo.InvariantCulture, out double launch)
+                && launch is >= 0 and <= 1)
+                WheelLaunch = launch;
         }
         int diagnostic = Array.FindIndex(args, argument => argument.Equals("--scroll-diag", StringComparison.OrdinalIgnoreCase));
         if (diagnostic >= 0 && diagnostic + 1 < args.Length)
@@ -81,22 +93,23 @@ public static class RuntimeFeatureSwitches
     {
         NativeWheel = InstantWheel = WheelPixelSnap = NoRowCache = LowThumbnailQuality = NoRowMotion = NoDragRender = false;
         NoMicroMotion = NoIndicatorMotion = NoOverlayMotion = NoListLayoutMotion = NoDirectMotion = false;
-        WheelResponse = null; WheelPrewarmMs = 0;
-        SnappyWheel = BalancedWheel = SoftWheel = false;
+        WheelResponse = null; WheelPrewarmMs = 0; WheelLaunch = null;
+        SnappyWheel = BalancedWheel = SoftWheel = ClassicWheel = false;
         ScrollDiagnosticReport = null;
     }
 
     private static void ApplyPreset(double response, double prewarmMs, bool snappy = false, bool balanced = false, bool soft = false)
     {
-        WheelResponse = response; WheelPrewarmMs = prewarmMs;
-        SnappyWheel = snappy; BalancedWheel = balanced; SoftWheel = soft;
+        // The prompt-41 presets were specified on the spring from rest; keep their meaning.
+        WheelResponse = response; WheelPrewarmMs = prewarmMs; WheelLaunch = 0;
+        SnappyWheel = snappy; BalancedWheel = balanced; SoftWheel = soft; ClassicWheel = false;
     }
 
     internal static object Snapshot() => new
     {
         nativeWheel = NativeWheel, instantWheel = InstantWheel, wheelResponse = WheelResponse,
-        wheelPrewarmMs = WheelPrewarmMs,
-        wheelPreset = SnappyWheel ? "snappy" : BalancedWheel ? "balanced" : SoftWheel ? "soft" : null,
+        wheelPrewarmMs = WheelPrewarmMs, wheelLaunch = WheelLaunch,
+        wheelPreset = SnappyWheel ? "snappy" : BalancedWheel ? "balanced" : SoftWheel ? "soft" : ClassicWheel ? "classic" : null,
         wheelPixelSnap = WheelPixelSnap, noRowCache = NoRowCache,
         lowThumbnailQuality = LowThumbnailQuality, noRowMotion = NoRowMotion, noDragRender = NoDragRender,
         noMicroMotion = NoMicroMotion, noIndicatorMotion = NoIndicatorMotion, noOverlayMotion = NoOverlayMotion,

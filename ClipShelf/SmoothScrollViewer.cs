@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -16,8 +15,7 @@ public sealed class SmoothScrollViewer : ScrollViewer
     private Window? owner;
     private bool rendering, hasRequest;
     private double requestedOffset;
-    private long lastTimestamp;
-    private TimeSpan lastRenderingTime = TimeSpan.MinValue;
+    private readonly FrameClock clock = new();
     internal bool IsWheelMotionActive => rendering;
 
     public SmoothScrollViewer()
@@ -99,13 +97,13 @@ public sealed class SmoothScrollViewer : ScrollViewer
         if (delta == 0 || !FindScrollPart() || scrollInfo is null) return false;
         double distance = WheelScrollMotion.WheelDistance(delta, SystemParameters.WheelScrollLines, scrollInfo.ViewportHeight);
         if (distance == 0) { CancelWheelMotion(); return true; }
-        long now = Stopwatch.GetTimestamp();
         // Small packets are also animated. Paying the first arrange/raster cost in a
         // synchronous SetVerticalOffset call makes the first wheel input after an idle
         // pause visibly hitch. Use the same continuous response for every packet so a
         // precision wheel does not alternate between tiny jumps and idle frames.
         motion.ResponseFrequency = RuntimeFeatureSwitches.WheelResponse
             ?? WheelScrollMotion.DefaultResponseFrequency;
+        motion.LaunchRatio = RuntimeFeatureSwitches.WheelLaunch ?? WheelScrollMotion.DefaultLaunchRatio;
         double current = hasRequest ? requestedOffset : scrollInfo.VerticalOffset;
         if (directInput || !MotionPolicy.Allows(MotionDomain.DirectManipulation))
         {
@@ -119,7 +117,7 @@ public sealed class SmoothScrollViewer : ScrollViewer
                 RequestOffset(motion.Advance(RuntimeFeatureSwitches.WheelPrewarmMs / 1000.0, MaximumOffset));
             if (motion.IsActive && !rendering)
             {
-                lastTimestamp = now; lastRenderingTime = TimeSpan.MinValue;
+                clock.Start();
                 CompositionTarget.Rendering += RenderFrame; rendering = true;
             }
         }
@@ -128,17 +126,10 @@ public sealed class SmoothScrollViewer : ScrollViewer
 
     private void RenderFrame(object? sender, EventArgs e)
     {
-        if (e is RenderingEventArgs frame)
-        {
-            if (frame.RenderingTime == lastRenderingTime) return;
-            lastRenderingTime = frame.RenderingTime;
-        }
+        if (!clock.TryAdvance(e, out double elapsed)) return;
         if (!IsVisible || !IsEnabled || !IsLoaded || scrollInfo is null || !MotionPolicy.Allows(MotionDomain.DirectManipulation)
             || IsMouseCaptureWithin || Mouse.LeftButton == MouseButtonState.Pressed)
         { CancelWheelMotion(); return; }
-        long now = Stopwatch.GetTimestamp();
-        double elapsed = (now - lastTimestamp) / (double)Stopwatch.Frequency;
-        lastTimestamp = now;
         RequestOffset(motion.Advance(elapsed, MaximumOffset));
         if (!motion.IsActive) StopRendering();
     }
@@ -168,6 +159,5 @@ public sealed class SmoothScrollViewer : ScrollViewer
     {
         if (!rendering) return;
         CompositionTarget.Rendering -= RenderFrame; rendering = false;
-        lastRenderingTime = TimeSpan.MinValue;
     }
 }

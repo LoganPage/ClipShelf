@@ -12,9 +12,9 @@ internal static class ThemeTransition
     private sealed class TransitionState
     {
         internal required SolidColorBrush Brush;
+        internal Color From;
         internal required Color Target;
         internal int Version;
-        internal int Pending;
     }
 
     private static readonly HashSet<string> surfaces = new() {
@@ -49,41 +49,33 @@ internal static class ThemeTransition
             state = new TransitionState { Brush = brush, Target = color };
             active[name] = state;
         }
+        // One channel per brush: the color changes once per frame instead of once per
+        // ARGB component, so every surface using it is invalidated a single time.
+        MotionDriver.Current.Cancel(state.Brush);
+        state.From = state.Brush.Color;
         state.Target = color;
-        state.Version++;
-        state.Pending = 4;
-        int version = state.Version;
-        StartComponent(name, state, version, "a", state.Brush.Color.A, color.A);
-        StartComponent(name, state, version, "r", state.Brush.Color.R, color.R);
-        StartComponent(name, state, version, "g", state.Brush.Color.G, color.G);
-        StartComponent(name, state, version, "b", state.Brush.Color.B, color.B);
+        int version = ++state.Version;
+        // Progress runs in byte units of the largest component change, so the shared
+        // Theme tolerances keep meaning "within one color step" for every transition.
+        double distance = Math.Max(Math.Max(Math.Abs(color.A - state.From.A), Math.Abs(color.R - state.From.R)),
+            Math.Max(Math.Abs(color.G - state.From.G), Math.Abs(color.B - state.From.B)));
+        MotionDriver.Current.Animate(state.Brush, "theme-color", 0, Math.Max(distance, 1), MotionTokens.Theme,
+            value => ApplyProgress(name, state, version, value / Math.Max(distance, 1)),
+            () => Complete(name, state, version));
     }
 
-    private static void StartComponent(string name, TransitionState state, int version, string component, byte from, byte to)
-    {
-        MotionDriver.Current.Animate(state.Brush, "theme-" + component, from, to, MotionTokens.Theme,
-            value => ApplyComponent(name, state, version, component, value),
-            () => CompleteComponent(name, state, version));
-    }
-
-    private static void ApplyComponent(string name, TransitionState state, int version, string component, double value)
+    private static void ApplyProgress(string name, TransitionState state, int version, double progress)
     {
         if (!active.TryGetValue(name, out var currentState) || !ReferenceEquals(currentState, state) || state.Version != version) return;
-        byte channel = (byte)Math.Clamp(Math.Round(value), 0, 255);
-        Color current = state.Brush.Color;
-        state.Brush.Color = component switch
-        {
-            "a" => Color.FromArgb(channel, current.R, current.G, current.B),
-            "r" => Color.FromArgb(current.A, channel, current.G, current.B),
-            "g" => Color.FromArgb(current.A, current.R, channel, current.B),
-            _ => Color.FromArgb(current.A, current.R, current.G, channel)
-        };
+        static byte Mix(byte from, byte to, double t) => (byte)Math.Clamp(Math.Round(from + (to - from) * t), 0, 255);
+        Color from = state.From, to = state.Target;
+        state.Brush.Color = Color.FromArgb(Mix(from.A, to.A, progress), Mix(from.R, to.R, progress),
+            Mix(from.G, to.G, progress), Mix(from.B, to.B, progress));
     }
 
-    private static void CompleteComponent(string name, TransitionState state, int version)
+    private static void Complete(string name, TransitionState state, int version)
     {
         if (!active.TryGetValue(name, out var currentState) || !ReferenceEquals(currentState, state) || state.Version != version) return;
-        if (--state.Pending != 0) return;
         active.Remove(name);
         MotionDriver.Current.Cancel(state.Brush);
         var final = new SolidColorBrush(state.Target); final.Freeze();

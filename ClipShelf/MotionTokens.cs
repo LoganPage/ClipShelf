@@ -91,6 +91,14 @@ internal sealed class MotionValue
         IsActive = Math.Abs(Target - Current) > spec.ValueTolerance || Math.Abs(Velocity) > spec.VelocityTolerance;
     }
 
+    /// <summary>Replaces the current velocity, for input that starts motion with its own speed.</summary>
+    internal void Launch(double velocity)
+    {
+        if (!double.IsFinite(velocity)) return;
+        Velocity = velocity;
+        IsActive = Math.Abs(Target - Current) > Spec.ValueTolerance || Math.Abs(Velocity) > Spec.VelocityTolerance;
+    }
+
     internal void Snap(double value)
     {
         Current = Target = value;

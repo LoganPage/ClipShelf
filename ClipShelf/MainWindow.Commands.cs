@@ -74,6 +74,7 @@ public partial class MainWindow
         else if (SettingsOverlay.Visibility == Visibility.Visible)
         {
             MotionDriver.Current.Cancel(SettingsOverlay);
+            TransitionCache.End(SettingsCard);
             SettingsBackdrop.Opacity = SettingsCard.Opacity = SettingsShadow.Opacity = 1;
             SettingsCardScale.ScaleX = SettingsCardScale.ScaleY = 1; SettingsCardShift.Y = 0;
         }

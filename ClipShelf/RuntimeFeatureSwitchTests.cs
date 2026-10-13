@@ -23,7 +23,8 @@ public static class RuntimeFeatureSwitchTests
                 && !RuntimeFeatureSwitches.NoMicroMotion && !RuntimeFeatureSwitches.NoIndicatorMotion
                 && !RuntimeFeatureSwitches.NoOverlayMotion && !RuntimeFeatureSwitches.NoListLayoutMotion && !RuntimeFeatureSwitches.NoDirectMotion
                 && RuntimeFeatureSwitches.WheelPrewarmMs == 0 && !RuntimeFeatureSwitches.SnappyWheel
-                && !RuntimeFeatureSwitches.BalancedWheel && !RuntimeFeatureSwitches.SoftWheel,
+                && !RuntimeFeatureSwitches.BalancedWheel && !RuntimeFeatureSwitches.SoftWheel
+                && RuntimeFeatureSwitches.WheelLaunch is null && !RuntimeFeatureSwitches.ClassicWheel,
                 "all diagnostic switches and wheel presets default off");
 
             var cases = new (string Argument, Func<bool> Enabled)[]
@@ -64,13 +65,23 @@ public static class RuntimeFeatureSwitchTests
             RuntimeFeatureSwitches.Configure(["--wheel=soft"]);
             Check(RuntimeFeatureSwitches.SoftWheel && RuntimeFeatureSwitches.WheelResponse == 45 && RuntimeFeatureSwitches.WheelPrewarmMs == 0,
                 "soft preset expands to response 45 without prewarm");
+            Check(RuntimeFeatureSwitches.WheelLaunch == 0, "presets keep the classic spring shape they were specified with");
+            RuntimeFeatureSwitches.Configure(["--wheel=classic"]);
+            Check(RuntimeFeatureSwitches.ClassicWheel && RuntimeFeatureSwitches.WheelLaunch == 0
+                && RuntimeFeatureSwitches.WheelResponse == WheelScrollMotion.DefaultResponseFrequency && RuntimeFeatureSwitches.WheelPrewarmMs == 0,
+                "classic wheel restores the pre-launch spring from rest");
+            RuntimeFeatureSwitches.Configure(["--wheel=classic", "--wheel-launch=0.35"]);
+            Check(RuntimeFeatureSwitches.WheelLaunch == .35, "explicit launch ratio overrides a preset");
+            RuntimeFeatureSwitches.Configure(["--wheel-launch=1.5"]);
+            Check(RuntimeFeatureSwitches.WheelLaunch is null, "out-of-range launch ratio is ignored");
             RuntimeFeatureSwitches.Configure(["--wheel=snappy", "--wheel-response=45", "--wheel-prewarm=30"]);
             Check(RuntimeFeatureSwitches.WheelResponse == 45 && RuntimeFeatureSwitches.WheelPrewarmMs == 30,
                 "explicit response and prewarm override a preset");
 
-            var baseline = new WheelScrollMotion { ResponseFrequency = 28 };
+            // The 45-55 percent bound was specified on the spring from rest, which the presets use.
+            var baseline = new WheelScrollMotion { ResponseFrequency = 28, LaunchRatio = 0 };
             baseline.Reset(100, 1000); baseline.AddDistance(48, 1000);
-            var prewarmed = new WheelScrollMotion { ResponseFrequency = 28 };
+            var prewarmed = new WheelScrollMotion { ResponseFrequency = 28, LaunchRatio = 0 };
             prewarmed.Reset(100, 1000); prewarmed.AddDistance(48, 1000);
             double prewarmPosition = prewarmed.Advance(.060, 1000);
             Check(Math.Abs(baseline.Target - prewarmed.Target) < .0001,

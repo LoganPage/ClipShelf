@@ -47,8 +47,7 @@ public partial class MainWindow : Window
     private int typeFilterAnimationVersion;
     private int settingsTransitionVersion;
     private bool settingsClosing;
-    private long dragFrameTick;
-    private TimeSpan dragRenderingTime = TimeSpan.MinValue;
+    private readonly FrameClock dragClock = new();
     private bool quitting, refreshing, dragging, pointerDown, suppressDragRelease;
     private Point downPoint;
     private int anchor = -1, downIndex = -1;
@@ -540,7 +539,7 @@ public partial class MainWindow : Window
     {
         if (RuntimeFeatureSwitches.NoDragRender) return;
         if (dragRendering) return;
-        dragRendering = true; dragFrameTick = Stopwatch.GetTimestamp(); dragRenderingTime = TimeSpan.MinValue;
+        dragRendering = true; dragClock.Start();
         CompositionTarget.Rendering += RenderDragFrame;
     }
     private void StopDragFrames()
@@ -550,10 +549,9 @@ public partial class MainWindow : Window
     }
     private void RenderDragFrame(object? sender, EventArgs e)
     {
-        if (e is RenderingEventArgs frame) { if (frame.RenderingTime == dragRenderingTime) return; dragRenderingTime = frame.RenderingTime; }
+        if (!dragClock.TryAdvance(e, out double elapsed)) return;
         if (!dragging || !IsVisible || !HistoryBorder.IsMouseCaptured || Mouse.LeftButton != MouseButtonState.Pressed) { EndDrag(); return; }
-        long now = Stopwatch.GetTimestamp(); double seconds = Math.Clamp((now - dragFrameTick) / (double)Stopwatch.Frequency, 0, .05); dragFrameTick = now;
-        AdvanceDragFrame(Mouse.GetPosition(HistoryList), seconds);
+        AdvanceDragFrame(Mouse.GetPosition(HistoryList), Math.Clamp(elapsed, 0, .05));
     }
     private void AutoScrollDragAt(Point point)
         => AdvanceDragFrame(point, .03); // Deterministic input for isolated regression fixtures.
@@ -653,19 +651,22 @@ public partial class MainWindow : Window
         if (!MotionPolicy.Allows(MotionDomain.Overlay))
         {
             MotionDriver.Current.Cancel(SettingsOverlay);
+            TransitionCache.End(SettingsCard);
             SettingsBackdrop.Opacity = SettingsCard.Opacity = SettingsShadow.Opacity = 1;
             SettingsCardScale.ScaleX = SettingsCardScale.ScaleY = 1;
             SettingsCardShift.Y = 0;
         }
         else
         {
-            MotionDriver.Current.Animate(SettingsOverlay, "settings-backdrop", SettingsBackdrop.Opacity, 1, MotionTokens.Overlay, value => SettingsBackdrop.Opacity = value);
-            MotionDriver.Current.Animate(SettingsOverlay, "settings-shadow", SettingsShadow.Opacity, 1, MotionTokens.Overlay, value => SettingsShadow.Opacity = value);
-            MotionDriver.Current.Animate(SettingsOverlay, "settings-opacity", SettingsCard.Opacity, 1, MotionTokens.Sheet, value => SettingsCard.Opacity = value);
-            MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-x", SettingsCardScale.ScaleX, 1, MotionTokens.Sheet, value => SettingsCardScale.ScaleX = value);
-            MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-y", SettingsCardScale.ScaleY, 1, MotionTokens.Sheet, value => SettingsCardScale.ScaleY = value);
+            TransitionCache.Begin(SettingsCard);
+            Action settled = ReleaseSettledSettingsCache;
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-backdrop", SettingsBackdrop.Opacity, 1, MotionTokens.Overlay, value => SettingsBackdrop.Opacity = value, settled);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-shadow", SettingsShadow.Opacity, 1, MotionTokens.Overlay, value => SettingsShadow.Opacity = value, settled);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-opacity", SettingsCard.Opacity, 1, MotionTokens.Sheet, value => SettingsCard.Opacity = value, settled);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-x", SettingsCardScale.ScaleX, 1, MotionTokens.Sheet, value => SettingsCardScale.ScaleX = value, settled);
+            MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-y", SettingsCardScale.ScaleY, 1, MotionTokens.Sheet, value => SettingsCardScale.ScaleY = value, settled);
             MotionDriver.Current.Animate(SettingsOverlay, "settings-shift", SettingsCardShift.Y, 0, MotionTokens.Sheet, value => SettingsCardShift.Y = value,
-                () => { if (version == settingsTransitionVersion && !settingsClosing) EnsureSettingsFocus(); });
+                () => { settled(); if (version == settingsTransitionVersion && !settingsClosing) EnsureSettingsFocus(); });
         }
         // Let the normal layout pass finish; never force a full settings layout on the click path.
         int request = ++settingsFocusRequest;
@@ -679,6 +680,7 @@ public partial class MainWindow : Window
         settingsClosing = true;
         int version = ++settingsTransitionVersion;
         if (!MotionPolicy.Allows(MotionDomain.Overlay)) { FinishCloseSettings(version); return; }
+        TransitionCache.Begin(SettingsCard);
         MotionDriver.Current.Animate(SettingsOverlay, "settings-backdrop", SettingsBackdrop.Opacity, 0, MotionTokens.Overlay, value => SettingsBackdrop.Opacity = value);
         MotionDriver.Current.Animate(SettingsOverlay, "settings-shadow", SettingsShadow.Opacity, 0, MotionTokens.Overlay, value => SettingsShadow.Opacity = value);
         MotionDriver.Current.Animate(SettingsOverlay, "settings-scale-x", SettingsCardScale.ScaleX, MotionTokens.SheetScale, MotionTokens.Sheet, value => SettingsCardScale.ScaleX = value);
@@ -691,12 +693,18 @@ public partial class MainWindow : Window
     {
         if (version != settingsTransitionVersion || !settingsClosing) return;
         MotionDriver.Current.Cancel(SettingsOverlay);
+        TransitionCache.End(SettingsCard);
         SettingsOverlay.Visibility = Visibility.Collapsed; Integration?.RegisterHotKey(Store.Settings.GlobalHotKey);
         if (settingsReturnFocus is DependencyObject previous && IsWithin(previous, HistoryList)) RestoreHistoryFocus();
         else if (settingsReturnFocus is UIElement { IsVisible: true, IsEnabled: true } control) control.Focus();
         else RestoreHistoryFocus();
         settingsReturnFocus = null;
         settingsClosing = false;
+    }
+    // The open transition is composed from one bitmap; the settled sheet renders live again.
+    private void ReleaseSettledSettingsCache()
+    {
+        if (!settingsClosing && !MotionDriver.Current.HasChannels(SettingsOverlay)) TransitionCache.End(SettingsCard);
     }
     private void Overlay_MouseDown(object sender, MouseButtonEventArgs e)
     {

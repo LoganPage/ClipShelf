@@ -508,15 +508,20 @@ public sealed class PreviewWindow : Window
         if (!MotionPolicy.Allows(MotionDomain.Overlay))
         {
             MotionDriver.Current.Cancel(card);
+            TransitionCache.End(card);
             card.Opacity = opacity; cardScale.ScaleX = cardScale.ScaleY = scale; cardShift.Y = shift;
             completed?.Invoke();
             return;
         }
         MotionSpec spec = MotionTokens.Preview;
-        MotionDriver.Current.Animate(card, "preview-scale-x", cardScale.ScaleX, scale, spec, value => cardScale.ScaleX = value);
-        MotionDriver.Current.Animate(card, "preview-scale-y", cardScale.ScaleY, scale, spec, value => cardScale.ScaleY = value);
-        MotionDriver.Current.Animate(card, "preview-shift", cardShift.Y, shift, spec, value => cardShift.Y = value);
-        MotionDriver.Current.Animate(card, "preview-opacity", card.Opacity, opacity, spec, value => card.Opacity = value, completed);
+        // Compose the card from one bitmap while it moves; the settled card renders live.
+        TransitionCache.Begin(card);
+        void Settled() { if (!MotionDriver.Current.HasChannels(card)) TransitionCache.End(card); }
+        MotionDriver.Current.Animate(card, "preview-scale-x", cardScale.ScaleX, scale, spec, value => cardScale.ScaleX = value, Settled);
+        MotionDriver.Current.Animate(card, "preview-scale-y", cardScale.ScaleY, scale, spec, value => cardScale.ScaleY = value, Settled);
+        MotionDriver.Current.Animate(card, "preview-shift", cardShift.Y, shift, spec, value => cardShift.Y = value, Settled);
+        MotionDriver.Current.Animate(card, "preview-opacity", card.Opacity, opacity, spec, value => card.Opacity = value,
+            () => { Settled(); completed?.Invoke(); });
     }
     private void ReverseClose()
     {

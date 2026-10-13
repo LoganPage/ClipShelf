@@ -298,6 +298,20 @@ public static class SettingsExperienceTests
             var liveOverlay = (Grid)window.FindName("SettingsOverlay");
             Check(liveOverlay.Visibility == Visibility.Collapsed && !liveOverlay.HasAnimatedProperties && !liveScroll.IsWheelMotionActive,
                 "Closing during the entrance transition removes animations and wheel callbacks; delayed focus cannot reopen it");
+            var liveCard = (UIElement)window.FindName("SettingsCard");
+            Check(!TransitionCache.IsActive(liveCard) && liveCard.CacheMode is null, "A closed settings sheet releases its transition bitmap");
+            if (MotionPolicy.Allows(MotionDomain.Overlay) && (RenderCapability.Tier >> 16) > 0)
+            {
+                window.OpenSettings();
+                Check(TransitionCache.IsActive(liveCard), "The opening settings sheet is composed from one transition bitmap");
+                var cacheSettle = Stopwatch.StartNew();
+                while (TransitionCache.IsActive(liveCard) && cacheSettle.ElapsedMilliseconds < 1500) await Task.Delay(20);
+                Check(!TransitionCache.IsActive(liveCard) && liveCard.CacheMode is null && liveCard.Opacity == 1,
+                    "The settled settings sheet renders live again, so scrolling and editing are never cached");
+                window.CloseSettings();
+                for (int attempt = 0; attempt < 50 && liveOverlay.Visibility == Visibility.Visible; attempt++) await Task.Delay(20);
+                await Idle();
+            }
             store.Settings.DeselectOnRepeatedClick = true; store.Settings.ScreenshotFolder = @"C:\Pictures\NewScreenshots";
             window.OpenSettings(); await Idle();
             Check(liveToggles.Single(t => t.Name == "DeselectOnRepeatedClickToggle").IsChecked == true &&

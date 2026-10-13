@@ -24,11 +24,29 @@ callback count is never treated as the display refresh rate.
   whole history visual tree. Visible deletion snapshots are in-memory only and
   are released after their exit finishes.
 
+`FrameClock` supplies elapsed time to every render loop (the driver, list and
+settings wheel motion, drag auto-scroll). It steps by WPF's estimated
+presentation time (`RenderingEventArgs.RenderingTime`), so presented frames are
+evenly spaced even when dispatcher work delays a callback; callback time is used
+only for the first frame and for gaps over 250 ms.
+
 `WheelScrollMotion` reuses `MotionValue`, but the existing wheel target,
-diagnostics and response presets remain authoritative. Trackpad and scrollbar
+diagnostics and response presets remain authoritative. A packet that starts or
+outpaces the motion launches it at 0.6 of the critically damped ease-out speed
+(`DefaultLaunchRatio`), so a 48 DIP notch moves about 26% in the first 60 Hz
+frame instead of 8% and settles in about 267 ms instead of 367 ms. The launch
+only ever raises speed toward the target: it never changes the landing offset,
+never overshoots and never brakes a running gesture. Motion settles once the
+remainder is under 0.15 DIP. Trackpad and scrollbar
 dragging stay native. Selection dragging remains direct and has no fabricated
 inertia because WPF does not provide a trustworthy release velocity for that
 gesture.
+
+Settings and preview sheets are composed from one `BitmapCache` only while they
+open or close (`TransitionCache`). The cache is released when the owner's last
+channel finishes, so scrolling, editing and text inside a settled sheet always
+render live. Theme transitions animate one channel per surface brush, so each
+brush changes once per frame.
 
 ## Lifecycle and accessibility
 
@@ -50,6 +68,10 @@ animation.
 - `--motion-list=off`
 - `--motion-direct=off`
 - `--motion=off` (all domains)
+- `--wheel=classic` (wheel spring from rest, as before the launch curve)
+- `--wheel-launch=<0..1>` (launch ratio; 0 equals classic). The 1.4.7
+  `--wheel=snappy|balanced|soft` presets keep the classic shape they were
+  specified with unless `--wheel-launch` is also given.
 
 The switches are runtime diagnostics only and do not change persisted settings
 or history formats.

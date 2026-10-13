@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows;
@@ -26,8 +25,7 @@ internal sealed class MotionDriver
 
     private readonly List<Channel> channels = new();
     private bool rendering;
-    private long lastTimestamp;
-    private TimeSpan lastRenderingTime = TimeSpan.MinValue;
+    private readonly FrameClock clock = new();
     internal int ActiveCount => channels.Count;
     internal bool IsRendering => rendering;
 
@@ -75,6 +73,9 @@ internal sealed class MotionDriver
         StopIfIdle();
     }
 
+    internal bool HasChannels(DependencyObject owner)
+        => channels.Any(channel => channel.Owner.TryGetTarget(out var existing) && ReferenceEquals(existing, owner));
+
     internal void CancelAll()
     {
         channels.Clear();
@@ -84,22 +85,14 @@ internal sealed class MotionDriver
     private void Start()
     {
         if (rendering) return;
-        lastTimestamp = Stopwatch.GetTimestamp();
-        lastRenderingTime = TimeSpan.MinValue;
+        clock.Start();
         CompositionTarget.Rendering += OnRendering;
         rendering = true;
     }
 
     private void OnRendering(object? sender, EventArgs args)
     {
-        if (args is RenderingEventArgs frame)
-        {
-            if (frame.RenderingTime == lastRenderingTime) return;
-            lastRenderingTime = frame.RenderingTime;
-        }
-        long now = Stopwatch.GetTimestamp();
-        double elapsed = (now - lastTimestamp) / (double)Stopwatch.Frequency;
-        lastTimestamp = now;
+        if (!clock.TryAdvance(args, out double elapsed)) return;
         // Apply callbacks can synchronously change visual state and cancel/retarget other
         // channels. Iterate a stable snapshot and verify ownership before removing.
         foreach (Channel channel in channels.ToArray())
@@ -126,6 +119,5 @@ internal sealed class MotionDriver
         if (!rendering || channels.Count != 0) return;
         CompositionTarget.Rendering -= OnRendering;
         rendering = false;
-        lastRenderingTime = TimeSpan.MinValue;
     }
 }

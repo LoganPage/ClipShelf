@@ -20,8 +20,7 @@ public sealed class HistoryListBox : ListBox
     private bool rendering, hasRequestedOffset;
     private double requestedOffset;
     private double? dragScrollOffset;
-    private long lastFrameTimestamp;
-    private TimeSpan lastRenderingTime = TimeSpan.MinValue;
+    private readonly FrameClock wheelClock = new();
     private readonly DispatcherTimer nativeDiagnosticSettle = new() { Interval = TimeSpan.FromMilliseconds(120) };
     private bool nativeDiagnosticPending;
     internal event Action<WheelDiagnosticPacket>? DiagnosticWheelPacket;
@@ -131,6 +130,7 @@ public sealed class HistoryListBox : ListBox
         // and read as a sequence of tiny starts and stops.
         wheelMotion.ResponseFrequency = RuntimeFeatureSwitches.WheelResponse
             ?? WheelScrollMotion.DefaultResponseFrequency;
+        wheelMotion.LaunchRatio = RuntimeFeatureSwitches.WheelLaunch ?? WheelScrollMotion.DefaultLaunchRatio;
         bool immediate = !MotionPolicy.Allows(MotionDomain.DirectManipulation) || directInput || RuntimeFeatureSwitches.InstantWheel;
         double current = hasRequestedOffset ? requestedOffset : wheelPanel.VerticalOffset;
         double target = Math.Clamp(current + distance, 0, maximum);
@@ -149,7 +149,7 @@ public sealed class HistoryListBox : ListBox
                 RequestOffset(wheelMotion.Advance(RuntimeFeatureSwitches.WheelPrewarmMs / 1000.0, maximum));
             if (wheelMotion.IsActive && !rendering)
             {
-                lastFrameTimestamp = now; lastRenderingTime = TimeSpan.MinValue;
+                wheelClock.Start();
                 CompositionTarget.Rendering += RenderWheelFrame; rendering = true;
             }
         }
@@ -175,17 +175,10 @@ public sealed class HistoryListBox : ListBox
 
     private void RenderWheelFrame(object? sender, EventArgs e)
     {
-        if (e is RenderingEventArgs frame)
-        {
-            if (frame.RenderingTime == lastRenderingTime) return;
-            lastRenderingTime = frame.RenderingTime;
-        }
+        if (!wheelClock.TryAdvance(e, out double elapsed)) return;
         if (!IsVisible || !IsEnabled || !IsLoaded || wheelPanel is null || !MotionPolicy.Allows(MotionDomain.DirectManipulation)
             || IsMouseCaptureWithin)
         { CancelWheelMotion(); return; }
-        long now = Stopwatch.GetTimestamp();
-        double elapsed = (now - lastFrameTimestamp) / (double)Stopwatch.Frequency;
-        lastFrameTimestamp = now;
         RequestOffset(wheelMotion.Advance(elapsed, MaximumOffset));
         if (!wheelMotion.IsActive) StopRendering();
     }
@@ -254,7 +247,6 @@ public sealed class HistoryListBox : ListBox
     {
         if (!rendering) return;
         CompositionTarget.Rendering -= RenderWheelFrame; rendering = false;
-        lastRenderingTime = TimeSpan.MinValue;
         DiagnosticWheelSettled?.Invoke(Stopwatch.GetTimestamp(), requestedOffset);
     }
 
