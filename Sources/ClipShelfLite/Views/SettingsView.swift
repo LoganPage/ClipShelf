@@ -57,12 +57,18 @@ struct SettingsView: View {
                     onClose()
                 }
                 .keyboardShortcut(.defaultAction)
+                .controlSize(.large)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppTheme.settingsBackground)
+        .background {
+            // On macOS 26 the hosting panel is Liquid Glass; keep it visible.
+            if #unavailable(macOS 26.0) {
+                AppTheme.settingsBackground
+            }
+        }
         .preferredColorScheme(resolvedColorScheme)
         .background(WindowReader { window in
             hostWindow = window
@@ -118,15 +124,17 @@ struct SettingsView: View {
 
     private var appearanceSection: some View {
         settingsSection("暗黑模式") {
-            Picker("暗黑模式", selection: Binding(
-                get: { appearanceMode },
-                set: updateAppearanceMode
-            )) {
-                ForEach(AppearanceMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
+            LiquidSegmentedControl(
+                options: AppearanceMode.allCases,
+                selection: Binding(
+                    get: { appearanceMode },
+                    set: updateAppearanceMode
+                ),
+                title: \.title,
+                segmentWidth: 96,
+                height: 36
+            )
+            .accessibilityLabel("暗黑模式")
 
             Text("深色模式使用石墨背景和分层表面，类型颜色在暗色背景上保持清晰。")
                 .font(.caption)

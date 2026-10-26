@@ -1,19 +1,19 @@
 import SwiftUI
 
 enum IconButtonAppearance {
+    /// Row icons rest without a plate so the card stays light; hover and press
+    /// reveal a soft surface.
     static func background(
         isSelected: Bool,
         isPressed: Bool,
         isHovered: Bool
     ) -> Color {
         if isPressed {
-            return isSelected
-                ? AppTheme.selectedActionBackground.opacity(1.5)
-                : AppTheme.actionButtonBackground.opacity(1.2)
+            return Color.primary.opacity(isSelected ? 0.2 : 0.14)
         }
         if isHovered {
-            return AppTheme.actionButtonHoverBackground
+            return Color.primary.opacity(isSelected ? 0.12 : 0.07)
         }
-        return isSelected ? AppTheme.selectedActionBackground : AppTheme.actionButtonBackground
+        return .clear
     }
 }

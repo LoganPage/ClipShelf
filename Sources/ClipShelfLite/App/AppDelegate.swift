@@ -79,13 +79,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if window == nil {
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 720, height: 552),
-                styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
             window.title = AppVersionInfo.windowTitle(bundleVersion: AppVersionInfo.bundleVersion)
+            // One seamless surface: the SwiftUI glass toolbar draws into the titlebar area.
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            // An empty unified toolbar gives the taller titlebar, so the
+            // traffic lights centre on the app icon row.
+            window.toolbar = NSToolbar(identifier: "ClipShelfMainToolbar")
+            window.toolbarStyle = .unified
             window.center()
-            window.contentView = NSHostingView(rootView: MainView(store: store, watcher: watcher))
+            window.contentView = Self.makeVibrantContentView(
+                hosting: NSHostingView(rootView: MainView(store: store, watcher: watcher))
+            )
             window.isReleasedWhenClosed = false
             window.setFrameAutosaveName("ClipShelfMainWindow")
             self.window = window
@@ -94,6 +103,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AppearancePreferences.apply(to: window)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The desktop shows through, blurred and tinted, behind every card and
+    /// glass control, which is what gives Liquid Glass something to refract.
+    private static func makeVibrantContentView(hosting: NSView) -> NSView {
+        let backdrop = NSVisualEffectView()
+        backdrop.material = .underWindowBackground
+        backdrop.blendingMode = .behindWindow
+        backdrop.state = .followsWindowActiveState
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.addSubview(hosting)
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: backdrop.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor)
+        ])
+        return backdrop
     }
 
     @objc func chooseFolder() {

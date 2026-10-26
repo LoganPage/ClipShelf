@@ -42,9 +42,14 @@ struct MainView: View {
     @State private var searchIndexCache = ClipSearchIndexCache()
     @State private var imageThumbnailCache = ImageThumbnailCache()
     @FocusState private var isSearchFocused: Bool
+    @State private var toolbarHeight: CGFloat = 160
+    @State private var titlebarHeight: CGFloat = 28
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = 18
-    private let historyListVerticalInset: CGFloat = 5
+
+    /// The glass toolbar floats over the top of the list, so rows start below it
+    /// and every viewport calculation treats that strip as covered.
+    private var historyListVerticalInset: CGFloat { toolbarHeight + 6 }
 
     private var searchSignature: SearchSignature {
         SearchSignature(ids: store.items.map(\.id), kind: kindFilter, query: searchText)
@@ -63,17 +68,29 @@ struct MainView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-
+        ZStack(alignment: .top) {
             if filteredItems.isEmpty {
                 emptyView
+                    .padding(.top, toolbarHeight)
             } else {
                 historyList
             }
+
+            toolbar
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: ToolbarHeightKey.self, value: proxy.size.height)
+                    }
+                )
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .onPreferenceChange(ToolbarHeightKey.self) { height in
+            let rounded = height.rounded()
+            if abs(rounded - toolbarHeight) > 0.5 {
+                toolbarHeight = rounded
+            }
         }
         .frame(minWidth: 680, minHeight: 552)
-        .background(AppTheme.appBackground)
         .preferredColorScheme(resolvedColorScheme)
         .overlay {
             ZStack {
@@ -92,6 +109,12 @@ struct MainView: View {
         .animation(.spring(response: 0.26, dampingFraction: 0.88), value: showingSettings)
         .background(WindowReader { window in
             hostWindow = window
+            if let window {
+                let height = window.frame.height - window.contentLayoutRect.height
+                if height > 0, abs(height - titlebarHeight) > 0.5 {
+                    titlebarHeight = height
+                }
+            }
         })
         .confirmationDialog(
             ClearHistoryConfirmation.title(itemCount: store.items.count),
@@ -147,12 +170,7 @@ struct MainView: View {
                     closeSettings()
                 }
                 .frame(width: panelWidth, height: panelHeight)
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(AppTheme.settingsBackground)
-                        .shadow(color: Color.black.opacity(0.18), radius: 24, x: 0, y: 12)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .clipShelfGlassPanel(cornerRadius: 26)
                 .contentShape(Rectangle())
                 .onTapGesture { }
             }
@@ -182,20 +200,10 @@ struct MainView: View {
                         .id(item.id)
                     }
                 }
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(AppTheme.rowBackground)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(AppTheme.subtleBorder, lineWidth: 1)
-                )
                 .padding(.horizontal, historyListHorizontalInset)
                 .padding(.top, historyListVerticalInset)
                 .padding(.bottom, 18)
             }
-            .background(AppTheme.appBackground)
             .coordinateSpace(name: "historyList")
             .background(
                 ScrollViewResolver { scrollView in
@@ -212,6 +220,7 @@ struct MainView: View {
                     itemIDs: filteredItems.map(\.id),
                     rowHeight: historyRowHeight,
                     contentTopInset: historyListVerticalInset,
+                    viewportTopObstruction: toolbarHeight,
                     contentHorizontalInset: historyListHorizontalInset,
                     onPointerDown: { location in
                         handleHistoryPointerDown(at: location)
@@ -295,62 +304,8 @@ struct MainView: View {
 
     private var toolbar: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 12) {
-                Group {
-                    if let image = appIconChoice.previewImage {
-                        Image(nsImage: image)
-                            .resizable()
-                            .scaledToFit()
-                    } else {
-                        Image(systemName: "doc.on.clipboard")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(width: 36, height: 36)
-
-                Text("ClipShelf")
-                    .font(.system(size: 17, weight: .semibold))
-
-                Spacer()
-
-                if let update = updateChecker.availableUpdate {
-                    Button {
-                        updateChecker.openUpdatePage()
-                    } label: {
-                        Label("更新", systemImage: "arrow.down.circle")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    .clipShelfLiquidGlassButtonStyle()
-                    .foregroundStyle(Color.accentColor)
-                    .floatingTooltip("发现新版本 \(update.versionText)，点击打开下载页")
-                }
-
-            }
-
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("搜索文字、文件名、截图名", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .focused($isSearchFocused)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .clipShelfLiquidGlassSurface(cornerRadius: 12)
-            .overlay(alignment: .trailing) {
-                if let selectionCountText = SelectionCountLabel.text(for: selectedIDs.count) {
-                    Text(selectionCountText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(width: 92, alignment: .trailing)
-                        .padding(.trailing, 12)
-                        .padding(.vertical, 9)
-                        .background(AppTheme.searchBackground)
-                        .allowsHitTesting(false)
-                }
-            }
+            titleRow
+            searchField
 
             HStack(spacing: 12) {
                 HistoryTypeFilterBar(selection: $kindFilter)
@@ -358,17 +313,97 @@ struct MainView: View {
                 Spacer(minLength: 8)
                 primaryToolbar
             }
-            .frame(height: 44)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .background(AppTheme.appBackground)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+        // Gaps between controls must not click through to rows hidden underneath.
+        .contentShape(Rectangle())
+        .background(alignment: .top) {
+            TitlebarScrollEdge(height: max(titlebarHeight, 28) + 6)
+        }
+    }
+
+    /// Lives in the (transparent) titlebar strip, next to the traffic lights.
+    private var titleRow: some View {
+        HStack(spacing: 8) {
+            Color.clear.frame(width: 62)
+
+            Group {
+                if let image = appIconChoice.previewImage {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "doc.on.clipboard")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 36, height: 36)
+
+            Text("ClipShelf")
+                .font(.system(size: 17, weight: .semibold))
+
+            Text(AppVersionInfo.statusVersion(bundleVersion: AppVersionInfo.bundleVersion))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.top, 3)
+
+            Spacer()
+
+            if let update = updateChecker.availableUpdate {
+                Button {
+                    updateChecker.openUpdatePage()
+                } label: {
+                    Label("更新", systemImage: "arrow.down.circle")
+                        .labelStyle(.titleAndIcon)
+                }
+                .controlSize(.small)
+                .clipShelfLiquidGlassButtonStyle()
+                .foregroundStyle(Color.accentColor)
+                .floatingTooltip("发现新版本 \(update.versionText)，点击打开下载页")
+            }
+        }
+        .frame(height: max(titlebarHeight, 44))
+        .background(WindowDragHandle())
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField("搜索文字、文件名、截图名", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .focused($isSearchFocused)
+            if let selectionCountText = SelectionCountLabel.text(for: selectedIDs.count) {
+                Text(selectionCountText)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .floatingTooltip("清除搜索")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+        .clipShelfLiquidGlassSurface(cornerRadius: 19)
     }
 
     @ViewBuilder
     private var primaryToolbar: some View {
         if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: 12) {
+            GlassEffectContainer(spacing: 8) {
                 primaryToolbarButtons
             }
         } else {
@@ -376,61 +411,50 @@ struct MainView: View {
         }
     }
 
+    /// Two glass capsules, like system toolbar groups: places, then actions.
     private var primaryToolbarButtons: some View {
-        HStack(spacing: 16) {
-            Button {
-                debugFolderPickerLog("choose folder button clicked")
-                watcher.chooseFolder(attachedTo: hostWindow)
-            } label: {
-                Image(systemName: "folder")
+        HStack(spacing: 10) {
+            HStack(spacing: 0) {
+                toolbarButton("folder", tooltip: "选择截图文件夹") {
+                    debugFolderPickerLog("choose folder button clicked")
+                    watcher.chooseFolder(attachedTo: hostWindow)
+                }
+                toolbarButton("gearshape", tooltip: "设置") {
+                    openSettings()
+                }
             }
-            .clipShelfLiquidGlassButtonStyle()
-            .floatingTooltip("选择截图文件夹")
+            .clipShelfGlassGroup()
 
-            Button {
-                openSettings()
-            } label: {
-                Image(systemName: "gearshape")
+            HStack(spacing: 0) {
+                toolbarButton("doc.on.doc", tooltip: copyActionHelp, isDimmed: actionItems.isEmpty) {
+                    copyActionItems()
+                }
+                toolbarButton("pin", tooltip: "置顶选中的记录", isDimmed: actionItems.isEmpty) {
+                    togglePinnedForActionItems()
+                }
+                toolbarButton("trash", tooltip: selectedIDs.isEmpty ? "清空记录" : "删除选中的记录") {
+                    deleteSelectedOrClear()
+                }
+                toolbarButton("arrow.uturn.backward", tooltip: "撤销最近一批删除", isDimmed: !store.canUndoDeletion) {
+                    undoLastDeletion()
+                }
+                .disabled(!store.canUndoDeletion)
             }
-            .clipShelfLiquidGlassButtonStyle()
-            .floatingTooltip("设置")
-
-            Button {
-                copyActionItems()
-            } label: {
-                Image(systemName: "doc.on.doc")
-            }
-            .clipShelfLiquidGlassButtonStyle()
-            .foregroundStyle(actionItems.isEmpty ? Color.secondary.opacity(0.38) : Color.secondary)
-            .floatingTooltip(copyActionHelp)
-
-            Button {
-                togglePinnedForActionItems()
-            } label: {
-                Image(systemName: "pin")
-            }
-            .clipShelfLiquidGlassButtonStyle()
-            .foregroundStyle(actionItems.isEmpty ? Color.secondary.opacity(0.38) : Color.secondary)
-            .floatingTooltip("置顶选中的记录")
-
-            Button(role: .destructive) {
-                deleteSelectedOrClear()
-            } label: {
-                Image(systemName: "trash")
-            }
-            .clipShelfLiquidGlassButtonStyle()
-            .floatingTooltip(selectedIDs.isEmpty ? "清空记录" : "删除选中的记录")
-
-            Button {
-                undoLastDeletion()
-            } label: {
-                Image(systemName: "arrow.uturn.backward")
-            }
-            .clipShelfLiquidGlassButtonStyle()
-            .disabled(!store.canUndoDeletion)
-            .foregroundStyle(store.canUndoDeletion ? Color.secondary : Color.secondary.opacity(0.38))
-            .floatingTooltip("撤销最近一批删除")
+            .clipShelfGlassGroup()
         }
+    }
+
+    private func toolbarButton(
+        _ systemImage: String,
+        tooltip: String,
+        isDimmed: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+        }
+        .buttonStyle(GlassToolbarIconButtonStyle(isDimmed: isDimmed))
+        .floatingTooltip(tooltip)
     }
 
     private func openSettings() {
@@ -706,7 +730,7 @@ struct MainView: View {
 
         let topPadding: CGFloat = 6
         let bottomPadding: CGFloat = 18
-        let visibleTop = topPadding
+        let visibleTop = toolbarHeight + topPadding
         let visibleBottom = visibleHeight - bottomPadding
 
         if rowFrame.minY < visibleTop {
@@ -776,7 +800,7 @@ struct MainView: View {
               !filteredItems.isEmpty,
               let range = visibleContentRange(in: scrollView) else { return [] }
 
-        let first = max(0, Int(floor((range.lowerBound - historyListVerticalInset) / historyRowHeight)))
+        let first = max(0, Int(floor((range.lowerBound + toolbarHeight - historyListVerticalInset) / historyRowHeight)))
         let last = min(filteredItems.count - 1, Int(floor((range.upperBound - historyListVerticalInset) / historyRowHeight)))
         guard first <= last else { return [] }
 
@@ -971,7 +995,7 @@ struct MainView: View {
               viewportSize.height > 0,
               location.x >= historyListHorizontalInset,
               location.x <= viewportSize.width - historyListHorizontalInset,
-              location.y >= 0,
+              location.y >= toolbarHeight,
               location.y <= viewportSize.height else { return nil }
 
         let yInList = visibleRange.lowerBound + location.y - historyListVerticalInset
@@ -985,7 +1009,7 @@ struct MainView: View {
     private func edgeRowID(for location: CGPoint) -> ClipItem.ID? {
         guard let viewportSize = historyViewportSize else { return nil }
 
-        if location.y < 0 {
+        if location.y < toolbarHeight {
             return visibleItemIndices().first.map { filteredItems[$0].id } ?? filteredItems.first?.id
         }
 
@@ -1019,173 +1043,107 @@ struct MainView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppTheme.appBackground)
+    }
+}
+
+private struct ToolbarHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Frosts only the titlebar strip so scrolled rows don't collide with the
+/// title; below it rows stay visible under the glass controls.
+private struct TitlebarScrollEdge: View {
+    let height: CGFloat
+
+    var body: some View {
+        Rectangle()
+            .fill(.bar)
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: 0.7),
+                        .init(color: .black.opacity(0), location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .frame(height: height + 18)
+            .allowsHitTesting(false)
+    }
+}
+
+/// Lets the custom titlebar strip move and zoom the window like a real titlebar.
+private struct WindowDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class DragView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            if event.clickCount == 2 {
+                window?.performZoom(nil)
+            } else {
+                window?.performDrag(with: event)
+            }
+        }
+    }
+}
+
+private struct GlassToolbarIconButtonStyle: ButtonStyle {
+    let isDimmed: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        GlassToolbarIconButtonBody(
+            label: configuration.label,
+            isDimmed: isDimmed,
+            isPressed: configuration.isPressed
+        )
+    }
+}
+
+private struct GlassToolbarIconButtonBody<Label: View>: View {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+    let label: Label
+    let isDimmed: Bool
+    let isPressed: Bool
+
+    var body: some View {
+        label
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(isDimmed || !isEnabled ? Color.secondary.opacity(0.45) : Color.primary.opacity(0.82))
+            .frame(width: 38, height: 36)
+            .background(
+                Circle()
+                    .fill(Color.primary.opacity(isPressed ? 0.14 : (isHovered && !isDimmed ? 0.07 : 0)))
+                    .frame(width: 32, height: 32)
+            )
+            .contentShape(Rectangle())
+            .scaleEffect(isPressed ? 0.92 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isPressed)
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+            .onHover { isHovered = $0 }
     }
 }
 
 private struct HistoryTypeFilterBar: View {
-    @Environment(\.colorScheme) private var colorScheme
     @Binding var selection: ClipKindFilter
-    @Namespace private var selectionNamespace
-    @State private var isDragging = false
-
-    private let segmentWidth: CGFloat = 64
-    private let barHeight: CGFloat = 44
-    private let outerPadding: CGFloat = 4
-
-    private var barWidth: CGFloat {
-        segmentWidth * CGFloat(ClipKindFilter.allCases.count) + outerPadding * 2
-    }
-
-    private var liquidAnimation: Animation {
-        .spring(response: 0.36, dampingFraction: 0.68, blendDuration: 0.1)
-    }
 
     var body: some View {
-        if #available(macOS 26.0, *) {
-            liquidGlassBar
-        } else {
-            legacyBar
-        }
-    }
-
-    @available(macOS 26.0, *)
-    private var liquidGlassBar: some View {
-        ZStack {
-            Color.clear
-                .frame(width: barWidth, height: barHeight)
-                .glassEffect(
-                    .regular
-                        .tint(outerGlassTint)
-                        .interactive(),
-                    in: Capsule()
-                )
-                .overlay {
-                    Capsule()
-                        .stroke(outerGlassStroke, lineWidth: 0.75)
-                }
-
-            GlassEffectContainer(spacing: barWidth) {
-                HStack(spacing: 0) {
-                    ForEach(ClipKindFilter.allCases) { filter in
-                        Group {
-                            if selection == filter {
-                                Color.clear
-                                    .frame(width: segmentWidth - 8, height: barHeight - 8)
-                                    .glassEffect(
-                                        .regular
-                                            .tint(Color.accentColor.opacity(colorScheme == .dark ? 0.26 : 0.2))
-                                            .interactive(),
-                                        in: Capsule()
-                                    )
-                                    .glassEffectID("history-type-selection", in: selectionNamespace)
-                                    .glassEffectTransition(.matchedGeometry)
-                                    .scaleEffect(x: isDragging ? 1.08 : 1, y: isDragging ? 1.04 : 1)
-                            } else {
-                                Color.clear
-                                    .frame(width: segmentWidth - 8, height: barHeight - 8)
-                            }
-                        }
-                        .frame(width: segmentWidth, height: barHeight)
-                    }
-                }
-                .padding(.horizontal, outerPadding)
-            }
-
-            HStack(spacing: 0) {
-                ForEach(ClipKindFilter.allCases) { filter in
-                    filterButton(filter, usesLiquidGlass: true)
-                }
-            }
-            .padding(.horizontal, outerPadding)
-        }
-        .frame(width: barWidth, height: barHeight)
-        .contentShape(Capsule())
-        .simultaneousGesture(liquidDragGesture)
-        .animation(liquidAnimation, value: selection)
-        .animation(.spring(response: 0.42, dampingFraction: 0.56), value: isDragging)
-    }
-
-    private var outerGlassTint: Color {
-        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.045)
-    }
-
-    private var outerGlassStroke: Color {
-        colorScheme == .dark ? Color.white.opacity(0.18) : Color.white.opacity(0.72)
-    }
-
-    private var legacyBar: some View {
-        HStack(spacing: 0) {
-            ForEach(ClipKindFilter.allCases) { filter in
-                filterButton(filter, usesLiquidGlass: false)
-            }
-        }
-        .padding(.horizontal, outerPadding)
-        .frame(width: barWidth, height: barHeight)
-        .background(AppTheme.searchBackground, in: Capsule())
-        .overlay(Capsule().stroke(AppTheme.subtleBorder, lineWidth: 1))
-    }
-
-    private func filterButton(_ filter: ClipKindFilter, usesLiquidGlass: Bool) -> some View {
-        Button {
-            select(filter)
-        } label: {
-            filterLabel(filter, usesLiquidGlass: usesLiquidGlass)
-        }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
-        .accessibilityLabel(filter.title)
-        .accessibilityAddTraits(selection == filter ? .isSelected : [])
-    }
-
-    private var liquidDragGesture: some Gesture {
-        DragGesture(minimumDistance: 3, coordinateSpace: .local)
-            .onChanged { value in
-                if !isDragging {
-                    isDragging = true
-                }
-                selectFilter(at: value.location.x)
-            }
-            .onEnded { _ in
-                isDragging = false
-            }
-    }
-
-    private func selectFilter(at x: CGFloat) {
-        let localX = min(max(x - outerPadding, 0), segmentWidth * CGFloat(ClipKindFilter.allCases.count) - 0.001)
-        let index = Int(localX / segmentWidth)
-        guard ClipKindFilter.allCases.indices.contains(index) else { return }
-        select(ClipKindFilter.allCases[index])
-    }
-
-    private func select(_ filter: ClipKindFilter) {
-        guard selection != filter else { return }
-        withAnimation(liquidAnimation) {
-            selection = filter
-        }
-    }
-
-    @ViewBuilder
-    private func filterLabel(_ filter: ClipKindFilter, usesLiquidGlass: Bool) -> some View {
-        if usesLiquidGlass {
-            Text(filter.title)
-                .font(.system(size: 13, weight: selection == filter ? .semibold : .medium))
-                .foregroundStyle(selection == filter ? Color.primary : Color.secondary)
-                .frame(width: segmentWidth, height: barHeight)
-        } else {
-            Text(filter.title)
-                .font(.system(size: 13, weight: selection == filter ? .semibold : .medium))
-                .foregroundStyle(selection == filter ? Color.primary : Color.secondary)
-                .frame(width: segmentWidth, height: barHeight)
-                .background {
-                    if selection == filter {
-                        Capsule()
-                            .fill(AppTheme.searchBackground)
-                            .overlay(Capsule().stroke(AppTheme.subtleBorder, lineWidth: 1))
-                            .matchedGeometryEffect(id: "history-type-selection", in: selectionNamespace)
-                    }
-                }
-        }
+        LiquidSegmentedControl(
+            options: ClipKindFilter.allCases,
+            selection: $selection,
+            title: \.title,
+            segmentWidth: 64,
+            height: 38
+        )
+        .accessibilityLabel("记录类型")
     }
 }
 
@@ -1251,24 +1209,16 @@ private struct ClipRow: View {
         .padding(.horizontal, 12)
         .foregroundStyle(isSelected ? selectedTextColor : Color.primary)
         .background {
-            selectionColor
-                .opacity(
-                    SelectionRowMotion.surfaceOpacity(
-                        isSelected: isSelected,
-                        isDark: colorScheme == .dark,
-                        isPreset: selectionColorIsPreset
-                    )
+            ClipRowCardSurface(
+                isSelected: isSelected,
+                selectionColor: selectionColor,
+                selectionOpacity: SelectionRowMotion.surfaceOpacity(
+                    isSelected: isSelected,
+                    isDark: colorScheme == .dark,
+                    isPreset: selectionColorIsPreset
                 )
-                .animation(SelectionRowMotion.animation, value: isSelected)
-        }
-        .overlay(alignment: .bottom) {
-            if showsSeparator {
-                Rectangle()
-                    .fill(AppTheme.subtleBorder)
-                    .frame(height: 1)
-                    .padding(.leading, 76)
-                    .padding(.trailing, 12)
-            }
+            )
+            .animation(SelectionRowMotion.animation, value: isSelected)
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -1321,6 +1271,42 @@ private struct ClipRow: View {
         case .text: "文字"
         case .file: item.filePaths.count > 1 ? "\(item.filePaths.count) 个文件" : "文件"
         case .image: item.sourcePath == nil ? "图片" : "截图"
+        }
+    }
+}
+
+/// Each record is its own translucent card; the selected one becomes a tinted
+/// Liquid Glass slab on macOS 26.
+private struct ClipRowCardSurface: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let isSelected: Bool
+    let selectionColor: Color
+    let selectionOpacity: Double
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+    }
+
+    var body: some View {
+        ZStack {
+            shape.fill(Color.white.opacity(colorScheme == .dark ? 0.06 : 0.58))
+            shape.strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.7), lineWidth: 0.5)
+            selectedSurface
+                .opacity(selectionOpacity)
+        }
+        .padding(.vertical, 3)
+    }
+
+    @ViewBuilder
+    private var selectedSurface: some View {
+        if #available(macOS 26.0, *) {
+            Color.clear
+                .glassEffect(
+                    .regular.tint(selectionColor.opacity(colorScheme == .dark ? 0.55 : 0.4)).interactive(),
+                    in: shape
+                )
+        } else {
+            shape.fill(selectionColor)
         }
     }
 }
@@ -1400,9 +1386,10 @@ private struct IconButtonStyleBody<Label: View>: View {
         label
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(isSelected ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary)
-            .frame(width: 36, height: 32)
+            .frame(width: 34, height: 34)
+            .scaleEffect(isPressed ? 0.9 : 1)
             .background(
-                RoundedRectangle(cornerRadius: 9)
+                Circle()
                     .fill(
                         IconButtonAppearance.background(
                             isSelected: isSelected,
@@ -1418,10 +1405,35 @@ private struct IconButtonStyleBody<Label: View>: View {
 
 private extension View {
     @ViewBuilder
+    func clipShelfGlassGroup() -> some View {
+        if #available(macOS 26.0, *) {
+            padding(.horizontal, 2)
+                .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            padding(.horizontal, 2)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(AppTheme.subtleBorder, lineWidth: 0.5))
+        }
+    }
+
+    @ViewBuilder
+    func clipShelfGlassPanel(cornerRadius: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if #available(macOS 26.0, *) {
+            clipShape(shape)
+                .glassEffect(.regular, in: shape)
+        } else {
+            background(AppTheme.settingsBackground)
+                .clipShape(shape)
+                .shadow(color: Color.black.opacity(0.18), radius: 24, x: 0, y: 12)
+        }
+    }
+
+    @ViewBuilder
     func clipShelfLiquidGlassSurface(cornerRadius: CGFloat) -> some View {
         if #available(macOS 26.0, *) {
             glassEffect(
-                .regular.interactive(),
+                .regular,
                 in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
         } else {
@@ -1697,6 +1709,7 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
     let itemIDs: [ClipItem.ID]
     let rowHeight: CGFloat
     let contentTopInset: CGFloat
+    var viewportTopObstruction: CGFloat = 0
     let contentHorizontalInset: CGFloat
     let onPointerDown: (CGPoint) -> Void
     let onSmallDragClick: (CGPoint, NSEvent?) -> Void
@@ -1722,6 +1735,7 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
         context.coordinator.itemIDs = itemIDs
         context.coordinator.rowHeight = rowHeight
         context.coordinator.contentTopInset = contentTopInset
+        context.coordinator.viewportTopObstruction = viewportTopObstruction
         context.coordinator.contentHorizontalInset = contentHorizontalInset
         context.coordinator.onPointerDown = onPointerDown
         context.coordinator.onSmallDragClick = onSmallDragClick
@@ -1747,6 +1761,8 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
         var itemIDs: [ClipItem.ID] = []
         var rowHeight: CGFloat = 74
         var contentTopInset: CGFloat = 8
+        /// Height of the floating toolbar covering the top of the viewport.
+        var viewportTopObstruction: CGFloat = 0
         var contentHorizontalInset: CGFloat = 10
         weak var view: NSView?
 
@@ -1921,7 +1937,7 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
         private func isPointInsideViewport(_ point: CGPoint) -> Bool {
             guard let view = viewportView() else { return false }
             return point.x >= 0 &&
-                point.y >= 0 &&
+                point.y >= viewportTopObstruction &&
                 point.x <= view.bounds.width &&
                 point.y <= view.bounds.height
         }
@@ -2117,7 +2133,7 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
             guard let mouseY = documentY(from: event) else { return 0 }
 
             let visibleRect = scrollView.contentView.bounds
-            let topEdge = visibleRect.minY
+            let topEdge = visibleRect.minY + viewportTopObstruction
             let bottomEdge = visibleRect.maxY
 
             if mouseY < topEdge + edgeZoneHeight {
