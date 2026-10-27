@@ -48,6 +48,7 @@ struct MainView: View {
     /// stays at this so rows don't jump when the search field collapses.
     @State private var expandedToolbarHeight: CGFloat = 150
     @State private var isSearchCollapsed = false
+    @State private var obstructionCollapsed = false
     @State private var scrollObserver: NSObjectProtocol?
     /// Plain reference, so tracking scroll direction never re-renders the view.
     @State private var scrollTracker = ScrollDirectionTracker()
@@ -76,9 +77,11 @@ struct MainView: View {
         GlassMetrics.controlHeight + GlassMetrics.stackSpacing
     }
 
-    /// Height of the toolbar as it currently covers the list.
+    /// Height of the toolbar as it currently covers the list. Follows the
+    /// collapse without animating: animating it made every row re-render its
+    /// edge blur on every frame of the collapse.
     private var visibleToolbarHeight: CGFloat {
-        isSearchCollapsed ? toolbarHeight - searchCollapseDistance : toolbarHeight
+        obstructionCollapsed ? toolbarHeight - searchCollapseDistance : toolbarHeight
     }
 
     private var historyListVerticalInset: CGFloat {
@@ -306,13 +309,12 @@ struct MainView: View {
                 .id(listGeneration)
                 // The previous type's rows fade out instead of vanishing.
                 .transition(.opacity)
-                .background(alignment: .top) {
-                    if scrollEffect.stacksBottom {
-                        pileLayer
-                    }
-                }
+                // Selection glass sits above the pile copies, so a selected
+                // front row is never cut off by the card tucked behind it.
                 .background(alignment: .top) {
                     SelectionGlassLayer(
+                        items: filteredItems,
+                        selectedIDs: selectedIDs,
                         panes: selectionPanes,
                         rowHeight: historyRowHeight,
                         selectionColor: selectionColor,
@@ -321,6 +323,11 @@ struct MainView: View {
                         count: filteredItems.count,
                         bottomPadding: historyListBottomPadding
                     )
+                }
+                .background(alignment: .top) {
+                    if scrollEffect.stacksBottom {
+                        pileLayer
+                    }
                 }
                 .padding(.horizontal, historyListHorizontalInset)
                 .padding(.top, historyListVerticalInset)
@@ -657,6 +664,11 @@ struct MainView: View {
 
     private func setSearchCollapsed(_ collapsed: Bool) {
         guard isSearchCollapsed != collapsed else { return }
+        var plain = Transaction()
+        plain.disablesAnimations = true
+        withTransaction(plain) {
+            obstructionCollapsed = collapsed
+        }
         withAnimation(.spring(response: 0.45, dampingFraction: 0.92)) {
             isSearchCollapsed = collapsed
         }
@@ -1690,6 +1702,8 @@ private struct SelectionGlassPane: Identifiable, Equatable {
 /// even when the previous record has scrolled out of view. Each pane gets the
 /// same perspective fold as the record under it, so it hugs curved rows.
 private struct SelectionGlassLayer: View {
+    let items: [ClipItem]
+    let selectedIDs: Set<ClipItem.ID>
     let panes: [SelectionGlassPane]
     let rowHeight: CGFloat
     let selectionColor: Color
@@ -1699,25 +1713,41 @@ private struct SelectionGlassLayer: View {
     let bottomPadding: CGFloat
 
     var body: some View {
-        GeometryReader { proxy in
-            ForEach(panes) { pane in
-                SelectionGlassSlab(selectionColor: selectionColor)
-                    .frame(width: proxy.size.width, height: rowHeight)
-                    // Before positioning, so the fold measures this pane's own
-                    // frame rather than the whole list it sits in.
-                    .modifier(ListEdgeEffect(
-                        style: scrollEffect,
-                        topEdge: topEdge,
-                        index: pane.index,
-                        count: count,
-                        bottomPadding: bottomPadding
-                    ))
-                    .position(x: proxy.size.width / 2, y: CGFloat(pane.index) * rowHeight + rowHeight / 2)
-                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+        if panes.count > 1 {
+            // Many selected: a lazy stack, so only on-screen panes are drawn
+            // (selecting a hundred records used to build a hundred glass panes).
+            LazyVStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    if selectedIDs.contains(item.id) {
+                        SelectionGlassSlab(selectionColor: selectionColor, lightweight: true)
+                            .frame(height: rowHeight)
+                            .modifier(edge(index))
+                    } else {
+                        Color.clear.frame(height: rowHeight)
+                    }
+                }
             }
+            .allowsHitTesting(false)
+        } else {
+            // One selected: a single pane that slides from record to record.
+            GeometryReader { proxy in
+                ForEach(panes) { pane in
+                    SelectionGlassSlab(selectionColor: selectionColor, lightweight: false)
+                        .frame(width: proxy.size.width, height: rowHeight)
+                        // Before positioning, so the edge effect measures this
+                        // pane's own frame rather than the whole list.
+                        .modifier(edge(pane.index))
+                        .position(x: proxy.size.width / 2, y: CGFloat(pane.index) * rowHeight + rowHeight / 2)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                }
+            }
+            .animation(SelectionRowMotion.animation, value: panes)
+            .allowsHitTesting(false)
         }
-        .animation(SelectionRowMotion.animation, value: panes)
-        .allowsHitTesting(false)
+    }
+
+    private func edge(_ index: Int) -> ListEdgeEffect {
+        ListEdgeEffect(style: scrollEffect, topEdge: topEdge, index: index, count: count, bottomPadding: bottomPadding)
     }
 }
 
@@ -1726,6 +1756,8 @@ private struct SelectionGlassSlab: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.glassTransparency) private var transparency
     let selectionColor: Color
+    /// For multi-select: no blurred glow, which is costly with many panes.
+    var lightweight = false
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
@@ -1752,8 +1784,8 @@ private struct SelectionGlassSlab: View {
         )
         // A glow that hugs the edge only, so it never greys out the glass.
         let glow = shape
-            .stroke(Color.accentColor.opacity(isDark ? 0.45 : 0.35), lineWidth: 5)
-            .blur(radius: 6)
+            .stroke(Color.accentColor.opacity(lightweight ? 0 : (isDark ? 0.45 : 0.35)), lineWidth: 5)
+            .blur(radius: lightweight ? 0 : 6)
         if transparency == .opaque {
             shape.fill(selectionColor.opacity(isDark ? 0.55 : 0.4))
                 .background(glow)

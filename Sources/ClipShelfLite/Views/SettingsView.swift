@@ -82,6 +82,7 @@ struct SettingsView: View {
             .background(OverlayScrollerConfigurator())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .coordinateSpace(name: SettingsPanelSpace.name)
         .background {
             // On macOS 26 the hosting panel is Liquid Glass; keep it visible.
             if #unavailable(macOS 26.0) {
@@ -583,8 +584,15 @@ struct SettingsView: View {
     }
 
     private func updateHistoryLimit(_ value: Int) {
-        store.setHistoryLimit(value)
-        historyLimitText = String(store.maxItems)
+        // Runs on every close too: touching the store when nothing changed
+        // re-rendered the whole list and rewrote history mid-animation.
+        if value != store.maxItems {
+            store.setHistoryLimit(value)
+        }
+        let text = String(store.maxItems)
+        if historyLimitText != text {
+            historyLimitText = text
+        }
     }
 
     private func updateOldHistoryRetentionDays(_ days: Int) {
@@ -801,22 +809,40 @@ private struct EdgeBlurredRows<Content: View>: View {
     }
 }
 
+/// While set, settings rows drop their edge blur. Only for the one-off CPU
+/// render made before settings is first shown (see `SettingsWindowController`);
+/// that blur makes such a render ~25× slower.
+final class SettingsSnapshotMode: ObservableObject {
+    static let shared = SettingsSnapshotMode()
+    @Published var isRendering = false
+}
+
+enum SettingsPanelSpace {
+    static let name = "ClipShelfSettingsPanel"
+}
+
 /// Blurs and fades a view in proportion to how far it has slid under the
-/// floating header or past the bottom edge of the settings scroll view.
+/// floating header or past the bottom edge of the settings panel.
 private struct ScrollEdgeBlur: ViewModifier {
-    /// Where blurring starts: the bottom of the 设置 capsule (16 + 40) plus
-    /// half its height.
-    private static let topLine: CGFloat = 16 + 40 + 20
+    @ObservedObject private var snapshotMode = SettingsSnapshotMode.shared
+    /// Where blurring starts, measured from the top of the panel: the bottom
+    /// of the 设置 capsule (16 + 40) plus a little under half its height. At
+    /// rest the first row sits just below this, so nothing is blurred.
+    private static let topLine: CGFloat = 16 + 40 + 16
     /// Distance over which the blur builds up.
-    private static let ramp: CGFloat = 22
+    private static let ramp: CGFloat = 20
 
     func body(content: Content) -> some View {
-        if #available(macOS 14.0, *) {
+        if snapshotMode.isRendering {
+            content
+        } else if #available(macOS 14.0, *) {
             content.visualEffect { effect, geometry in
-                let frame = geometry.frame(in: .scrollView(axis: .vertical))
-                let viewport = geometry.bounds(of: .scrollView(axis: .vertical)) ?? .zero
+                let frame = geometry.frame(in: .named(SettingsPanelSpace.name))
+                let panel = geometry.bounds(of: .named(SettingsPanelSpace.name)) ?? .zero
                 let top = min(max((Self.topLine - frame.minY) / Self.ramp, 0), 1)
-                let bottom = min(max((frame.maxY - (viewport.height - 8)) / Self.ramp, 0), 1)
+                let bottom = panel.height > 0
+                    ? min(max((frame.maxY - (panel.height - 6)) / Self.ramp, 0), 1)
+                    : 0
                 let amount = max(top, bottom)
                 return effect
                     .blur(radius: 7 * amount)

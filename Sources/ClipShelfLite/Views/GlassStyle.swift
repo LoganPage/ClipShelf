@@ -55,10 +55,21 @@ private struct GlassTransparencyKey: EnvironmentKey {
     static let defaultValue: GlassTransparency = .regular
 }
 
+private struct GlassStandInKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var glassTransparency: GlassTransparency {
         get { self[GlassTransparencyKey.self] }
         set { self[GlassTransparencyKey.self] = newValue }
+    }
+
+    /// Set while a view is rendered on the CPU (`cacheDisplay`), where real
+    /// glass cannot be drawn: surfaces then draw a frosted stand-in instead.
+    var glassStandIn: Bool {
+        get { self[GlassStandInKey.self] }
+        set { self[GlassStandInKey.self] = newValue }
     }
 }
 
@@ -67,13 +78,19 @@ extension EnvironmentValues {
 /// One glass surface for every control, honouring the transparency setting.
 private struct GlassSurface<S: Shape>: ViewModifier {
     @Environment(\.glassTransparency) private var transparency
+    @Environment(\.glassStandIn) private var standIn
     @Environment(\.colorScheme) private var colorScheme
     let shape: S
     var interactive = false
     var tint: Color?
 
     func body(content: Content) -> some View {
-        if transparency == .opaque {
+        if standIn && transparency != .opaque {
+            let isDark = colorScheme == .dark
+            content
+                .background(shape.fill(Color.white.opacity(isDark ? 0.12 : 0.62)))
+                .overlay(shape.stroke(Color.white.opacity(isDark ? 0.16 : 0.85), lineWidth: 0.6))
+        } else if transparency == .opaque {
             content
                 .background(shape.fill(AppTheme.searchBackground))
                 .overlay(shape.stroke(AppTheme.subtleBorder, lineWidth: 0.5))

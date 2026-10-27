@@ -9,6 +9,13 @@ import SwiftUI
 /// The window is built once and then reused, so opening never rebuilds the
 /// ~20 native controls inside it, and because it is a separate window nothing
 /// about it costs the main list a single frame while it is hidden.
+///
+/// It is really two windows: a glass window underneath and a transparent
+/// content window on top. The animation frames are the window server's own
+/// picture of the panel as it was last on screen (captured off the main
+/// thread, exact, glass included), so ✓ / Esc never wait for the whole SwiftUI
+/// page to be re-rendered on the CPU. Only before the very first showing is
+/// the page rendered that way, and that happens ahead of time, while idle.
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     static let shared = SettingsWindowController()
     static let willShowNotification = Notification.Name("ClipShelfSettingsWillShow")
@@ -18,14 +25,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// (top-left origin). Updated by the toolbar as layout changes.
     var anchorInWindow: CGRect?
 
+    /// The interactive content window (transparent, holds the SwiftUI page).
     private var panel: SettingsPanel?
+    /// The glass behind it; ignores the mouse.
+    private var glassWindow: NSWindow?
     private weak var parent: NSWindow?
     private var store: ClipStore?
     private var watcher: ScreenshotFolderWatcher?
     private var backdrop: NSView?
     private var hosting: NSView?
-    /// The settings content alone (no glass), rendered when it was last shown or prepared.
-    private var contentSnapshot: CGImage?
     private var isAnimating = false
     /// Whether settings is on screen. While hidden, the window stays ordered
     /// but parked far off screen, so showing it never pays for ordering a glass
@@ -44,6 +52,27 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// closing doesn't have to capture and blur it again.
     private var cachedBackdrop: (image: CGImage, frame: NSRect)?
 
+    /// What a captured image depends on; a different look needs a new one.
+    private struct LookKey: Equatable {
+        let size: NSSize
+        let isDark: Bool
+        let glass: GlassTransparency
+    }
+    /// The whole panel as it last appeared on screen.
+    private var liveImage: (image: CGImage, key: LookKey)?
+    /// The page alone, rendered on the CPU, for when there is no `liveImage` yet.
+    private var fallbackContent: (image: CGImage, key: LookKey)?
+    private var pendingFallbackRender = false
+
+    private func lookKey(size: NSSize) -> LookKey {
+        let appearance = panel?.effectiveAppearance ?? parent?.effectiveAppearance ?? NSApp.effectiveAppearance
+        return LookKey(
+            size: size,
+            isDark: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
+            glass: GlassPreferences.value
+        )
+    }
+
     private func backdrop(for frame: NSRect) -> CGImage? {
         guard let cachedBackdrop, cachedBackdrop.frame == frame else { return nil }
         return cachedBackdrop.image
@@ -60,41 +89,32 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(glassChanged), name: GlassPreferences.changedNotification, object: nil)
     }
 
-    /// Builds the window ahead of time, parks it off screen and renders the
-    /// content snapshot used by the opening animation.
+    /// Builds the windows ahead of time and parks them off screen, so the
+    /// first opening has a fully drawn page to capture.
     func prepare(parent: NSWindow) {
         self.parent = parent
-        guard panel == nil || contentSnapshot == nil else { return }
-        park(makePanelIfNeeded(), size: targetFrame(in: parent).size)
+        guard panel == nil else { return }
+        makePanelIfNeeded()
+        park(size: targetFrame(in: parent).size)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self, !self.isShown else { return }
-            self.contentSnapshot = self.renderContent()
-            self.warmUpBlur()
+            self?.warmUpBlur()
         }
+        scheduleFallbackRender()
     }
 
-    /// Builds the window (if needed) and renders its content right away, for
-    /// callers that need a snapshot immediately.
+    /// Builds the windows (if needed) and parks them, ready to capture.
     func prepareNow(parent: NSWindow) {
         self.parent = parent
-        park(makePanelIfNeeded(), size: targetFrame(in: parent).size)
-        contentSnapshot = renderContent() ?? contentSnapshot
+        makePanelIfNeeded()
+        park(size: targetFrame(in: parent).size)
+        panel?.displayIfNeeded()
     }
 
     /// The main window's image with the settings panel composed over it in
     /// place, so both can pour out of the menu bar icon as one piece.
     func composeOver(mainImage: CGImage, parent: NSWindow) -> CGImage? {
-        guard let content = contentSnapshot ?? renderContent(), let panel else { return nil }
         let frame = targetFrame(in: parent)
-        let request = SnapshotRequest(
-            parentWindowNumber: parent.windowNumber,
-            parentFrame: parent.frame,
-            scale: parent.backingScaleFactor,
-            frame: frame,
-            isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
-            content: content
-        )
-        guard let settings = Self.composeSnapshot(request),
+        guard let settings = openingImageNow(over: parent, frame: frame),
               let context = CGContext(
                 data: nil,
                 width: mainImage.width,
@@ -121,31 +141,28 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func showImmediately(from parent: NSWindow) {
         guard !isShown, !isAnimating else { return }
         self.parent = parent
-        let panel = makePanelIfNeeded()
+        makePanelIfNeeded()
         NotificationCenter.default.post(name: Self.willShowNotification, object: nil)
-        AppearancePreferences.apply(to: panel)
-        panel.setFrame(targetFrame(in: parent), display: true)
-        panel.alphaValue = 1
-        parent.addChildWindow(panel, ordered: .above)
-        panel.makeKey()
+        applyAppearance()
+        setFrames(targetFrame(in: parent))
+        setAlpha(1)
+        attach(to: parent)
+        panel?.makeKey()
         isShown = true
         installCloseShortcut()
     }
 
-    /// Called when the pointer reaches the settings button. Capturing and
-    /// blurring the main window takes ~60 ms; doing it on hover, off the main
-    /// thread, means the genie can start the instant the button is clicked.
+    /// Called when the pointer reaches the settings button: get the opening
+    /// frame ready, so the genie can start the instant the button is clicked.
     func prefetchOpeningSnapshot(for parent: NSWindow?) {
-        guard !isShown, !isAnimating, let parent, let content = contentSnapshot, let panel else { return }
+        guard !isShown, !isAnimating, let parent, panel != nil else { return }
         let frame = targetFrame(in: parent)
-        let request = SnapshotRequest(
-            parentWindowNumber: parent.windowNumber,
-            parentFrame: parent.frame,
-            scale: parent.backingScaleFactor,
-            frame: frame,
-            isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
-            content: content
-        )
+        let key = lookKey(size: frame.size)
+        if let liveImage, liveImage.key == key {
+            prefetched = (liveImage.image, frame, CACurrentMediaTime())
+            return
+        }
+        let request = request(over: parent, frame: frame, content: fallback(for: key))
         snapshotQueue.async { [weak self] in
             guard let result = Self.composeSnapshot(request, backdrop: nil) else { return }
             DispatchQueue.main.async {
@@ -156,25 +173,82 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Called when the pointer reaches ✓ (or the settings button while open),
-    /// so a click can start the closing genie without rendering first.
+    /// so a click can start the closing genie with its frame already made.
     func prefetchClosingSnapshot() {
-        guard isShown, !isAnimating, let panel, let parent, let content = renderContent() else { return }
-        contentSnapshot = content
+        guard isShown, !isAnimating, let panel else { return }
         let frame = panel.frame
-        let request = SnapshotRequest(
+        captureLive(frame: frame) { [weak self] image in
+            self?.prefetchedClose = (image, frame, CACurrentMediaTime())
+        }
+    }
+
+    /// The opening frame, made right now (for the menu bar pour-out).
+    private func openingImageNow(over parent: NSWindow, frame: NSRect) -> CGImage? {
+        let key = lookKey(size: frame.size)
+        if let liveImage, liveImage.key == key { return liveImage.image }
+        return Self.composeSnapshot(request(over: parent, frame: frame, content: fallback(for: key)), backdrop: nil)?.image
+    }
+
+    private func request(over parent: NSWindow, frame: NSRect, content: CGImage?) -> SnapshotRequest {
+        SnapshotRequest(
             parentWindowNumber: parent.windowNumber,
             parentFrame: parent.frame,
             scale: parent.backingScaleFactor,
             frame: frame,
-            isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
+            isDark: lookKey(size: frame.size).isDark,
             content: content
         )
-        let cached = backdrop(for: frame)
+    }
+
+    /// Captures the panel exactly as it is on screen, off the main thread, and
+    /// keeps it for the next opening. `completion` runs on the main thread.
+    private func captureLive(frame: NSRect, completion: @escaping (CGImage) -> Void) {
+        let key = lookKey(size: frame.size)
+        let screenHeight = NSScreen.screens.first?.frame.height ?? 0
+        // Window-server rects are top-left based on the main display.
+        let rect = CGRect(x: frame.minX, y: screenHeight - frame.maxY, width: frame.width, height: frame.height)
+        let radius = GlassMetrics.panelRadius
         snapshotQueue.async { [weak self] in
-            guard let result = Self.composeSnapshot(request, backdrop: cached) else { return }
+            guard let image = WindowSnapshot.captureScreen(rect: rect, cornerRadius: radius) else { return }
             DispatchQueue.main.async {
-                self?.prefetchedClose = (result.image, frame, CACurrentMediaTime())
+                self?.liveImage = (image, key)
+                completion(image)
             }
+        }
+    }
+
+    /// The CPU-rendered page for `key`, rendering it now if missing (only
+    /// ever needed before settings has been on screen in this look).
+    private func fallback(for key: LookKey) -> CGImage? {
+        if let fallbackContent, fallbackContent.key == key { return fallbackContent.image }
+        renderFallback()
+        return fallbackContent?.image
+    }
+
+    /// Renders the fallback page a moment later, when the app is idle.
+    private func scheduleFallbackRender() {
+        guard !pendingFallbackRender else { return }
+        pendingFallbackRender = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self else { return }
+            self.pendingFallbackRender = false
+            guard !self.isShown, !self.isAnimating else { return }
+            self.renderFallback()
+        }
+    }
+
+    private func renderFallback() {
+        guard let hosting, let parent, hosting.bounds.width > 0 else { return }
+        let key = lookKey(size: targetFrame(in: parent).size)
+        guard hosting.bounds.size == key.size,
+              let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return }
+        // The per-row edge blur makes a CPU render ~25× slower; leave it out.
+        SettingsSnapshotMode.shared.isRendering = true
+        hosting.layoutSubtreeIfNeeded()
+        hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        SettingsSnapshotMode.shared.isRendering = false
+        if let image = rep.cgImage {
+            fallbackContent = (image, key)
         }
     }
 
@@ -188,29 +262,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let panel = makePanelIfNeeded()
         let frame = targetFrame(in: parent)
         NotificationCenter.default.post(name: Self.willShowNotification, object: nil)
-        AppearancePreferences.apply(to: panel)
+        applyAppearance()
         if panel.frame.size != frame.size || !panel.isVisible {
-            park(panel, size: frame.size)
-        }
-        if contentSnapshot == nil {
-            contentSnapshot = renderContent()
+            park(size: frame.size)
         }
 
-        let reveal = { [weak self, weak panel] in
-            guard let self, let panel else { return }
-            panel.alphaValue = 0
-            panel.setFrame(frame, display: true)
-            parent.addChildWindow(panel, ordered: .above)
-            panel.makeKey()
+        let reveal = { [weak self] in
+            guard let self else { return }
+            self.setAlpha(0)
+            self.setFrames(frame)
+            self.attach(to: parent)
+            self.panel?.makeKey()
             // Dissolve from the animation image into the live glass rather
             // than switching, so the hand-over has no visible colour jump.
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = Self.handOverDuration
-                panel.animator().alphaValue = 1
-            }
+            self.setAlpha(1, animatedOver: Self.handOverDuration)
             self.isShown = true
             self.isAnimating = false
             self.installCloseShortcut()
+            // Once the panel has settled, keep its exact on-screen picture
+            // for the next opening and closing.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.handOverDuration + 0.15) { [weak self] in
+                guard let self, self.isShown, !self.isAnimating, let panel = self.panel else { return }
+                self.captureLive(frame: panel.frame) { _ in }
+            }
         }
 
         guard let source = anchorRectOnScreen(in: parent) else {
@@ -238,20 +312,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             start(fresh)
             return
         }
-        // No hover beforehand (e.g. ⌘,): compose off the main thread and start
-        // as soon as it is ready, rather than freezing the UI meanwhile.
-        guard let content = contentSnapshot else {
-            start(nil)
+        let key = lookKey(size: frame.size)
+        if let liveImage, liveImage.key == key {
+            start(liveImage.image)
             return
         }
-        let request = SnapshotRequest(
-            parentWindowNumber: parent.windowNumber,
-            parentFrame: parent.frame,
-            scale: parent.backingScaleFactor,
-            frame: frame,
-            isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
-            content: content
-        )
+        // Never shown in this look yet: compose off the main thread and start
+        // as soon as it is ready, rather than freezing the UI meanwhile.
+        let request = request(over: parent, frame: frame, content: fallback(for: key))
         snapshotQueue.async { [weak self] in
             let result = Self.composeSnapshot(request, backdrop: nil)
             DispatchQueue.main.async {
@@ -262,7 +330,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func close() {
-        guard !isAnimating, isShown, let panel else { return }
+        guard !isAnimating, isShown, let panel, let parent else { return }
         NotificationCenter.default.post(name: Self.willCloseNotification, object: nil)
         let frame = panel.frame
         let fresh = prefetchedClose.flatMap { entry in
@@ -273,26 +341,30 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         isAnimating = true
         uninstallCloseShortcut()
 
-        let tidyUp = { [weak self, weak panel] in
-            guard let self, let panel else { return }
-            panel.parent?.removeChildWindow(panel)
-            // Same size, so only move it away: no resize or re-layout at the
+        let tidyUp = { [weak self] in
+            guard let self else { return }
+            self.detach()
+            // Same size, so only move away: no resize or re-layout at the
             // very end of the animation, where it used to stutter.
-            panel.setFrameOrigin(Self.parkingOrigin)
-            panel.alphaValue = 1
+            self.panel?.setFrameOrigin(Self.parkingOrigin)
+            self.glassWindow?.setFrameOrigin(Self.parkingOrigin)
+            self.setAlpha(1)
             self.isAnimating = false
+            // Hand keyboard focus back only now: the key change re-renders
+            // both windows (~40 ms), which used to stall the first frames of
+            // the closing animation. The next turn keeps it off its last frame.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isShown, !self.isAnimating else { return }
+                parent.makeKey()
+            }
         }
 
-        // The live panel stays put until the animation image is ready, then
+        // The live panel stays put until the animation frame is ready, then
         // dissolves into it, so the hand-over never freezes on screen.
-        let start = { [weak self, weak panel] (snapshot: CGImage?) in
-            guard let self, let panel else { return }
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = Self.handOverDuration
-                panel.animator().alphaValue = 0
-            }
-            self.parent?.makeKey()
-            guard let snapshot, let parent = self.parent, let source = self.anchorRectOnScreen(in: parent) else {
+        let start = { [weak self] (snapshot: CGImage?) in
+            guard let self else { return }
+            self.setAlpha(0, animatedOver: Self.handOverDuration)
+            guard let snapshot, let source = self.anchorRectOnScreen(in: parent) else {
                 tidyUp()
                 return
             }
@@ -303,30 +375,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             start(fresh)
             return
         }
-        // Without a hover beforehand (Esc, ⌘, or a shortcut): render the
-        // content now, but capture and blur the backdrop off the main thread.
-        contentSnapshot = renderContent() ?? contentSnapshot
-        guard let parent, let content = contentSnapshot else {
+        // Without a hover beforehand (Esc, ⌘, or a shortcut): capture the
+        // panel as it is on screen, off the main thread (a few milliseconds).
+        var started = false
+        captureLive(frame: frame) { image in
+            guard !started else { return }
+            started = true
+            start(image)
+        }
+        // Should the capture ever fail, still close.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            guard !started else { return }
+            started = true
             start(nil)
-            return
-        }
-        let request = SnapshotRequest(
-            parentWindowNumber: parent.windowNumber,
-            parentFrame: parent.frame,
-            scale: parent.backingScaleFactor,
-            frame: frame,
-            isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
-            content: content
-        )
-        // The backdrop kept from opening makes this a quick draw: start at
-        // once instead of waiting for a capture and blur.
-        if let cached = backdrop(for: frame) {
-            start(Self.composeSnapshot(request, backdrop: cached)?.image)
-            return
-        }
-        snapshotQueue.async {
-            let image = Self.composeSnapshot(request, backdrop: nil)?.image
-            DispatchQueue.main.async { start(image) }
         }
     }
 
@@ -352,17 +413,57 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Keeps the window ordered but far off screen, sized like its next showing.
-    private func park(_ panel: NSWindow, size: NSSize) {
-        panel.setFrame(NSRect(origin: Self.parkingOrigin, size: size), display: true)
-        if !panel.isVisible {
-            panel.orderFrontRegardless()
+    /// Keeps the windows ordered but far off screen, sized like their next showing.
+    private func park(size: NSSize) {
+        setFrames(NSRect(origin: Self.parkingOrigin, size: size))
+        if glassWindow?.isVisible == false {
+            glassWindow?.orderFrontRegardless()
         }
-        panel.contentView?.layoutSubtreeIfNeeded()
+        if panel?.isVisible == false {
+            panel?.orderFrontRegardless()
+        }
+        panel?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func setFrames(_ frame: NSRect) {
+        glassWindow?.setFrame(frame, display: true)
+        panel?.setFrame(frame, display: true)
+    }
+
+    private func setAlpha(_ alpha: CGFloat, animatedOver duration: TimeInterval = 0) {
+        guard duration > 0 else {
+            glassWindow?.alphaValue = alpha
+            panel?.alphaValue = alpha
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            glassWindow?.animator().alphaValue = alpha
+            panel?.animator().alphaValue = alpha
+        }
+    }
+
+    /// Glass above the main window, content above the glass.
+    private func attach(to parent: NSWindow) {
+        guard let glassWindow, let panel else { return }
+        parent.addChildWindow(glassWindow, ordered: .above)
+        glassWindow.addChildWindow(panel, ordered: .above)
+    }
+
+    private func detach() {
+        guard let glassWindow, let panel else { return }
+        glassWindow.removeChildWindow(panel)
+        glassWindow.parent?.removeChildWindow(glassWindow)
+    }
+
+    private func applyAppearance() {
+        if let panel { AppearancePreferences.apply(to: panel) }
+        if let glassWindow { AppearancePreferences.apply(to: glassWindow) }
     }
 
     // MARK: Window
 
+    @discardableResult
     private func makePanelIfNeeded() -> SettingsPanel {
         if let panel { return panel }
         let panel = SettingsPanel(
@@ -376,7 +477,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         panel.titlebarAppearsTransparent = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // The glass window underneath carries the shadow.
+        panel.hasShadow = false
         panel.isMovable = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
@@ -395,13 +497,31 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         )
         let hosting = ClipShelfHostingView(rootView: root)
         self.hosting = hosting
-        panel.contentView = makeBackdrop(containing: hosting)
-        AppearancePreferences.apply(to: panel)
+        panel.contentView = hosting
+
+        let glass = SettingsPanel(
+            contentRect: panel.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        glass.isOpaque = false
+        glass.backgroundColor = .clear
+        glass.hasShadow = true
+        glass.ignoresMouseEvents = true
+        glass.isReleasedWhenClosed = false
+        glass.animationBehavior = .none
+        glass.collectionBehavior = [.transient, .ignoresCycle]
+        glass.contentView = makeBackdropView()
+        glassWindow = glass
+
         self.panel = panel
+        applyAppearance()
         return panel
     }
 
-    private func makeBackdrop(containing content: NSView) -> NSView {
+    /// The glass surface on its own (the content lives in the window above).
+    private func makeBackdropView() -> NSView {
         let radius = GlassMetrics.panelRadius
         if GlassPreferences.value != .opaque, #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
@@ -415,7 +535,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             case .regular, .opaque:
                 glass.style = .regular
             }
-            glass.contentView = content
             backdrop = glass
             return glass
         }
@@ -426,14 +545,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         effect.wantsLayer = true
         effect.layer?.cornerRadius = radius
         effect.layer?.masksToBounds = true
-        content.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(content)
-        NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-            content.topAnchor.constraint(equalTo: effect.topAnchor),
-            content.bottomAnchor.constraint(equalTo: effect.bottomAnchor)
-        ])
         backdrop = effect
         return effect
     }
@@ -463,14 +574,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         return parent.convertToScreen(content.convert(flipped, to: nil))
     }
 
-    /// Renders the settings content without its glass backdrop.
-    private func renderContent() -> CGImage? {
-        guard let hosting, hosting.bounds.width > 0,
-              let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return nil }
-        hosting.cacheDisplay(in: hosting.bounds, to: rep)
-        return rep.cgImage
-    }
-
     /// Everything needed to compose a genie frame, safe to use off the main thread.
     private struct SnapshotRequest {
         let parentWindowNumber: Int
@@ -478,18 +581,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let scale: CGFloat
         let frame: NSRect
         let isDark: Bool
-        let content: CGImage
-    }
-
-    private func composedSnapshot(content: CGImage, frame: NSRect, over parent: NSWindow, appearance: NSAppearance) -> CGImage? {
-        Self.composeSnapshot(SnapshotRequest(
-            parentWindowNumber: parent.windowNumber,
-            parentFrame: parent.frame,
-            scale: parent.backingScaleFactor,
-            frame: frame,
-            isDark: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
-            content: content
-        ))
+        /// The page rendered without its glass.
+        let content: CGImage?
     }
 
     /// What the panel looks like for the genie: the main window behind it,
@@ -528,7 +621,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let tint = request.isDark ? CGColor(gray: 0.12, alpha: 0.5) : CGColor(gray: 1, alpha: 0.5)
         context.setFillColor(tint)
         context.fill(bounds)
-        context.draw(request.content, in: bounds)
+        if let content = request.content {
+            context.draw(content, in: bounds)
+        }
         return context.makeImage().map { ($0, backdrop) }
     }
 
@@ -570,15 +665,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     @objc private func appearanceChanged() {
         DispatchQueue.main.async { [weak self] in
-            guard let panel = self?.panel else { return }
-            AppearancePreferences.apply(to: panel)
+            self?.applyAppearance()
+            self?.scheduleFallbackRender()
         }
     }
 
     @objc private func glassChanged() {
-        guard let panel, let hosting else { return }
-        hosting.removeFromSuperview()
-        panel.contentView = makeBackdrop(containing: hosting)
+        glassWindow?.contentView = makeBackdropView()
+        scheduleFallbackRender()
     }
 }
 
@@ -606,10 +700,13 @@ private struct SettingsWindowRoot: View {
     let watcher: ScreenshotFolderWatcher
     let onClose: () -> Void
     @State private var glassTransparency = GlassPreferences.value
+    @ObservedObject private var snapshotMode = SettingsSnapshotMode.shared
 
     var body: some View {
         SettingsView(store: store, watcher: watcher, onClose: onClose)
             .environment(\.glassTransparency, glassTransparency)
+            .environment(\.glassStandIn, snapshotMode.isRendering)
+            .scrollIndicators(snapshotMode.isRendering ? .hidden : .automatic)
             // The hidden titlebar shouldn't push the content down.
             .ignoresSafeArea()
             .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.changedNotification)) { notification in
@@ -633,6 +730,30 @@ enum WindowSnapshot {
     static func capture(windowNumber: Int) -> CGImage? {
         // .optionIncludingWindow, .boundsIgnoreFraming
         create?(.null, 1 << 3, UInt32(windowNumber), 1 << 0)?.takeRetainedValue()
+    }
+
+    /// What is on screen in `rect` (top-left based, in points), with the
+    /// corners outside `cornerRadius` made transparent. Captures only this
+    /// app's own windows without screen recording permission, and is safe
+    /// to call off the main thread.
+    static func captureScreen(rect: CGRect, cornerRadius: CGFloat) -> CGImage? {
+        // .optionOnScreenOnly, no relative window, default image options.
+        guard let image = create?(rect, 1 << 0, 0, 0)?.takeRetainedValue(),
+              let context = CGContext(
+                data: nil,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let radius = cornerRadius * CGFloat(image.width) / max(rect.width, 1)
+        context.addPath(CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.clip()
+        context.draw(image, in: bounds)
+        return context.makeImage()
     }
 
     static func capture(_ window: NSWindow) -> CGImage? {
