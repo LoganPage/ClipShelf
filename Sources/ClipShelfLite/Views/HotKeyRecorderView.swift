@@ -13,7 +13,7 @@ struct HotKeyRecorderView: View {
         Button(isRecording ? "请按快捷键" : configuration.displayText) {
             toggleRecording()
         }
-        .buttonStyle(.bordered)
+        .clipShelfGlassButtons(prominent: isRecording)
         .onDisappear {
             stopRecording()
         }

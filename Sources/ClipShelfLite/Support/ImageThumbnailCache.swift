@@ -66,6 +66,12 @@ final class ImageThumbnailCache: @unchecked Sendable {
         }
     }
 
+    /// Cache hit only, never decodes: lets a row that scrolls back into view
+    /// draw its thumbnail on the first frame instead of flashing a placeholder.
+    func cachedThumbnail(for id: ClipItem.ID) -> CGImage? {
+        lock.withThumbnailLock { cachedImage(for: id) }
+    }
+
     func thumbnailSynchronouslyForTesting(for id: ClipItem.ID, data: Data) -> CGImage? {
         if let cached = lock.withThumbnailLock({ cachedImage(for: id) }) {
             return cached

@@ -5,7 +5,12 @@ import Foundation
 final class ClipStore: ObservableObject {
     static let shared = ClipStore()
 
-    @Published private(set) var items: [ClipItem] = []
+    @Published private(set) var items: [ClipItem] = [] {
+        didSet { revision &+= 1 }
+    }
+    /// Bumps on every history mutation, so views can detect changes in O(1)
+    /// instead of comparing the whole item list on each render.
+    private(set) var revision = 0
     @Published private(set) var maxItems: Int
     @Published private(set) var canUndoDeletion = false
     @Published var isClipboardHistoryEnabled: Bool {
@@ -285,10 +290,7 @@ final class ClipStore: ObservableObject {
             pasteboard.writeObjects(urls)
         case .image:
             if let imageData = item.imageData {
-                pasteboard.setData(imageData, forType: .png)
-                if let image = NSImage(data: imageData), let tiff = image.tiffRepresentation {
-                    pasteboard.setData(tiff, forType: .tiff)
-                }
+                pasteboard.writeObjects([Self.imagePasteboardItem(png: imageData)])
             }
         }
 
@@ -306,13 +308,17 @@ final class ClipStore: ObservableObject {
             return NSURL(fileURLWithPath: firstPath)
         case .image:
             guard let imageData = item.imageData else { return nil }
-            let pasteboardItem = NSPasteboardItem()
-            pasteboardItem.setData(imageData, forType: .png)
-            if let image = NSImage(data: imageData), let tiff = image.tiffRepresentation {
-                pasteboardItem.setData(tiff, forType: .tiff)
-            }
-            return pasteboardItem
+            return Self.imagePasteboardItem(png: imageData)
         }
+    }
+
+    /// PNG is written immediately; TIFF is only promised and converted when a
+    /// receiving app actually asks for it, so copying never decodes on main.
+    private static func imagePasteboardItem(png: Data) -> NSPasteboardItem {
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setData(png, forType: .png)
+        pasteboardItem.setDataProvider(LazyTIFFProvider(png: png), forTypes: [.tiff])
+        return pasteboardItem
     }
 
     private func fileURLsForMultiCopy(_ items: [ClipItem]) -> [NSURL]? {
@@ -440,5 +446,20 @@ final class ClipStore: ObservableObject {
     private enum ImageCapture {
         case png(Data)
         case tiff(Data)
+    }
+}
+
+private final class LazyTIFFProvider: NSObject, NSPasteboardItemDataProvider {
+    private let png: Data
+
+    init(png: Data) {
+        self.png = png
+    }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        guard type == .tiff,
+              let image = NSImage(data: png),
+              let tiff = image.tiffRepresentation else { return }
+        item.setData(tiff, forType: .tiff)
     }
 }

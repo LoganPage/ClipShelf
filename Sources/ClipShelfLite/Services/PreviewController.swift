@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import AppKit
 import Foundation
 import QuickLookUI
@@ -145,7 +146,9 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
         case .file:
             guard item.filePaths.count == 1 else { return false }
             let url = URL(fileURLWithPath: item.filePaths[0])
-            if let image = NSImage(contentsOf: url) {
+            // Only image files are loaded as images; reading an arbitrary large
+            // file just to find out it isn't one used to stall the main thread.
+            if Self.isImageFile(url), let image = NSImage(contentsOf: url) {
                 showImagePreview(image, title: url.lastPathComponent)
                 return true
             }
@@ -155,6 +158,11 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
             }
             return false
         }
+    }
+
+    private static func isImageFile(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension.lowercased()) else { return false }
+        return type.conforms(to: .image)
     }
 
     private func image(for item: ClipItem) -> NSImage? {

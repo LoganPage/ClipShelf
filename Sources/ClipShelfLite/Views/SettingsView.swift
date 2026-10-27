@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var appIconChoice = AppIconPreferences.selected
     @State private var hostWindow: NSWindow?
     @State private var appearanceMode = AppearancePreferences.mode
+    @State private var glassTransparency = GlassPreferences.value
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
     @State private var historyLimitText = ""
     @State private var oldHistoryRetentionDays = OldHistoryCleanup.retentionDays
@@ -33,9 +34,19 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Text("设置")
+                    .font(.system(size: 20, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 6)
+
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 22) {
                     appearanceSection
+                    glassSection
                     iconSection
                     screenshotSection
                     historySection
@@ -43,12 +54,12 @@ struct SettingsView: View {
                     hotKeySection
                     launchSection
                 }
-                .padding(22)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .clipShelfGlassButtons()
             }
             .background(AutoHidingScrollViewConfigurator())
-
-            Divider()
 
             HStack {
                 Spacer()
@@ -58,6 +69,7 @@ struct SettingsView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .controlSize(.large)
+                .clipShelfGlassButtons(prominent: true)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
@@ -131,12 +143,33 @@ struct SettingsView: View {
                     set: updateAppearanceMode
                 ),
                 title: \.title,
-                segmentWidth: 96,
-                height: 36
+                segmentWidth: 96
             )
             .accessibilityLabel("暗黑模式")
 
             Text("深色模式使用石墨背景和分层表面，类型颜色在暗色背景上保持清晰。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var glassSection: some View {
+        settingsSection("玻璃效果") {
+            LiquidSegmentedControl(
+                options: GlassTransparency.allCases,
+                selection: Binding(
+                    get: { glassTransparency },
+                    set: { value in
+                        glassTransparency = value
+                        GlassPreferences.value = value
+                    }
+                ),
+                title: \.title,
+                segmentWidth: 84
+            )
+            .accessibilityLabel("玻璃效果")
+
+            Text("清透最通透；着色更易读；不透明关闭玻璃与背景模糊，最省电，滚动也最流畅。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -415,11 +448,18 @@ struct SettingsView: View {
     }
 
     private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
 
-            content()
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(GlassCardBackground())
         }
     }
 
@@ -520,7 +560,7 @@ struct SettingsView: View {
             selectSelectionColorPreset(preset)
         } label: {
             VStack(spacing: 5) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                Capsule()
                     .fill(preset.color)
                     .frame(maxWidth: .infinity)
                     .frame(height: 30)
@@ -532,8 +572,8 @@ struct SettingsView: View {
                         }
                     }
                     .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(selectionColorPreset == preset ? Color.accentColor : AppTheme.subtleBorder, lineWidth: selectionColorPreset == preset ? 2 : 1)
+                        Capsule()
+                            .strokeBorder(selectionColorPreset == preset ? Color.accentColor : AppTheme.subtleBorder, lineWidth: selectionColorPreset == preset ? 2 : 1)
                     }
 
                 Text(preset.title)
@@ -553,23 +593,25 @@ struct SettingsView: View {
         } label: {
             VStack(spacing: 8) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(AppTheme.rowBackground)
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(appIconChoice == choice ? Color.accentColor : Color.secondary.opacity(0.18), lineWidth: appIconChoice == choice ? 2 : 1)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.primary.opacity(0.05))
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(appIconChoice == choice ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: appIconChoice == choice ? 2 : 0.5)
 
                     if let image = choice.previewImage {
                         Image(nsImage: image)
                             .resizable()
                             .scaledToFit()
-                            .padding(12)
+                            .padding(10)
                     } else {
                         Image(systemName: "app")
-                            .font(.system(size: 30))
+                            .font(.system(size: 24))
                             .foregroundStyle(.secondary)
                     }
                 }
-                .frame(width: 112, height: 112)
+                .frame(width: 76, height: 76)
+                .scaleEffect(appIconChoice == choice ? 1 : 0.96)
+                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: appIconChoice)
 
                 Text(choice.title)
                     .font(.caption)

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum SearchMatcher {
@@ -14,9 +15,9 @@ enum SearchMatcher {
         guard !query.isEmpty else { return true }
 
         return index.fields.contains { field in
-            field.normalized.contains(query)
-                || field.pinyin.contains(query)
-                || field.initials.contains(query)
+            fastContains(field.normalized, query)
+                || fastContains(field.pinyin, query)
+                || fastContains(field.initials, query)
                 || isSubsequence(query, of: field.normalized)
                 || isSubsequence(query, of: field.pinyin)
                 || isSubsequence(query, of: field.initials)
@@ -35,9 +36,9 @@ enum SearchMatcher {
             let pinyin = normalize(transliterated)
             let initials = pinyinInitials(transliterated)
 
-            return normalized.contains(query)
-                || pinyin.contains(query)
-                || initials.contains(query)
+            return fastContains(normalized, query)
+                || fastContains(pinyin, query)
+                || fastContains(initials, query)
                 || isSubsequence(query, of: normalized)
                 || isSubsequence(query, of: pinyin)
                 || isSubsequence(query, of: initials)
@@ -80,11 +81,28 @@ enum SearchMatcher {
             .joined()
     }
 
+    /// Substring test on raw UTF-8 bytes. UTF-8 is self-synchronising, so a byte
+    /// match is a scalar match; search text is already normalised, so this agrees
+    /// with Character-level `contains` while being many times faster.
+    static func fastContains(_ haystack: String, _ needle: String) -> Bool {
+        var haystack = haystack
+        var needle = needle
+        return haystack.withUTF8 { haystackBytes in
+            needle.withUTF8 { needleBytes in
+                guard needleBytes.count > 0 else { return true }
+                guard haystackBytes.count >= needleBytes.count,
+                      let haystackBase = haystackBytes.baseAddress,
+                      let needleBase = needleBytes.baseAddress else { return false }
+                return memmem(haystackBase, haystackBytes.count, needleBase, needleBytes.count) != nil
+            }
+        }
+    }
+
     private static func isSubsequence(_ needle: String, of haystack: String) -> Bool {
         guard !needle.isEmpty else { return true }
-        var iterator = haystack.makeIterator()
+        var iterator = haystack.unicodeScalars.makeIterator()
 
-        for character in needle {
+        for character in needle.unicodeScalars {
             var found = false
             while let next = iterator.next() {
                 if next == character {
@@ -100,27 +118,35 @@ enum SearchMatcher {
         return true
     }
 
+    /// Fuzzy matching only looks at the start of very long clips so typing
+    /// stays responsive; exact and subsequence matches still cover the rest.
+    static let fuzzyScanLimit = 4_000
+
     static func fuzzyContains(_ query: String, in text: String) -> Bool {
-        guard query.count >= 3, text.count >= query.count else { return false }
-        if text.contains(query) { return true }
+        // Unicode scalars are far cheaper than Characters, and normalized search
+        // text is letters and digits only, so the edit distance is unchanged.
+        let queryScalars = Array(query.unicodeScalars)
+        guard queryScalars.count >= 3 else { return false }
+        if fastContains(text, query) { return true }
 
-        let queryCharacters = Array(query)
-        let textCharacters = Array(text)
-        let distanceLimit = queryCharacters.count <= 5 ? 1 : 2
-        var previous = Array(0...queryCharacters.count)
-        var current = Array(repeating: 0, count: queryCharacters.count + 1)
+        let textScalars = text.unicodeScalars.prefix(fuzzyScanLimit)
+        guard textScalars.count >= queryScalars.count else { return false }
 
-        for textCharacter in textCharacters {
+        let distanceLimit = queryScalars.count <= 5 ? 1 : 2
+        var previous = Array(0...queryScalars.count)
+        var current = Array(repeating: 0, count: queryScalars.count + 1)
+
+        for textScalar in textScalars {
             current[0] = 0
-            for queryIndex in 1...queryCharacters.count {
-                let cost = queryCharacters[queryIndex - 1] == textCharacter ? 0 : 1
+            for queryIndex in 1...queryScalars.count {
+                let cost = queryScalars[queryIndex - 1] == textScalar ? 0 : 1
                 current[queryIndex] = min(
                     previous[queryIndex] + 1,
                     current[queryIndex - 1] + 1,
                     previous[queryIndex - 1] + cost
                 )
             }
-            if current[queryCharacters.count] <= distanceLimit {
+            if current[queryScalars.count] <= distanceLimit {
                 return true
             }
             swap(&previous, &current)

@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var window: NSWindow?
     private var statusItem: NSStatusItem?
     private var controlServer: RuntimeControlServer?
+    private var backdrop: NSVisualEffectView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -51,6 +52,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self,
             selector: #selector(appearanceDidChange(_:)),
             name: AppearancePreferences.changedNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(glassTransparencyDidChange(_:)),
+            name: GlassPreferences.changedNotification,
             object: nil
         )
         DistributedNotificationCenter.default.addObserver(
@@ -92,9 +99,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.toolbar = NSToolbar(identifier: "ClipShelfMainToolbar")
             window.toolbarStyle = .unified
             window.center()
-            window.contentView = Self.makeVibrantContentView(
-                hosting: NSHostingView(rootView: MainView(store: store, watcher: watcher))
+            let backdrop = Self.makeVibrantContentView(
+                hosting: ClipShelfHostingView(rootView: MainView(store: store, watcher: watcher))
             )
+            self.backdrop = backdrop
+            window.contentView = backdrop
             window.isReleasedWhenClosed = false
             window.setFrameAutosaveName("ClipShelfMainWindow")
             self.window = window
@@ -107,10 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The desktop shows through, blurred and tinted, behind every card and
     /// glass control, which is what gives Liquid Glass something to refract.
-    private static func makeVibrantContentView(hosting: NSView) -> NSView {
+    private static func makeVibrantContentView(hosting: NSView) -> NSVisualEffectView {
         let backdrop = NSVisualEffectView()
-        backdrop.material = .underWindowBackground
-        backdrop.blendingMode = .behindWindow
+        WindowBackdrop.apply(GlassPreferences.value, to: backdrop)
         backdrop.state = .followsWindowActiveState
         hosting.translatesAutoresizingMaskIntoConstraints = false
         backdrop.addSubview(hosting)
@@ -177,6 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func appearanceDidChange(_ notification: Notification) {
         AppearancePreferences.apply(to: window)
+    }
+
+    @objc func glassTransparencyDidChange(_ notification: Notification) {
+        guard let backdrop else { return }
+        WindowBackdrop.apply(GlassPreferences.value, to: backdrop)
     }
 
     @objc func systemAppearanceDidChange(_ notification: Notification) {

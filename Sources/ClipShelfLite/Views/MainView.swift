@@ -3,7 +3,7 @@ import SwiftUI
 
 struct MainView: View {
     private struct SearchSignature: Equatable {
-        let ids: [ClipItem.ID]
+        let revision: Int
         let kind: ClipKindFilter
         let query: String
     }
@@ -38,21 +38,28 @@ struct MainView: View {
     @State private var showingClearHistoryConfirmation = false
     @State private var lastRevealedNewest: Date?
     @State private var filteredItemsCache = [ClipItem]()
+    @State private var filteredItemIDsCache = [ClipItem.ID]()
     @State private var filteredItemsSignature: SearchSignature?
+    @State private var pendingFilterSignature: SearchSignature?
     @State private var searchIndexCache = ClipSearchIndexCache()
     @State private var imageThumbnailCache = ImageThumbnailCache()
     @FocusState private var isSearchFocused: Bool
-    @State private var toolbarHeight: CGFloat = 160
+    @State private var toolbarHeight: CGFloat = 150
+    @State private var glassTransparency = GlassPreferences.value
     @State private var titlebarHeight: CGFloat = 28
     private let historyRowHeight: CGFloat = 74
-    private let historyListHorizontalInset: CGFloat = 18
+    private let historyListHorizontalInset: CGFloat = GlassMetrics.edgeInset
+    /// Cards draw 3pt inside their row slot (see ClipRowCardSurface).
+    private let rowCardInset: CGFloat = 3
 
     /// The glass toolbar floats over the top of the list, so rows start below it
     /// and every viewport calculation treats that strip as covered.
-    private var historyListVerticalInset: CGFloat { toolbarHeight + 6 }
+    private var historyListVerticalInset: CGFloat {
+        toolbarHeight + GlassMetrics.stackSpacing - rowCardInset
+    }
 
     private var searchSignature: SearchSignature {
-        SearchSignature(ids: store.items.map(\.id), kind: kindFilter, query: searchText)
+        SearchSignature(revision: store.revision, kind: kindFilter, query: searchText)
     }
 
     private var liveFilteredItems: [ClipItem] {
@@ -91,6 +98,7 @@ struct MainView: View {
             }
         }
         .frame(minWidth: 680, minHeight: 552)
+        .environment(\.glassTransparency, glassTransparency)
         .preferredColorScheme(resolvedColorScheme)
         .overlay {
             ZStack {
@@ -132,7 +140,7 @@ struct MainView: View {
         .onAppear {
             refreshFilteredItemsIfNeeded()
             prewarmSearchIndexes(for: store.items)
-            imageThumbnailCache.setMaximumEntryCount(store.items.count + 8)
+            imageThumbnailCache.setMaximumEntryCount(thumbnailCacheLimit)
             lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
             installCommandKeyMonitorIfNeeded()
             updateChecker.checkIfNeeded()
@@ -150,6 +158,11 @@ struct MainView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .clipShelfOpenSettings)) { _ in
             openSettings()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.changedNotification)) { notification in
+            withAnimation(.easeInOut(duration: 0.25)) {
+                glassTransparency = notification.object as? GlassTransparency ?? GlassPreferences.value
+            }
         }
     }
 
@@ -170,7 +183,7 @@ struct MainView: View {
                     closeSettings()
                 }
                 .frame(width: panelWidth, height: panelHeight)
-                .clipShelfGlassPanel(cornerRadius: 26)
+                .clipShelfGlassPanel()
                 .contentShape(Rectangle())
                 .onTapGesture { }
             }
@@ -182,9 +195,8 @@ struct MainView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(filteredItems.enumerated()), id: \.element.id) { index, item in
+                    ForEach(filteredItems) { item in
                         let isSelected = selectedIDs.contains(item.id)
-                        let isNextSelected = index + 1 < filteredItems.count && selectedIDs.contains(filteredItems[index + 1].id)
                         ClipRow(
                             item: item,
                             store: store,
@@ -193,10 +205,10 @@ struct MainView: View {
                             selectionColor: selectionColor,
                             selectionColorIsPreset: selectionColorPreset != nil,
                             imageThumbnailCache: imageThumbnailCache,
-                            showsSeparator: index < filteredItems.count - 1 && !isSelected && !isNextSelected,
                             handleClick: { event in handleRowClick(item, event: event) },
                             handleCopy: { store.copy(actionItems(for: item)) }
                         )
+                        .equatable()
                         .id(item.id)
                     }
                 }
@@ -217,7 +229,7 @@ struct MainView: View {
                 DragSelectionCaptureView(
                     isEnabled: !showingSettings,
                     clickRecoveryDuration: postDragClickRecoveryDuration,
-                    itemIDs: filteredItems.map(\.id),
+                    itemIDs: filteredItemIDs,
                     rowHeight: historyRowHeight,
                     contentTopInset: historyListVerticalInset,
                     viewportTopObstruction: toolbarHeight,
@@ -242,23 +254,12 @@ struct MainView: View {
                     }
                 )
             )
-            .onChange(of: HistoryScrollTarget.newestAnchorID(in: store.items)) { newID in
-                guard let newID, !isDragSelecting else { return }
-                guard HistoryScrollTarget.anchorToReveal(
-                    in: store.items,
-                    lastRevealedNewest: lastRevealedNewest
-                ) == newID else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
-                    proxy.scrollTo(newID, anchor: .top)
-                }
-                lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
-            }
-            .onChange(of: searchSignature) { _ in
+            // One O(1) change signal instead of re-scanning the history on every render.
+            .onChange(of: store.revision) { _ in
                 refreshFilteredItemsIfNeeded()
-            }
-            .onChange(of: store.items.map(\.id)) { _ in
                 prewarmSearchIndexes(for: store.items)
-                imageThumbnailCache.setMaximumEntryCount(store.items.count + 8)
+                imageThumbnailCache.setMaximumEntryCount(thumbnailCacheLimit)
+                revealNewestItemIfNeeded(proxy: proxy)
             }
             .onChange(of: searchText) { _ in
                 refreshFilteredItemsIfNeeded()
@@ -303,7 +304,7 @@ struct MainView: View {
     }
 
     private var toolbar: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: GlassMetrics.stackSpacing) {
             titleRow
             searchField
 
@@ -314,8 +315,7 @@ struct MainView: View {
                 primaryToolbar
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+        .padding(.horizontal, GlassMetrics.edgeInset)
         // Gaps between controls must not click through to rows hidden underneath.
         .contentShape(Rectangle())
         .background(alignment: .top) {
@@ -396,8 +396,8 @@ struct MainView: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 38)
-        .clipShelfLiquidGlassSurface(cornerRadius: 19)
+        .frame(height: GlassMetrics.controlHeight)
+        .clipShelfLiquidGlassSurface(cornerRadius: GlassMetrics.controlHeight / 2)
     }
 
     @ViewBuilder
@@ -471,14 +471,63 @@ struct MainView: View {
 
     private func refreshFilteredItemsIfNeeded() {
         let signature = searchSignature
-        guard filteredItemsSignature != signature else { return }
-        filteredItemsCache = ClipHistoryFilter.items(
-            store.items,
-            kind: kindFilter,
-            query: searchText,
-            indexCache: searchIndexCache
-        )
+        guard filteredItemsSignature != signature, pendingFilterSignature != signature else { return }
+
+        let items = store.items
+        let kind = kindFilter
+        let query = searchText
+        let indexCache = searchIndexCache
+
+        // Small histories and plain type filters are instant; only text search
+        // over a large history moves off the main thread.
+        let isHeavySearch = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && items.count >= 200
+        guard isHeavySearch else {
+            pendingFilterSignature = nil
+            applyFilteredItems(
+                ClipHistoryFilter.items(items, kind: kind, query: query, indexCache: indexCache),
+                signature: signature
+            )
+            return
+        }
+
+        pendingFilterSignature = signature
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = ClipHistoryFilter.items(items, kind: kind, query: query, indexCache: indexCache)
+            DispatchQueue.main.async {
+                // A newer keystroke supersedes this result; keep the current list until it lands.
+                guard pendingFilterSignature == signature else { return }
+                pendingFilterSignature = nil
+                applyFilteredItems(result, signature: signature)
+            }
+        }
+    }
+
+    private func applyFilteredItems(_ items: [ClipItem], signature: SearchSignature) {
+        filteredItemsCache = items
+        filteredItemIDsCache = items.map(\.id)
         filteredItemsSignature = signature
+    }
+
+    private var filteredItemIDs: [ClipItem.ID] {
+        dragSnapshotItems?.map(\.id) ?? filteredItemIDsCache
+    }
+
+    /// Thumbnails are ~33 KB each; keep enough for fast scrolling, not all history.
+    private var thumbnailCacheLimit: Int {
+        min(store.items.count + 8, 400)
+    }
+
+    private func revealNewestItemIfNeeded(proxy: ScrollViewProxy) {
+        guard !isDragSelecting,
+              let newID = HistoryScrollTarget.anchorToReveal(
+                in: store.items,
+                lastRevealedNewest: lastRevealedNewest
+              ) else { return }
+        withAnimation(.easeOut(duration: 0.18)) {
+            proxy.scrollTo(newID, anchor: .top)
+        }
+        lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
     }
 
     private func prewarmSearchIndexes(for items: [ClipItem]) {
@@ -1056,11 +1105,12 @@ private struct ToolbarHeightKey: PreferenceKey {
 /// Frosts only the titlebar strip so scrolled rows don't collide with the
 /// title; below it rows stay visible under the glass controls.
 private struct TitlebarScrollEdge: View {
+    @Environment(\.glassTransparency) private var transparency
     let height: CGFloat
 
     var body: some View {
         Rectangle()
-            .fill(.bar)
+            .fill(transparency == .opaque ? AnyShapeStyle(AppTheme.appBackground) : AnyShapeStyle(.bar))
             .mask(
                 LinearGradient(
                     stops: [
@@ -1118,7 +1168,7 @@ private struct GlassToolbarIconButtonBody<Label: View>: View {
         label
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(isDimmed || !isEnabled ? Color.secondary.opacity(0.45) : Color.primary.opacity(0.82))
-            .frame(width: 38, height: 36)
+            .frame(width: 38, height: GlassMetrics.controlHeight)
             .background(
                 Circle()
                     .fill(Color.primary.opacity(isPressed ? 0.14 : (isHovered && !isDimmed ? 0.07 : 0)))
@@ -1141,24 +1191,42 @@ private struct HistoryTypeFilterBar: View {
             selection: $selection,
             title: \.title,
             segmentWidth: 64,
-            height: 38
+            height: GlassMetrics.controlHeight
         )
         .accessibilityLabel("记录类型")
     }
 }
 
-private struct ClipRow: View {
+/// Equatable so a row only re-renders when its own record or selection state
+/// changes, not on every store update or unrelated selection change.
+private struct ClipRow: View, Equatable {
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovered = false
     let item: ClipItem
-    @ObservedObject var store: ClipStore
+    /// Not observed: the parent already re-renders rows whose data changed.
+    let store: ClipStore
     let isFocused: Bool
     let isSelected: Bool
     let selectionColor: Color
     let selectionColorIsPreset: Bool
     let imageThumbnailCache: ImageThumbnailCache
-    let showsSeparator: Bool
     let handleClick: (NSEvent?) -> Void
     let handleCopy: () -> Void
+
+    static func == (lhs: ClipRow, rhs: ClipRow) -> Bool {
+        lhs.item.id == rhs.item.id
+            && lhs.item.title == rhs.item.title
+            && lhs.item.isPinned == rhs.item.isPinned
+            && lhs.item.kind == rhs.item.kind
+            && lhs.item.createdAt == rhs.item.createdAt
+            && lhs.item.filePaths == rhs.item.filePaths
+            && lhs.item.sourcePath == rhs.item.sourcePath
+            && lhs.isFocused == rhs.isFocused
+            && lhs.isSelected == rhs.isSelected
+            && lhs.selectionColor == rhs.selectionColor
+            && lhs.selectionColorIsPreset == rhs.selectionColorIsPreset
+            && lhs.imageThumbnailCache === rhs.imageThumbnailCache
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1186,6 +1254,7 @@ private struct ClipRow: View {
                 Image(systemName: item.isPinned ? "pin.fill" : "pin")
             }
             .buttonStyle(ChatGPTIconButtonStyle(isSelected: isSelected))
+            .focusable(false)
             .floatingTooltip(item.isPinned ? "取消置顶" : "置顶")
 
             Button {
@@ -1194,6 +1263,7 @@ private struct ClipRow: View {
                 Image(systemName: "doc.on.doc")
             }
             .buttonStyle(ChatGPTIconButtonStyle(isSelected: isSelected))
+            .focusable(false)
             .floatingTooltip(isSelected ? "复制选中的记录" : "复制")
 
             Button(role: .destructive) {
@@ -1202,6 +1272,7 @@ private struct ClipRow: View {
                 Image(systemName: "trash")
             }
             .buttonStyle(ChatGPTIconButtonStyle(isSelected: isSelected))
+            .focusable(false)
             .floatingTooltip("删除记录")
         }
         .frame(height: 58)
@@ -1211,6 +1282,7 @@ private struct ClipRow: View {
         .background {
             ClipRowCardSurface(
                 isSelected: isSelected,
+                isHovered: isHovered,
                 selectionColor: selectionColor,
                 selectionOpacity: SelectionRowMotion.surfaceOpacity(
                     isSelected: isSelected,
@@ -1221,6 +1293,7 @@ private struct ClipRow: View {
             .animation(SelectionRowMotion.animation, value: isSelected)
         }
         .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
         .onTapGesture {
             handleClick(NSApp.currentEvent)
         }
@@ -1256,7 +1329,7 @@ private struct ClipRow: View {
     private var preview: some View {
         switch item.kind {
         case .text:
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: GlassMetrics.thumbnailRadius, style: .continuous)
                 .fill(AppTheme.textPreviewBackground)
                 .overlay(Image(systemName: "text.alignleft").foregroundStyle(AppTheme.textPreviewForeground))
         case .file:
@@ -1276,33 +1349,40 @@ private struct ClipRow: View {
 }
 
 /// Each record is its own translucent card; the selected one becomes a tinted
-/// Liquid Glass slab on macOS 26.
+/// Liquid Glass slab on macOS 26. The glass layer exists only while selected,
+/// so scrolling never pays for off-screen glass.
 private struct ClipRowCardSurface: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.glassTransparency) private var transparency
     let isSelected: Bool
+    let isHovered: Bool
     let selectionColor: Color
     let selectionOpacity: Double
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
+        RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
     }
 
     var body: some View {
         ZStack {
-            shape.fill(Color.white.opacity(colorScheme == .dark ? 0.06 : 0.58))
-            shape.strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.7), lineWidth: 0.5)
-            selectedSurface
-                .opacity(selectionOpacity)
+            GlassCardBackground(isHovered: isHovered && !isSelected)
+            if selectionOpacity > 0 {
+                selectedSurface
+                    .opacity(selectionOpacity)
+                    .transition(.opacity)
+            }
         }
         .padding(.vertical, 3)
     }
 
     @ViewBuilder
     private var selectedSurface: some View {
-        if #available(macOS 26.0, *) {
+        if transparency == .opaque {
+            shape.fill(selectionColor)
+        } else if #available(macOS 26.0, *) {
             Color.clear
                 .glassEffect(
-                    .regular.tint(selectionColor.opacity(colorScheme == .dark ? 0.55 : 0.4)).interactive(),
+                    .regular.tint(selectionColor.opacity(colorScheme == .dark ? 0.55 : 0.4)),
                     in: shape
                 )
         } else {
@@ -1315,6 +1395,12 @@ private struct CachedImageThumbnail: View {
     let item: ClipItem
     let cache: ImageThumbnailCache
     @State private var thumbnail: CGImage?
+
+    init(item: ClipItem, cache: ImageThumbnailCache) {
+        self.item = item
+        self.cache = cache
+        _thumbnail = State(initialValue: cache.cachedThumbnail(for: item.id))
+    }
 
     var body: some View {
         ZStack {
@@ -1332,9 +1418,15 @@ private struct CachedImageThumbnail: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .task(id: item.id) {
+            if let cached = cache.cachedThumbnail(for: item.id) {
+                if thumbnail !== cached { thumbnail = cached }
+                return
+            }
             thumbnail = nil
             guard let data = item.imageData else { return }
-            thumbnail = await cache.thumbnail(for: item.id, data: data)
+            let decoded = await cache.thumbnail(for: item.id, data: data)
+            guard !Task.isCancelled else { return }
+            thumbnail = decoded
         }
     }
 }
@@ -1404,118 +1496,32 @@ private struct IconButtonStyleBody<Label: View>: View {
 }
 
 private extension View {
-    @ViewBuilder
-    func clipShelfGlassGroup() -> some View {
-        if #available(macOS 26.0, *) {
-            padding(.horizontal, 2)
-                .glassEffect(.regular.interactive(), in: Capsule())
-        } else {
-            padding(.horizontal, 2)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().stroke(AppTheme.subtleBorder, lineWidth: 0.5))
-        }
-    }
-
-    @ViewBuilder
-    func clipShelfGlassPanel(cornerRadius: CGFloat) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if #available(macOS 26.0, *) {
-            clipShape(shape)
-                .glassEffect(.regular, in: shape)
-        } else {
-            background(AppTheme.settingsBackground)
-                .clipShape(shape)
-                .shadow(color: Color.black.opacity(0.18), radius: 24, x: 0, y: 12)
-        }
-    }
-
-    @ViewBuilder
-    func clipShelfLiquidGlassSurface(cornerRadius: CGFloat) -> some View {
-        if #available(macOS 26.0, *) {
-            glassEffect(
-                .regular,
-                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            )
-        } else {
-            background(AppTheme.searchBackground)
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .stroke(AppTheme.subtleBorder, lineWidth: 1)
-                )
-        }
-    }
-
-    @ViewBuilder
-    func clipShelfLiquidGlassButtonStyle() -> some View {
-        if #available(macOS 26.0, *) {
-            buttonStyle(.glass)
-        } else {
-            buttonStyle(.borderless)
-        }
-    }
-
+    /// Delayed hover tooltip. Driven by SwiftUI hover rather than an AppKit
+    /// tracking view per button, so list rows stay pure SwiftUI while scrolling.
     func floatingTooltip(_ text: String) -> some View {
-        background(FloatingTooltipAnchor(text: text))
+        modifier(FloatingTooltipModifier(text: text))
     }
 }
 
-private struct FloatingTooltipAnchor: NSViewRepresentable {
+private struct FloatingTooltipModifier: ViewModifier {
     let text: String
+    @State private var isHovering = false
 
-    func makeNSView(context: Context) -> TooltipTrackingView {
-        let view = TooltipTrackingView()
-        view.text = text
-        return view
-    }
-
-    func updateNSView(_ nsView: TooltipTrackingView, context: Context) {
-        nsView.text = text
-    }
-}
-
-private final class TooltipTrackingView: NSView {
-    var text = ""
-    private var trackingAreaReference: NSTrackingArea?
-    private var hoverTask: DispatchWorkItem?
-
-    override var acceptsFirstResponder: Bool { false }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingAreaReference {
-            removeTrackingArea(trackingAreaReference)
-        }
-
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        trackingAreaReference = area
-        addTrackingArea(area)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        hoverTask?.cancel()
-        let task = DispatchWorkItem { [weak self] in
-            guard let self, self.window != nil else { return }
-            FloatingTooltipWindow.shared.show(text: self.text, for: self)
-        }
-        hoverTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: task)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hoverTask?.cancel()
-        FloatingTooltipWindow.shared.hide()
-    }
-
-    override func removeFromSuperview() {
-        hoverTask?.cancel()
-        FloatingTooltipWindow.shared.hide()
-        super.removeFromSuperview()
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                isHovering = inside
+                if inside {
+                    FloatingTooltipWindow.shared.scheduleShow(text: text)
+                } else {
+                    FloatingTooltipWindow.shared.cancelAndHide()
+                }
+            }
+            .onDisappear {
+                if isHovering {
+                    FloatingTooltipWindow.shared.cancelAndHide()
+                }
+            }
     }
 }
 
@@ -1523,6 +1529,36 @@ private final class FloatingTooltipWindow {
     static let shared = FloatingTooltipWindow()
     private var window: NSWindow?
     private let label = NSTextField(labelWithString: "")
+
+    private var pendingShow: DispatchWorkItem?
+    private var clickMonitor: Any?
+
+    func scheduleShow(text: String) {
+        pendingShow?.cancel()
+        hide()
+        installClickMonitorIfNeeded()
+        let task = DispatchWorkItem { [weak self] in
+            guard NSApp.isActive, let keyWindow = NSApp.keyWindow else { return }
+            self?.show(text: text, near: NSEvent.mouseLocation, screen: keyWindow.screen)
+        }
+        pendingShow = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: task)
+    }
+
+    func cancelAndHide() {
+        pendingShow?.cancel()
+        pendingShow = nil
+        hide()
+    }
+
+    /// Like system tooltips, any click dismisses a pending or visible tooltip.
+    private func installClickMonitorIfNeeded() {
+        guard clickMonitor == nil else { return }
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            self?.cancelAndHide()
+            return event
+        }
+    }
 
     private init() {
         label.font = .systemFont(ofSize: 11)
@@ -1533,17 +1569,15 @@ private final class FloatingTooltipWindow {
         label.backgroundColor = .clear
     }
 
-    func show(text: String, for sourceView: NSView) {
-        guard let sourceWindow = sourceView.window else { return }
+    private func show(text: String, near point: NSPoint, screen: NSScreen?) {
         label.stringValue = text
         let textSize = label.intrinsicContentSize
         let size = NSSize(width: textSize.width + 16, height: textSize.height + 10)
-        let localRect = sourceView.convert(sourceView.bounds, to: nil)
-        let screenRect = sourceWindow.convertToScreen(localRect)
-        let screenFrame = sourceWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
-        let prefersAbove = screenRect.minY - size.height - 8 > screenFrame.minY
-        let originY = prefersAbove ? screenRect.minY - size.height - 8 : screenRect.maxY + 8
-        let originX = min(max(screenRect.midX - size.width / 2, screenFrame.minX + 8), screenFrame.maxX - size.width - 8)
+        let screenFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        // Below the pointer like system tooltips; flip above near the bottom edge.
+        let below = point.y - 26 - size.height
+        let originY = below > screenFrame.minY ? below : point.y + 16
+        let originX = min(max(point.x - size.width / 2, screenFrame.minX + 8), screenFrame.maxX - size.width - 8)
 
         let tooltipWindow = window ?? makeWindow()
         tooltipWindow.contentView = TooltipBubbleView(label: label)
