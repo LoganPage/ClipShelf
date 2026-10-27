@@ -32,10 +32,22 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// window in front (10–25 ms) at the moment the animation starts.
     private var isShown = false
     private static let parkingOrigin = NSPoint(x: -30_000, y: -30_000)
+    /// Cross-dissolve between the live glass panel and the animation image.
+    private static let handOverDuration: TimeInterval = 0.18
+    /// Opening and closing take the same time, so they feel like one motion.
+    private static let genieDuration: TimeInterval = 0.5
     /// Opening frame composed ahead of the click (see `prefetchOpeningSnapshot`).
     private var prefetched: (image: CGImage, frame: NSRect, time: CFTimeInterval)?
     /// Closing frame composed when the pointer reaches ✓ or the settings button.
     private var prefetchedClose: (image: CGImage, frame: NSRect, time: CFTimeInterval)?
+    /// The blurred main window behind the panel, kept from the opening so
+    /// closing doesn't have to capture and blur it again.
+    private var cachedBackdrop: (image: CGImage, frame: NSRect)?
+
+    private func backdrop(for frame: NSRect) -> CGImage? {
+        guard let cachedBackdrop, cachedBackdrop.frame == frame else { return nil }
+        return cachedBackdrop.image
+    }
     private let snapshotQueue = DispatchQueue(label: "ClipShelf.settings-snapshot", qos: .userInteractive)
 
     var isVisible: Bool { isShown }
@@ -61,6 +73,65 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Builds the window (if needed) and renders its content right away, for
+    /// callers that need a snapshot immediately.
+    func prepareNow(parent: NSWindow) {
+        self.parent = parent
+        park(makePanelIfNeeded(), size: targetFrame(in: parent).size)
+        contentSnapshot = renderContent() ?? contentSnapshot
+    }
+
+    /// The main window's image with the settings panel composed over it in
+    /// place, so both can pour out of the menu bar icon as one piece.
+    func composeOver(mainImage: CGImage, parent: NSWindow) -> CGImage? {
+        guard let content = contentSnapshot ?? renderContent(), let panel else { return nil }
+        let frame = targetFrame(in: parent)
+        let request = SnapshotRequest(
+            parentWindowNumber: parent.windowNumber,
+            parentFrame: parent.frame,
+            scale: parent.backingScaleFactor,
+            frame: frame,
+            isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
+            content: content
+        )
+        guard let settings = Self.composeSnapshot(request),
+              let context = CGContext(
+                data: nil,
+                width: mainImage.width,
+                height: mainImage.height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        let scale = CGFloat(mainImage.width) / max(parent.frame.width, 1)
+        context.draw(mainImage, in: CGRect(x: 0, y: 0, width: mainImage.width, height: mainImage.height))
+        // Both frames are bottom-left based, like the bitmap.
+        context.draw(settings, in: CGRect(
+            x: (frame.minX - parent.frame.minX) * scale,
+            y: (frame.minY - parent.frame.minY) * scale,
+            width: frame.width * scale,
+            height: frame.height * scale
+        ))
+        return context.makeImage()
+    }
+
+    /// Puts settings in place without its own animation (used when it has
+    /// already poured out together with the main window).
+    func showImmediately(from parent: NSWindow) {
+        guard !isShown, !isAnimating else { return }
+        self.parent = parent
+        let panel = makePanelIfNeeded()
+        NotificationCenter.default.post(name: Self.willShowNotification, object: nil)
+        AppearancePreferences.apply(to: panel)
+        panel.setFrame(targetFrame(in: parent), display: true)
+        panel.alphaValue = 1
+        parent.addChildWindow(panel, ordered: .above)
+        panel.makeKey()
+        isShown = true
+        installCloseShortcut()
+    }
+
     /// Called when the pointer reaches the settings button. Capturing and
     /// blurring the main window takes ~60 ms; doing it on hover, off the main
     /// thread, means the genie can start the instant the button is clicked.
@@ -76,9 +147,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             content: content
         )
         snapshotQueue.async { [weak self] in
-            guard let image = Self.composeSnapshot(request) else { return }
+            guard let result = Self.composeSnapshot(request, backdrop: nil) else { return }
             DispatchQueue.main.async {
-                self?.prefetched = (image, frame, CACurrentMediaTime())
+                self?.prefetched = (result.image, frame, CACurrentMediaTime())
+                if let backdrop = result.backdrop { self?.cachedBackdrop = (backdrop, frame) }
             }
         }
     }
@@ -97,10 +169,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
             content: content
         )
+        let cached = backdrop(for: frame)
         snapshotQueue.async { [weak self] in
-            guard let image = Self.composeSnapshot(request) else { return }
+            guard let result = Self.composeSnapshot(request, backdrop: cached) else { return }
             DispatchQueue.main.async {
-                self?.prefetchedClose = (image, frame, CACurrentMediaTime())
+                self?.prefetchedClose = (result.image, frame, CACurrentMediaTime())
             }
         }
     }
@@ -125,11 +198,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         let reveal = { [weak self, weak panel] in
             guard let self, let panel else { return }
+            panel.alphaValue = 0
             panel.setFrame(frame, display: true)
             parent.addChildWindow(panel, ordered: .above)
             panel.makeKey()
+            // Dissolve from the animation image into the live glass rather
+            // than switching, so the hand-over has no visible colour jump.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Self.handOverDuration
+                panel.animator().alphaValue = 1
+            }
             self.isShown = true
             self.isAnimating = false
+            self.installCloseShortcut()
         }
 
         guard let source = anchorRectOnScreen(in: parent) else {
@@ -137,12 +218,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             return
         }
         isAnimating = true
+        // Take focus now, while still parked off screen. Liquid Glass renders
+        // differently in an inactive window; doing this only on arrival made
+        // the panel land dim and then visibly "light up" a moment later.
+        panel.makeKey()
         let start = { (snapshot: CGImage?) in
             guard let snapshot else {
                 reveal()
                 return
             }
-            GenieAnimator.run(image: snapshot, from: source, to: frame, opening: true, duration: 0.5, above: parent, completion: reveal)
+            GenieAnimator.run(image: snapshot, from: source, to: frame, opening: true, duration: Self.genieDuration, above: parent, crossfade: Self.handOverDuration, completion: reveal)
         }
 
         let fresh = prefetched.flatMap { entry in
@@ -167,9 +252,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
             content: content
         )
-        snapshotQueue.async {
-            let image = Self.composeSnapshot(request)
-            DispatchQueue.main.async { start(image) }
+        snapshotQueue.async { [weak self] in
+            let result = Self.composeSnapshot(request, backdrop: nil)
+            DispatchQueue.main.async {
+                if let backdrop = result?.backdrop { self?.cachedBackdrop = (backdrop, frame) }
+                start(result?.image)
+            }
         }
     }
 
@@ -181,35 +269,87 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             entry.frame == frame && CACurrentMediaTime() - entry.time < 3 ? entry.image : nil
         }
         prefetchedClose = nil
-        let snapshot: CGImage?
-        if let fresh {
-            snapshot = fresh
-        } else {
-            contentSnapshot = renderContent() ?? contentSnapshot
-            snapshot = parent.flatMap { parent in
-                contentSnapshot.flatMap { composedSnapshot(content: $0, frame: frame, over: parent, appearance: panel.effectiveAppearance) }
-            }
-        }
-
         isShown = false
-        // Hide instantly; moving it away and handing focus back wait until the
-        // animation has finished so they don't cost its first frames.
-        panel.alphaValue = 0
+        isAnimating = true
+        uninstallCloseShortcut()
+
         let tidyUp = { [weak self, weak panel] in
             guard let self, let panel else { return }
             panel.parent?.removeChildWindow(panel)
-            self.park(panel, size: frame.size)
+            // Same size, so only move it away: no resize or re-layout at the
+            // very end of the animation, where it used to stutter.
+            panel.setFrameOrigin(Self.parkingOrigin)
             panel.alphaValue = 1
-            self.parent?.makeKey()
             self.isAnimating = false
         }
 
-        guard let snapshot, let parent, let source = anchorRectOnScreen(in: parent) else {
-            tidyUp()
+        // The live panel stays put until the animation image is ready, then
+        // dissolves into it, so the hand-over never freezes on screen.
+        let start = { [weak self, weak panel] (snapshot: CGImage?) in
+            guard let self, let panel else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Self.handOverDuration
+                panel.animator().alphaValue = 0
+            }
+            self.parent?.makeKey()
+            guard let snapshot, let parent = self.parent, let source = self.anchorRectOnScreen(in: parent) else {
+                tidyUp()
+                return
+            }
+            GenieAnimator.run(image: snapshot, from: source, to: frame, opening: false, duration: Self.genieDuration, above: parent, completion: tidyUp)
+        }
+
+        if let fresh {
+            start(fresh)
             return
         }
-        isAnimating = true
-        GenieAnimator.run(image: snapshot, from: source, to: frame, opening: false, duration: 0.42, above: parent, completion: tidyUp)
+        // Without a hover beforehand (Esc, ⌘, or a shortcut): render the
+        // content now, but capture and blur the backdrop off the main thread.
+        contentSnapshot = renderContent() ?? contentSnapshot
+        guard let parent, let content = contentSnapshot else {
+            start(nil)
+            return
+        }
+        let request = SnapshotRequest(
+            parentWindowNumber: parent.windowNumber,
+            parentFrame: parent.frame,
+            scale: parent.backingScaleFactor,
+            frame: frame,
+            isDark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
+            content: content
+        )
+        // The backdrop kept from opening makes this a quick draw: start at
+        // once instead of waiting for a capture and blur.
+        if let cached = backdrop(for: frame) {
+            start(Self.composeSnapshot(request, backdrop: cached)?.image)
+            return
+        }
+        snapshotQueue.async {
+            let image = Self.composeSnapshot(request, backdrop: nil)?.image
+            DispatchQueue.main.async { start(image) }
+        }
+    }
+
+    // MARK: Close shortcut
+
+    private var closeShortcutMonitor: Any?
+
+    /// The user's "关闭设置" shortcut, active only while settings is showing.
+    private func installCloseShortcut() {
+        guard closeShortcutMonitor == nil else { return }
+        closeShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.isShown, !self.isAnimating,
+                  CloseSettingsHotKeyDefaults.load().matches(event) else { return event }
+            self.close()
+            return nil
+        }
+    }
+
+    private func uninstallCloseShortcut() {
+        if let closeShortcutMonitor {
+            NSEvent.removeMonitor(closeShortcutMonitor)
+            self.closeShortcutMonitor = nil
+        }
     }
 
     /// Keeps the window ordered but far off screen, sized like its next showing.
@@ -266,6 +406,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         if GlassPreferences.value != .opaque, #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.cornerRadius = radius
+            switch GlassPreferences.value {
+            case .clear:
+                glass.style = .clear
+            case .tinted:
+                glass.style = .regular
+                glass.tintColor = NSColor.windowBackgroundColor.withAlphaComponent(0.55)
+            case .regular, .opaque:
+                glass.style = .regular
+            }
             glass.contentView = content
             backdrop = glass
             return glass
@@ -347,6 +496,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// blurred and tinted like Liquid Glass, with the settings content on top.
     /// (A direct capture of a glass window renders the glass as flat grey.)
     private static func composeSnapshot(_ request: SnapshotRequest) -> CGImage? {
+        composeSnapshot(request, backdrop: nil)?.image
+    }
+
+    /// Composes the animation image. Pass a `backdrop` to skip capturing and
+    /// blurring the main window (the slow part); the one used is returned so
+    /// it can be reused.
+    private static func composeSnapshot(_ request: SnapshotRequest, backdrop cached: CGImage?) -> (image: CGImage, backdrop: CGImage?)? {
         let scale = request.scale
         let width = Int(request.frame.width * scale)
         let height = Int(request.frame.height * scale)
@@ -365,14 +521,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         context.addPath(CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
         context.clip()
 
-        if let backdrop = blurredBackdrop(request) {
+        let backdrop = cached ?? blurredBackdrop(request)
+        if let backdrop {
             context.draw(backdrop, in: bounds)
         }
-        let tint = request.isDark ? CGColor(gray: 0.1, alpha: 0.55) : CGColor(gray: 1, alpha: 0.62)
+        let tint = request.isDark ? CGColor(gray: 0.12, alpha: 0.5) : CGColor(gray: 1, alpha: 0.5)
         context.setFillColor(tint)
         context.fill(bounds)
         context.draw(request.content, in: bounds)
-        return context.makeImage()
+        return context.makeImage().map { ($0, backdrop) }
     }
 
     private static func blurredBackdrop(_ request: SnapshotRequest) -> CGImage? {

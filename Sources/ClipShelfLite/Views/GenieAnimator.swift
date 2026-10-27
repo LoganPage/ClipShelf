@@ -22,6 +22,9 @@ final class GenieAnimator {
     private let duration: TimeInterval
     private let completion: () -> Void
     private var timer: Timer?
+    /// When > 0, the snapshot fades out over this long after the motion ends,
+    /// dissolving into the real window underneath instead of switching.
+    private var crossfade: TimeInterval = 0
     private var startTime: CFTimeInterval = 0
     private let stripCount = 120
     private let lead: CGFloat = 0.6
@@ -39,6 +42,7 @@ final class GenieAnimator {
         opening: Bool,
         duration: TimeInterval,
         above parent: NSWindow?,
+        crossfade: TimeInterval = 0,
         completion: @escaping () -> Void
     ) -> GenieAnimator {
         let animator = GenieAnimator(
@@ -50,6 +54,7 @@ final class GenieAnimator {
             parent: parent,
             completion: completion
         )
+        animator.crossfade = crossfade
         running[ObjectIdentifier(animator)] = animator
         animator.start()
         return animator
@@ -131,12 +136,21 @@ final class GenieAnimator {
         timer?.invalidate()
         timer = nil
         completion()
-        // Let the real window draw first so there is no blank frame in between.
-        DispatchQueue.main.async { [self] in
+        let remove = { [self] in
             window.parent?.removeChildWindow(window)
             window.orderOut(nil)
             Self.running[ObjectIdentifier(self)] = nil
         }
+        guard crossfade > 0 else {
+            // Let the real window draw first so there is no blank frame in between.
+            DispatchQueue.main.async(execute: remove)
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = crossfade
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().alphaValue = 0
+        }, completionHandler: remove)
     }
 
     /// `progress` 0 = collapsed in the button, 1 = the full window.

@@ -36,9 +36,6 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
     private let settleSpring = Animation.spring(response: 0.55, dampingFraction: 0.62)
     /// Time for a tapped lens to glide over and come to rest before dropping.
     private let tapHoldDuration: TimeInterval = 0.34
-    /// After a drag, let the lens land before the selection (and whatever it
-    /// drives, like rebuilding the history list) changes underneath it.
-    private let dragCommitDelay: TimeInterval = 0.2
 
     var body: some View {
         GeometryReader { proxy in
@@ -206,30 +203,35 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
                     ? layout.nearestIndex(to: layout.rubberBanded(value.location.x))
                     : layout.nearestIndex(to: value.location.x)
                 let token = interactionToken
-                // Change the selection only once the motion is done, so the
-                // work it triggers never competes with the animation.
-                let commit = {
-                    guard token == interactionToken, options[landing] != selection else { return }
+                // Switch first, animate after: whatever the selection drives
+                // (like rebuilding the history list) runs before the lens
+                // moves, so the main thread is free for every frame of the
+                // glide and landing instead of stalling partway through.
+                if options[landing] != selection {
                     selection = options[landing]
                 }
 
                 guard !didDrag else {
-                    drop(at: landing)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + dragCommitDelay, execute: commit)
+                    DispatchQueue.main.async {
+                        guard token == interactionToken, !isTracking else { return }
+                        drop(at: landing)
+                    }
                     return
                 }
 
                 // Tap: glide the lifted lens to the tapped option, let it
-                // settle, then drop it into the bar and switch.
-                let distance = abs(layout.center(of: landing) - (lensCenter ?? layout.center(of: landing)))
-                withAnimation(glideSpring) {
-                    lensCenter = layout.center(of: landing)
-                }
-                pulseStretch(by: min(distance / max(layout.segment, 1) * 0.1, 0.2))
-                DispatchQueue.main.asyncAfter(deadline: .now() + tapHoldDuration) {
+                // settle, then drop it into the bar.
+                DispatchQueue.main.async {
                     guard token == interactionToken, !isTracking else { return }
-                    drop(at: landing)
-                    commit()
+                    let distance = abs(layout.center(of: landing) - (lensCenter ?? layout.center(of: landing)))
+                    withAnimation(glideSpring) {
+                        lensCenter = layout.center(of: landing)
+                    }
+                    pulseStretch(by: min(distance / max(layout.segment, 1) * 0.1, 0.2))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + tapHoldDuration) {
+                        guard token == interactionToken, !isTracking else { return }
+                        drop(at: landing)
+                    }
                 }
             }
     }

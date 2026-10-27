@@ -44,13 +44,25 @@ struct MainView: View {
     @State private var imageThumbnailCache = ImageThumbnailCache()
     @FocusState private var isSearchFocused: Bool
     @State private var toolbarHeight: CGFloat = 150
+    /// Toolbar height with the search field showing; the list's top inset
+    /// stays at this so rows don't jump when the search field collapses.
+    @State private var expandedToolbarHeight: CGFloat = 150
+    @State private var isSearchCollapsed = false
+    @State private var scrollObserver: NSObjectProtocol?
+    /// Plain reference, so tracking scroll direction never re-renders the view.
+    @State private var scrollTracker = ScrollDirectionTracker()
+    @State private var listGeneration = 0
+    @State private var listEntrance: ListEntrance?
+    @State private var listEntranceStyle = ListEntrancePreferences.value
+    @State private var lastKindFilter: ClipKindFilter = HistoryFilterPreferences.value
+    @State private var filteredIndexByID = [ClipItem.ID: Int]()
     @State private var glassTransparency = GlassPreferences.value
     @State private var scrollEffect = ScrollEffectPreferences.value
     @State private var copyToast: CopyToast?
-    @Namespace private var selectionGlassNamespace
     @State private var titlebarHeight: CGFloat = 28
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = GlassMetrics.edgeInset
+    private let historyListBottomPadding: CGFloat = 18
     /// Cards draw 3pt inside their row slot (see ClipRowCardSurface).
     private let rowCardInset: CGFloat = 3
 
@@ -59,8 +71,18 @@ struct MainView: View {
     /// Height of the custom titlebar row (traffic lights, icon, title).
     private var titleRowHeight: CGFloat { max(titlebarHeight, 44) }
 
+    /// How far the type bar moves up when the search field collapses.
+    private var searchCollapseDistance: CGFloat {
+        GlassMetrics.controlHeight + GlassMetrics.stackSpacing
+    }
+
+    /// Height of the toolbar as it currently covers the list.
+    private var visibleToolbarHeight: CGFloat {
+        isSearchCollapsed ? toolbarHeight - searchCollapseDistance : toolbarHeight
+    }
+
     private var historyListVerticalInset: CGFloat {
-        toolbarHeight + GlassMetrics.stackSpacing - rowCardInset
+        expandedToolbarHeight + GlassMetrics.stackSpacing - rowCardInset
     }
 
     private var searchSignature: SearchSignature {
@@ -100,6 +122,9 @@ struct MainView: View {
             let rounded = height.rounded()
             if abs(rounded - toolbarHeight) > 0.5 {
                 toolbarHeight = rounded
+            }
+            if abs(rounded - expandedToolbarHeight) > 0.5 {
+                expandedToolbarHeight = rounded
             }
         }
         .overlay(alignment: .bottom) {
@@ -171,6 +196,14 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .clipShelfOpenSettings)) { _ in
             openSettings()
         }
+        .onReceive(NotificationCenter.default.publisher(for: ListEntrancePreferences.changedNotification)) { notification in
+            listEntranceStyle = notification.object as? ListEntranceStyle ?? ListEntrancePreferences.value
+        }
+        .onChange(of: isSearchFocused) { focused in
+            if focused {
+                setSearchCollapsed(false)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: ScrollEffectPreferences.changedNotification)) { notification in
             scrollEffect = notification.object as? ScrollEffectStyle ?? ScrollEffectPreferences.value
         }
@@ -190,6 +223,8 @@ struct MainView: View {
             clearSelection()
         }
         .onChange(of: kindFilter) { _ in
+            startListEntrance(from: lastKindFilter, to: kindFilter)
+            lastKindFilter = kindFilter
             refreshFilteredItemsIfNeeded()
             clearSelection()
             HistoryFilterPreferences.value = kindFilter
@@ -232,6 +267,7 @@ struct MainView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(filteredItems) { item in
                         let isSelected = selectedIDs.contains(item.id)
+                        let index = filteredIndexByID[item.id] ?? 0
                         ClipRow(
                             item: item,
                             store: store,
@@ -240,28 +276,61 @@ struct MainView: View {
                             selectionColor: selectionColor,
                             selectionColorIsPreset: selectionColorPreset != nil,
                             imageThumbnailCache: imageThumbnailCache,
-                            selectionGlass: SelectionGlassIdentity(
-                                namespace: selectionGlassNamespace,
-                                // One shared identity slides between records; with
-                                // several selected each keeps its own.
-                                id: selectedIDs.count == 1 ? "selection" : "selection-\(item.id)"
+                            pile: PileContext(
+                                style: scrollEffect,
+                                index: index,
+                                count: filteredItems.count,
+                                bottomPadding: historyListBottomPadding
                             ),
+                            isPileCard: false,
                             handleClick: { event in handleRowClick(item, event: event) },
                             handleCopy: { performCopy(actionItems(for: item)) }
                         )
                         .equatable()
-                        .modifier(RotaryScrollEffect(style: scrollEffect, topEdge: toolbarHeight, restingTop: historyListVerticalInset))
+                        .modifier(ListEdgeEffect(
+                            style: scrollEffect,
+                            topEdge: visibleToolbarHeight,
+                            index: index,
+                            count: filteredItems.count,
+                            bottomPadding: historyListBottomPadding
+                        ))
+                        .modifier(ListEntranceEffect(entrance: listEntrance, index: index, rowHeight: historyRowHeight))
                         .id(item.id)
+                        // Rows further down sit underneath the ones above, so
+                        // the bottom pile tucks cards in behind.
+                        .zIndex(-Double(index))
                     }
+                }
+                // A new identity per type switch, so every row of the new type
+                // is built fresh and can play its entrance.
+                .id(listGeneration)
+                // The previous type's rows fade out instead of vanishing.
+                .transition(.opacity)
+                .background(alignment: .top) {
+                    if scrollEffect.stacksBottom {
+                        pileLayer
+                    }
+                }
+                .background(alignment: .top) {
+                    SelectionGlassLayer(
+                        panes: selectionPanes,
+                        rowHeight: historyRowHeight,
+                        selectionColor: selectionColor,
+                        scrollEffect: scrollEffect,
+                        topEdge: visibleToolbarHeight,
+                        count: filteredItems.count,
+                        bottomPadding: historyListBottomPadding
+                    )
                 }
                 .padding(.horizontal, historyListHorizontalInset)
                 .padding(.top, historyListVerticalInset)
-                .padding(.bottom, 18)
+                .padding(.bottom, historyListBottomPadding)
             }
             .coordinateSpace(name: "historyList")
             .background(
                 ScrollViewResolver { scrollView in
                     historyScrollView = scrollView
+                    observeScrolling(of: scrollView)
                 }
             )
             .background(KeyboardCaptureView { event in
@@ -274,7 +343,7 @@ struct MainView: View {
                     itemIDs: filteredItemIDs,
                     rowHeight: historyRowHeight,
                     contentTopInset: historyListVerticalInset,
-                    viewportTopObstruction: toolbarHeight,
+                    viewportTopObstruction: visibleToolbarHeight,
                     contentHorizontalInset: historyListHorizontalInset,
                     onPointerDown: { location in
                         handleHistoryPointerDown(at: location)
@@ -307,7 +376,13 @@ struct MainView: View {
     private var toolbar: some View {
         VStack(spacing: GlassMetrics.stackSpacing) {
             titleRow
+            // Layout never changes when the search field collapses: it fades
+            // and the row below slides up over its place. Only render-time
+            // transforms animate, so there is no per-frame re-layout.
             searchField
+                .scaleEffect(isSearchCollapsed ? 0.94 : 1, anchor: .top)
+                .opacity(isSearchCollapsed ? 0 : 1)
+                .allowsHitTesting(!isSearchCollapsed)
 
             HStack(spacing: 12) {
                 HistoryTypeFilterBar(selection: $kindFilter)
@@ -315,10 +390,12 @@ struct MainView: View {
                 Spacer(minLength: 8)
                 primaryToolbar
             }
+            .offset(y: isSearchCollapsed ? -searchCollapseDistance : 0)
         }
         .padding(.horizontal, GlassMetrics.edgeInset)
-        // Gaps between controls must not click through to rows hidden underneath.
-        .contentShape(Rectangle())
+        // Gaps between controls must not click through to rows hidden
+        // underneath; once collapsed, the freed strip is clickable again.
+        .contentShape(TopStrip(height: visibleToolbarHeight))
         .background(alignment: .top) {
             TitlebarScrollEdge(height: max(titlebarHeight, 28) + 6)
         }
@@ -522,7 +599,143 @@ struct MainView: View {
     private func applyFilteredItems(_ items: [ClipItem], signature: SearchSignature) {
         filteredItemsCache = items
         filteredItemIDsCache = items.map(\.id)
+        var indexByID = [ClipItem.ID: Int](minimumCapacity: items.count)
+        for (index, item) in items.enumerated() {
+            indexByID[item.id] = index
+        }
+        filteredIndexByID = indexByID
         filteredItemsSignature = signature
+    }
+
+    /// Collapses the search field once the list is scrolled down (the type
+    /// bar then sits right under the title), and brings it back at the top.
+    private func observeScrolling(of scrollView: NSScrollView?) {
+        if let scrollObserver {
+            NotificationCenter.default.removeObserver(scrollObserver)
+            self.scrollObserver = nil
+        }
+        guard let clipView = scrollView?.contentView else { return }
+        clipView.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: clipView,
+            queue: .main
+        ) { _ in
+            updateSearchCollapse()
+        }
+    }
+
+    /// Like Safari: 40pt of scrolling down collapses the search field, 40pt
+    /// of scrolling up brings it back. Travel resets when the direction
+    /// changes, so small back-and-forth scrolling never toggles it, and a
+    /// fast fling toggles it once.
+    private func updateSearchCollapse() {
+        guard let scrollView = historyScrollView,
+              let range = visibleContentRange(in: scrollView) else { return }
+        let offset = range.lowerBound
+        let tracker = scrollTracker
+        let delta = offset - tracker.lastOffset
+        tracker.lastOffset = offset
+        if offset < 6 {
+            tracker.travel = 0
+            setSearchCollapsed(false)
+            return
+        }
+        guard delta != 0 else { return }
+        if (delta > 0) != (tracker.travel > 0) {
+            tracker.travel = 0
+        }
+        tracker.travel += delta
+        if tracker.travel > 40, !isSearchCollapsed, searchText.isEmpty, !isSearchFocused {
+            tracker.travel = 0
+            setSearchCollapsed(true)
+        } else if tracker.travel < -40, isSearchCollapsed {
+            tracker.travel = 0
+            setSearchCollapsed(false)
+        }
+    }
+
+    private func setSearchCollapsed(_ collapsed: Bool) {
+        guard isSearchCollapsed != collapsed else { return }
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.92)) {
+            isSearchCollapsed = collapsed
+        }
+    }
+
+    private func startListEntrance(from old: ClipKindFilter, to new: ClipKindFilter) {
+        guard listEntranceStyle != .off, old != new else {
+            listEntrance = nil
+            return
+        }
+        let cases = ClipKindFilter.allCases
+        let oldIndex = cases.firstIndex(of: old) ?? 0
+        let newIndex = cases.firstIndex(of: new) ?? 0
+        // The type bar's lens, relative to the centre of the list (64pt
+        // segments inside a 4pt inset, starting at the list's left edge).
+        let listWidth = max((hostWindow?.frame.width ?? 704) - historyListHorizontalInset * 2, 200)
+        let lensX = 4 + 64 * (CGFloat(newIndex) + 0.5)
+        listEntrance = ListEntrance(
+            style: listEntranceStyle,
+            direction: newIndex >= oldIndex ? 1 : -1,
+            lensOffsetX: lensX - listWidth / 2,
+            start: Date()
+        )
+        withAnimation(.easeInOut(duration: 0.24)) {
+            listGeneration &+= 1
+        }
+    }
+
+    /// The cards in the bottom pile. Rows below the visible area aren't
+    /// rendered by the list, so the pile is a second, lightweight list laid
+    /// out a few rows higher (which brings those rows into view) and moved
+    /// back down into the pile by `PileCardEffect`. A card reaches the
+    /// front of the pile exactly where its real row appears, so they hand
+    /// over seamlessly.
+    private var pileLayer: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(filteredItems) { item in
+                let index = filteredIndexByID[item.id] ?? 0
+                PileCardContent(
+                    title: item.title,
+                    symbol: item.kind == .text ? "text.alignleft" : (item.kind == .image ? "photo" : "doc"),
+                    index: index,
+                    count: filteredItems.count,
+                    rowHeight: historyRowHeight,
+                    bottomPadding: historyListBottomPadding,
+                    layoutShift: PileGeometry.layoutShiftRows * historyRowHeight
+                ) {
+                    ClipRow(
+                        item: item,
+                        store: store,
+                        isFocused: false,
+                        isSelected: false,
+                        selectionColor: selectionColor,
+                        selectionColorIsPreset: selectionColorPreset != nil,
+                        imageThumbnailCache: imageThumbnailCache,
+                        pile: PileContext(style: .off, index: index, count: filteredItems.count, bottomPadding: historyListBottomPadding),
+                        isPileCard: true,
+                        handleClick: { _ in },
+                        handleCopy: {}
+                    )
+                    .equatable()
+                }
+                .zIndex(-Double(index))
+            }
+        }
+        .padding(.top, -PileGeometry.layoutShiftRows * historyRowHeight)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// Where the selection glass goes. A single selection keeps one stable
+    /// pane that slides from record to record; several each get their own.
+    private var selectionPanes: [SelectionGlassPane] {
+        guard !selectedIDs.isEmpty else { return [] }
+        let indices = filteredItems.indices.filter { selectedIDs.contains(filteredItems[$0].id) }
+        if indices.count == 1, let index = indices.first {
+            return [SelectionGlassPane(id: "single", index: index)]
+        }
+        return indices.map { SelectionGlassPane(id: filteredItems[$0].id.uuidString, index: $0) }
     }
 
     private var filteredItemIDs: [ClipItem.ID] {
@@ -808,7 +1021,7 @@ struct MainView: View {
 
         let topPadding: CGFloat = 6
         let bottomPadding: CGFloat = 18
-        let visibleTop = toolbarHeight + topPadding
+        let visibleTop = visibleToolbarHeight + topPadding
         let visibleBottom = visibleHeight - bottomPadding
 
         if rowFrame.minY < visibleTop {
@@ -878,7 +1091,7 @@ struct MainView: View {
               !filteredItems.isEmpty,
               let range = visibleContentRange(in: scrollView) else { return [] }
 
-        let first = max(0, Int(floor((range.lowerBound + toolbarHeight - historyListVerticalInset) / historyRowHeight)))
+        let first = max(0, Int(floor((range.lowerBound + visibleToolbarHeight - historyListVerticalInset) / historyRowHeight)))
         let last = min(filteredItems.count - 1, Int(floor((range.upperBound - historyListVerticalInset) / historyRowHeight)))
         guard first <= last else { return [] }
 
@@ -1073,7 +1286,7 @@ struct MainView: View {
               viewportSize.height > 0,
               location.x >= historyListHorizontalInset,
               location.x <= viewportSize.width - historyListHorizontalInset,
-              location.y >= toolbarHeight,
+              location.y >= visibleToolbarHeight,
               location.y <= viewportSize.height else { return nil }
 
         let yInList = visibleRange.lowerBound + location.y - historyListVerticalInset
@@ -1087,7 +1300,7 @@ struct MainView: View {
     private func edgeRowID(for location: CGPoint) -> ClipItem.ID? {
         guard let viewportSize = historyViewportSize else { return nil }
 
-        if location.y < toolbarHeight {
+        if location.y < visibleToolbarHeight {
             return visibleItemIndices().first.map { filteredItems[$0].id } ?? filteredItems.first?.id
         }
 
@@ -1144,67 +1357,18 @@ struct MainView: View {
     }
 }
 
-/// Perspective fold: towards the top and bottom the list bends away from the
-/// viewer like a page curving out of sight. The bend grows with a power of the
-/// distance from the middle, so most rows stay flat and readable and only the
-/// last row or two at each edge recede: smaller, drawn towards the middle,
-/// tilted and darker. Strength
-/// comes from the 滚动效果 setting. Render-only (`visualEffect`), so it never
-/// re-lays out rows.
-private struct RotaryScrollEffect: ViewModifier {
-    let style: ScrollEffectStyle
-    /// Where the visible area starts: rows above this are under the toolbar.
-    let topEdge: CGFloat
-    /// Where the first record sits when the list is scrolled to the top.
-    let restingTop: CGFloat
+private final class ScrollDirectionTracker {
+    var lastOffset: CGFloat = 0
+    /// Distance scrolled in the current direction (positive = down).
+    var travel: CGFloat = 0
+}
 
-    func body(content: Content) -> some View {
-        if #available(macOS 14.0, *), let parameters = style.parameters {
-            content.visualEffect { [topEdge, restingTop] effect, geometry in
-                let frame = geometry.frame(in: .scrollView(axis: .vertical))
-                let viewport = geometry.bounds(of: .scrollView(axis: .vertical)) ?? .zero
-                let visibleTop = topEdge
-                let visibleBottom = max(viewport.height, visibleTop + 1)
-                let center = (visibleTop + visibleBottom) / 2
-                let halfHeight = (visibleBottom - visibleTop) / 2
-                let offsetFromCenter = frame.midY - center
-                let isUpper = offsetFromCenter < 0
-                let curves = isUpper ? parameters.curvesTop : parameters.curvesBottom
-                let direction: CGFloat = isUpper ? -1 : 1
-                // Bend only within about a row and a half of each edge. At the
-                // top it is measured from where the first record rests, so an
-                // idle list is perfectly even and records only recede while
-                // they are scrolled up under the toolbar.
-                let band: CGFloat = 112
-                let reach: CGFloat = isUpper
-                    ? (restingTop - frame.minY) / band
-                    : (frame.maxY - (visibleBottom - band * 0.6)) / band
-                let bend = curves ? pow(min(max(reach, 0), 1.25), parameters.power) : 0
-                let scale = 1 - parameters.shrink * min(bend, 1.3)
-                let pullTowardsMiddle = -direction * halfHeight * parameters.pull * min(bend, 1.3)
-                let angle = curves ? direction * parameters.tilt * .pi / 180 * min(bend, 1.3) : 0
-                let outside = curves
-                    ? max(isUpper ? (visibleTop - frame.midY) / band : (frame.midY - visibleBottom) / band, 0)
-                    : 0
+/// The top `height` points of a view, for hit testing.
+private struct TopStrip: Shape {
+    var height: CGFloat
 
-                return effect
-                    .offset(y: pullTowardsMiddle)
-                    .scaleEffect(scale, anchor: .center)
-                    .rotation3DEffect(
-                        .radians(-angle),
-                        axis: (x: 1, y: 0, z: 0),
-                        anchor: .center,
-                        perspective: 0.6
-                    )
-                    // Light falls off as the surface turns away.
-                    .brightness(-parameters.shade * min(bend, 1.3))
-                    .saturation(1 - 0.2 * min(bend, 1))
-                    .blur(radius: parameters.outsideBlur * min(outside * 3, 1))
-                    .opacity(1 - min(outside, 0.6))
-            }
-        } else {
-            content
-        }
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(height, rect.height)))
     }
 }
 
@@ -1349,7 +1513,9 @@ private struct ClipRow: View, Equatable {
     let selectionColor: Color
     let selectionColorIsPreset: Bool
     let imageThumbnailCache: ImageThumbnailCache
-    let selectionGlass: SelectionGlassIdentity
+    let pile: PileContext
+    /// A copy drawn in the bottom pile: solid card, no hover.
+    let isPileCard: Bool
     let handleClick: (NSEvent?) -> Void
     let handleCopy: () -> Void
 
@@ -1366,7 +1532,8 @@ private struct ClipRow: View, Equatable {
             && lhs.selectionColor == rhs.selectionColor
             && lhs.selectionColorIsPreset == rhs.selectionColorIsPreset
             && lhs.imageThumbnailCache === rhs.imageThumbnailCache
-            && lhs.selectionGlass == rhs.selectionGlass
+            && lhs.pile == rhs.pile
+            && lhs.isPileCard == rhs.isPileCard
     }
 
     var body: some View {
@@ -1418,7 +1585,8 @@ private struct ClipRow: View, Equatable {
             ClipRowCardSurface(
                 isSelected: isSelected,
                 isHovered: isHovered,
-                selectionGlass: selectionGlass,
+                pile: pile,
+                isPileCard: isPileCard,
                 selectionColor: selectionColor,
                 selectionOpacity: SelectionRowMotion.surfaceOpacity(
                     isSelected: isSelected,
@@ -1487,41 +1655,90 @@ private struct ClipRow: View, Equatable {
 /// Each record is its own translucent card; the selected one becomes a tinted
 /// Liquid Glass slab on macOS 26. The glass layer exists only while selected,
 /// so scrolling never pays for off-screen glass.
+/// A record's own card. While the record is selected the shared selection
+/// glass (`SelectionGlassLayer`) takes its place, so the card steps aside.
 private struct ClipRowCardSurface: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.glassTransparency) private var transparency
     let isSelected: Bool
     let isHovered: Bool
-    let selectionGlass: SelectionGlassIdentity
+    let pile: PileContext
+    let isPileCard: Bool
     let selectionColor: Color
     let selectionOpacity: Double
+
+    var body: some View {
+        ZStack {
+            if isPileCard {
+                PileCardFill()
+            } else {
+                PileBacking(context: pile, inset: 3)
+            }
+            GlassCardBackground(isHovered: isHovered)
+                .opacity(selectionOpacity > 0 ? 0 : 1)
+        }
+        .padding(.vertical, 3)
+    }
+}
+
+private struct SelectionGlassPane: Identifiable, Equatable {
+    let id: String
+    let index: Int
+}
+
+/// The selection glass, drawn once for the whole list behind the rows. Rows
+/// have a fixed height, so a pane's position follows from its index: changing
+/// the selection always slides the glass from where it was to where it goes,
+/// even when the previous record has scrolled out of view. Each pane gets the
+/// same perspective fold as the record under it, so it hugs curved rows.
+private struct SelectionGlassLayer: View {
+    let panes: [SelectionGlassPane]
+    let rowHeight: CGFloat
+    let selectionColor: Color
+    let scrollEffect: ScrollEffectStyle
+    let topEdge: CGFloat
+    let count: Int
+    let bottomPadding: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            ForEach(panes) { pane in
+                SelectionGlassSlab(selectionColor: selectionColor)
+                    .frame(width: proxy.size.width, height: rowHeight)
+                    // Before positioning, so the fold measures this pane's own
+                    // frame rather than the whole list it sits in.
+                    .modifier(ListEdgeEffect(
+                        style: scrollEffect,
+                        topEdge: topEdge,
+                        index: pane.index,
+                        count: count,
+                        bottomPadding: bottomPadding
+                    ))
+                    .position(x: proxy.size.width / 2, y: CGFloat(pane.index) * rowHeight + rowHeight / 2)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            }
+        }
+        .animation(SelectionRowMotion.animation, value: panes)
+        .allowsHitTesting(false)
+    }
+}
+
+/// A lifted pane of tinted Liquid Glass with a soft specular rim.
+private struct SelectionGlassSlab: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.glassTransparency) private var transparency
+    let selectionColor: Color
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
     }
 
     var body: some View {
-        ZStack {
-            if !isSelected {
-                GlassCardBackground(isHovered: isHovered)
-            }
-            if selectionOpacity > 0 {
-                selectedSurface
-                    .opacity(selectionOpacity)
-                    // With a single selection the glass slides from the old
-                    // record to the new one instead of blinking between them.
-                    .matchedGeometryEffect(id: selectionGlass.id, in: selectionGlass.namespace)
-            }
-        }
-        .padding(.vertical, 3)
-        // The selected record floats up a touch, like a lifted pane of glass.
-        .scaleEffect(isSelected ? 1.008 : 1)
+        surface
+            .padding(.vertical, 3)
+            .scaleEffect(1.008)
     }
 
-    /// Selected records become a lifted pane of tinted Liquid Glass with a soft
-    /// specular rim, rather than a solid fill with a hard outline.
     @ViewBuilder
-    private var selectedSurface: some View {
+    private var surface: some View {
         let isDark = colorScheme == .dark
         // Specular highlight on top, melting into the accent colour below.
         let rim = LinearGradient(
@@ -1539,31 +1756,25 @@ private struct ClipRowCardSurface: View {
             .blur(radius: 6)
         if transparency == .opaque {
             shape.fill(selectionColor.opacity(isDark ? 0.55 : 0.4))
-                .overlay(shape.strokeBorder(rim, lineWidth: 1))
-                .shadow(color: selectionColor.opacity(0.35), radius: 12, y: 5)
+                .background(glow)
+                .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
         } else if #available(macOS 26.0, *) {
             Color.clear
                 .glassEffect(
-                    .regular.tint(selectionColor.opacity(isDark ? 0.42 : 0.3)).interactive(),
+                    .regular.tint(selectionColor.opacity(isDark ? 0.42 : 0.3)),
                     in: shape
                 )
-                // No drop shadow here: under translucent glass it shows
-                // through and turns the whole pane grey.
+                // No drop shadow: under translucent glass it shows through and
+                // turns the whole pane grey.
                 .background(glow)
                 .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
         } else {
             shape.fill(.ultraThinMaterial)
                 .overlay(shape.fill(selectionColor.opacity(isDark ? 0.4 : 0.3)))
-                .overlay(shape.strokeBorder(rim, lineWidth: 1))
-                .shadow(color: selectionColor.opacity(0.3), radius: 12, y: 5)
+                .background(glow)
+                .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
         }
     }
-}
-
-/// Where a row's selection glass belongs, so it can slide between records.
-private struct SelectionGlassIdentity: Equatable {
-    let namespace: Namespace.ID
-    let id: String
 }
 
 private struct CachedImageThumbnail: View {

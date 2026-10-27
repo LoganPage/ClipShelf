@@ -87,8 +87,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func showWindow() {
+        makeMainWindowIfNeeded()
+        AppearancePreferences.apply(to: window)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: Menu bar reveal
+
+    private var isRevealingFromStatusItem = false
+
+    /// 显示 ClipShelf from the menu bar. A hidden or closed window pours out of
+    /// the menu bar icon; one that is open but behind other windows is simply
+    /// brought to the front.
+    @objc func showWindowFromMenu() {
+        revealFromStatusItem(withSettings: false)
+    }
+
+    /// 设置 from the menu bar. A hidden window pours out together with its
+    /// settings, as one piece; an open window comes to the front and then
+    /// settings pour out of the settings button as usual.
+    @objc func showSettingsFromMenu() {
+        revealFromStatusItem(withSettings: true)
+    }
+
+    private func revealFromStatusItem(withSettings: Bool) {
+        guard !isRevealingFromStatusItem else { return }
+        let isHidden = window.map { !$0.isVisible && !$0.isMiniaturized } ?? true
+        guard isHidden, !NSApp.isHidden, let source = statusItemRectOnScreen() else {
+            withSettings ? showSettings() : showWindow()
+            return
+        }
+
+        makeMainWindowIfNeeded()
+        guard let window = window as? ClipShelfMainWindow else {
+            withSettings ? showSettings() : showWindow()
+            return
+        }
+        isRevealingFromStatusItem = true
+        AppearancePreferences.apply(to: window)
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Render the window off screen so there is something to animate.
+        let target = window.frame
+        window.allowsOffscreenPlacement = true
+        window.setFrameOrigin(ClipShelfMainWindow.parkingOrigin)
+        window.orderFrontRegardless()
+        window.displayIfNeeded()
+        if withSettings {
+            SettingsWindowController.shared.prepareNow(parent: window)
+        }
+
+        // Give the window server a moment to draw it before capturing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self, weak window] in
+            guard let self, let window else { return }
+            var image = WindowSnapshot.capture(window)
+            if withSettings, let base = image {
+                image = SettingsWindowController.shared.composeOver(mainImage: base, parent: window) ?? base
+            }
+            let land = { [weak self, weak window] in
+                guard let self, let window else { return }
+                window.setFrame(target, display: true)
+                window.allowsOffscreenPlacement = false
+                window.makeKeyAndOrderFront(nil)
+                if withSettings {
+                    SettingsWindowController.shared.showImmediately(from: window)
+                }
+                self.isRevealingFromStatusItem = false
+            }
+            guard let image else {
+                land()
+                return
+            }
+            GenieAnimator.run(image: image, from: source, to: target, opening: true, duration: 0.55, above: nil, completion: land)
+        }
+    }
+
+    private func statusItemRectOnScreen() -> NSRect? {
+        guard let buttonWindow = statusItem?.button?.window else { return nil }
+        return buttonWindow.frame
+    }
+
+    private func makeMainWindowIfNeeded() {
         if window == nil {
-            let window = NSWindow(
+            let window = ClipShelfMainWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 720, height: 552),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
@@ -112,10 +194,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.setFrameAutosaveName("ClipShelfMainWindow")
             self.window = window
         }
-
-        AppearancePreferences.apply(to: window)
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     /// The desktop shows through, blurred and tinted, behind every card and
@@ -151,6 +229,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func toggleClipboardHistory() {
         store.isClipboardHistoryEnabled.toggle()
+    }
+
+    func toggleSettingsFromShortcut() {
+        if SettingsWindowController.shared.isVisible {
+            SettingsWindowController.shared.close()
+        } else {
+            showSettings()
+        }
     }
 
     @objc func showSettings() {
@@ -244,13 +330,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func rebuildMenu(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(menuItem(title: "显示 ClipShelf", action: #selector(showWindow)))
+        menu.addItem(menuItem(title: "显示 ClipShelf", action: #selector(showWindowFromMenu)))
         menu.addItem(menuItem(title: "选择截图文件夹", action: #selector(chooseFolder)))
         menu.addItem(menuItem(
             title: StatusMenuText.recordingToggleTitle(isEnabled: store.isClipboardHistoryEnabled),
             action: #selector(toggleClipboardHistory)
         ))
-        menu.addItem(menuItem(title: "设置", action: #selector(showSettings)))
+        menu.addItem(menuItem(title: "设置", action: #selector(showSettingsFromMenu)))
         menu.addItem(.separator())
 
         if store.items.isEmpty {
@@ -283,5 +369,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         return item
+    }
+}
+
+/// The main window. It can be placed off screen briefly so it can be rendered
+/// for the reveal animation; AppKit would otherwise pull it back on screen.
+final class ClipShelfMainWindow: NSWindow {
+    static let parkingOrigin = NSPoint(x: -30_000, y: -30_000)
+    var allowsOffscreenPlacement = false
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        allowsOffscreenPlacement ? frameRect : super.constrainFrameRect(frameRect, to: screen)
     }
 }

@@ -12,10 +12,11 @@ struct ClipShelfApp: App {
             EmptyView()
         }
         .commands {
-            // "设置…" (⌘,) opens ClipShelf's own settings window.
+            // "设置…" (⌘,) opens ClipShelf's own settings window, or closes it
+            // when it is already open.
             CommandGroup(replacing: .appSettings) {
                 Button("设置…") {
-                    appDelegate.showSettings()
+                    appDelegate.toggleSettingsFromShortcut()
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }

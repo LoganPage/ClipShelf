@@ -16,11 +16,13 @@ struct SettingsView: View {
     @State private var hotKey = HotKeyDefaults.load()
     @State private var clearSelectionHotKey = ClearSelectionHotKeyDefaults.load()
     @State private var pinHotKey = PinHotKeyDefaults.load()
+    @State private var closeSettingsHotKey = CloseSettingsHotKeyDefaults.load()
     @State private var appIconChoice = AppIconPreferences.selected
     @State private var hostWindow: NSWindow?
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var glassTransparency = GlassPreferences.value
     @State private var scrollEffect = ScrollEffectPreferences.value
+    @State private var listEntrance = ListEntrancePreferences.value
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
     @State private var historyLimitText = ""
     @State private var oldHistoryRetentionDays = OldHistoryCleanup.retentionDays
@@ -35,20 +37,6 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Title and 完成 share one row so the scrolling area gets the height.
-            HStack {
-                Text("设置")
-                    .font(.system(size: 20, weight: .semibold))
-                Spacer()
-                DoneGlassButton {
-                    commitHistoryLimit()
-                    onClose()
-                }
-            }
-            .padding(.horizontal, 22)
-            .padding(.top, 18)
-            .padding(.bottom, 4)
-
             ScrollView {
                 // Built in full before the panel fades in: lazily adding sections
                 // re-measured everything above them and stuttered while visible,
@@ -67,9 +55,29 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 10)
-                .padding(.bottom, 22)
+                .padding(.bottom, 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .clipShelfGlassButtons()
+                .modifier(CapsuleButtonShape())
+            }
+            // The title and ✓ float over the content as glass, and content
+            // softly blurs away under them and at the bottom edge.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack {
+                    Text("设置")
+                        .font(.system(size: 17, weight: .semibold))
+                        .padding(.horizontal, 18)
+                        .frame(height: 40)
+                        .clipShelfGlass(in: Capsule())
+                    Spacer()
+                    DoneGlassButton {
+                        commitHistoryLimit()
+                        onClose()
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
             }
             .background(OverlayScrollerConfigurator())
         }
@@ -160,24 +168,46 @@ struct SettingsView: View {
     }
 
     private var scrollEffectSection: some View {
-        settingsSection("滚动效果") {
-            LiquidSegmentedControl(
-                options: ScrollEffectStyle.allCases,
-                selection: Binding(
-                    get: { scrollEffect },
-                    set: { value in
-                        scrollEffect = value
-                        ScrollEffectPreferences.value = value
-                    }
-                ),
-                title: \.title,
-                segmentWidth: 84
-            )
-            .accessibilityLabel("滚动效果")
+        settingsSection("列表") {
+            HStack {
+                Text("滚动效果")
+                Spacer()
+                LiquidSegmentedControl(
+                    options: ScrollEffectStyle.allCases,
+                    selection: Binding(
+                        get: { scrollEffect },
+                        set: { value in
+                            scrollEffect = value
+                            ScrollEffectPreferences.value = value
+                        }
+                    ),
+                    title: \.title,
+                    segmentWidth: 76
+                )
+                .accessibilityLabel("滚动效果")
+            }
 
-            Text("记录滚到列表边缘时的样子。轻度只在最边缘微微后翻淡出；只底部让记录在底部像滚轮一样卷走；滚轮在上下两端都有明显的翻转。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            settingsCaption("叠放：记录滑到工具栏下时逐渐模糊，底部的记录收成一摞、随滚动展开；仅模糊：只保留顶部的渐变模糊。")
+
+            HStack {
+                Text("切换动画")
+                Spacer()
+                LiquidSegmentedControl(
+                    options: ListEntranceStyle.allCases,
+                    selection: Binding(
+                        get: { listEntrance },
+                        set: { value in
+                            listEntrance = value
+                            ListEntrancePreferences.value = value
+                        }
+                    ),
+                    title: \.title,
+                    segmentWidth: 84
+                )
+                .accessibilityLabel("切换动画")
+            }
+
+            settingsCaption("切换记录类型时，新记录出现的方式。")
         }
     }
 
@@ -254,23 +284,18 @@ struct SettingsView: View {
             HStack {
                 Text("最多保留记录")
                 Spacer()
-                TextField("100", text: $historyLimitText)
-                    .multilineTextAlignment(.trailing)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 82)
-                    .focused($historyLimitIsFocused)
-                    .onSubmit(commitHistoryLimit)
-                    .onChange(of: historyLimitIsFocused) { isFocused in
-                        if !isFocused {
-                            commitHistoryLimit()
-                        }
+                LiquidStepper(
+                    text: $historyLimitText,
+                    onIncrement: { updateHistoryLimit(min(store.maxItems + 1, HistoryLimitPreferences.allowedRange.upperBound)) },
+                    onDecrement: { updateHistoryLimit(max(store.maxItems - 1, HistoryLimitPreferences.allowedRange.lowerBound)) },
+                    onCommit: commitHistoryLimit,
+                    focus: $historyLimitIsFocused
+                )
+                .onChange(of: historyLimitIsFocused) { isFocused in
+                    if !isFocused {
+                        commitHistoryLimit()
                     }
-
-                Stepper("", value: Binding(
-                    get: { store.maxItems },
-                    set: updateHistoryLimit
-                ), in: HistoryLimitPreferences.allowedRange)
-                .labelsHidden()
+                }
             }
 
             settingsCaption("可设置 1–10000 条。调低后会立即删除最旧的未置顶记录，只影响 ClipShelf 历史，不删除任何原文件。")
@@ -301,45 +326,39 @@ struct SettingsView: View {
             HStack {
                 Text("多选后点击已选记录")
                 Spacer()
-                Picker("", selection: Binding(
-                    get: { multiSelectionClickSelectedBehavior },
-                    set: updateMultiSelectionClickSelectedBehavior
-                )) {
-                    ForEach(MultiSelectionClickSelectedBehavior.allCases) { behavior in
-                        Text(behavior.title).tag(behavior)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
+                LiquidMenu(
+                    options: MultiSelectionClickSelectedBehavior.allCases,
+                    selection: Binding(
+                        get: { multiSelectionClickSelectedBehavior },
+                        set: updateMultiSelectionClickSelectedBehavior
+                    ),
+                    title: \.title
+                )
             }
 
             HStack {
                 Text("多选后点击未选记录")
                 Spacer()
-                Picker("", selection: Binding(
-                    get: { multiSelectionClickUnselectedBehavior },
-                    set: updateMultiSelectionClickUnselectedBehavior
-                )) {
-                    ForEach(MultiSelectionClickUnselectedBehavior.allCases) { behavior in
-                        Text(behavior.title).tag(behavior)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
+                LiquidMenu(
+                    options: MultiSelectionClickUnselectedBehavior.allCases,
+                    selection: Binding(
+                        get: { multiSelectionClickUnselectedBehavior },
+                        set: updateMultiSelectionClickUnselectedBehavior
+                    ),
+                    title: \.title
+                )
             }
 
             settingsCaption("单选时再点一次自身会取消选择。多选时点击已选、未选记录的行为可以分别设置。")
 
             HStack {
                 Text("点击恢复期")
-                Slider(
+                LiquidSlider(
                     value: Binding(
                         get: { clickRecoveryDuration },
                         set: updateClickRecoveryDuration
                     ),
-                    in: 0...1,
+                    range: 0...1,
                     step: 0.1
                 )
                 .frame(maxWidth: 260)
@@ -413,7 +432,17 @@ struct SettingsView: View {
                 )
             }
 
-            Text("点击快捷键按钮后按新的组合键。按 Esc 取消录入。")
+            HStack {
+                Text("关闭设置")
+                Spacer()
+                HotKeyRecorderView(
+                    configuration: $closeSettingsHotKey,
+                    save: CloseSettingsHotKeyDefaults.save,
+                    pausesGlobalHotKey: false
+                )
+            }
+
+            Text("点击快捷键按钮后按新的组合键，按 Esc 取消录入。设置窗口也可以用 ⌘, 或 Esc 打开 / 关闭。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -424,17 +453,14 @@ struct SettingsView: View {
             HStack {
                 Text("保留最近")
                 Spacer()
-                Picker("保留最近", selection: Binding(
-                    get: { oldHistoryRetentionDays },
-                    set: updateOldHistoryRetentionDays
-                )) {
-                    ForEach(OldHistoryCleanup.retentionOptions, id: \.self) { days in
-                        Text("\(days) 天").tag(days)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
+                LiquidMenu(
+                    options: OldHistoryCleanup.retentionOptions,
+                    selection: Binding(
+                        get: { oldHistoryRetentionDays },
+                        set: updateOldHistoryRetentionDays
+                    ),
+                    title: { "\($0) 天" }
+                )
             }
 
             HStack(spacing: 10) {
@@ -477,10 +503,8 @@ struct SettingsView: View {
         HStack {
             Text(title)
             Spacer()
-            Toggle(title, isOn: isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
+            LiquidToggle(isOn: isOn)
+                .accessibilityLabel(title)
         }
     }
 
@@ -497,9 +521,10 @@ struct SettingsView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 4)
+                .modifier(ScrollEdgeBlur())
 
             VStack(alignment: .leading, spacing: 12) {
-                content()
+                EdgeBlurredRows { content() }
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -745,6 +770,60 @@ private struct CircleButtonShape: ViewModifier {
             content.buttonBorderShape(.circle)
         } else {
             content.buttonBorderShape(.roundedRectangle)
+        }
+    }
+}
+
+private struct CapsuleButtonShape: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content.buttonBorderShape(.capsule)
+        } else {
+            content
+        }
+    }
+}
+
+/// Applies `ScrollEdgeBlur` to each row of a settings card separately, so
+/// rows blur one by one as they slide under the header or off the bottom,
+/// like records under the main window's toolbar.
+private struct EdgeBlurredRows<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if #available(macOS 15.0, *) {
+            ForEach(subviews: content) { row in
+                row.modifier(ScrollEdgeBlur())
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// Blurs and fades a view in proportion to how far it has slid under the
+/// floating header or past the bottom edge of the settings scroll view.
+private struct ScrollEdgeBlur: ViewModifier {
+    /// Where blurring starts: the bottom of the 设置 capsule (16 + 40) plus
+    /// half its height.
+    private static let topLine: CGFloat = 16 + 40 + 20
+    /// Distance over which the blur builds up.
+    private static let ramp: CGFloat = 22
+
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content.visualEffect { effect, geometry in
+                let frame = geometry.frame(in: .scrollView(axis: .vertical))
+                let viewport = geometry.bounds(of: .scrollView(axis: .vertical)) ?? .zero
+                let top = min(max((Self.topLine - frame.minY) / Self.ramp, 0), 1)
+                let bottom = min(max((frame.maxY - (viewport.height - 8)) / Self.ramp, 0), 1)
+                let amount = max(top, bottom)
+                return effect
+                    .blur(radius: 7 * amount)
+                    .opacity(1 - 0.55 * Double(amount))
+            }
+        } else {
+            content
         }
     }
 }

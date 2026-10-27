@@ -48,6 +48,12 @@ struct HotKeyConfiguration: Codable, Equatable {
         modifiers: UInt32(cmdKey)
     )
 
+    /// ⌘W closes the settings window by default.
+    static let defaultCloseSettingsValue = HotKeyConfiguration(
+        keyCode: UInt32(kVK_ANSI_W),
+        modifiers: UInt32(cmdKey)
+    )
+
     static let defaultPinValue = HotKeyConfiguration(
         keyCode: UInt32(kVK_ANSI_P),
         modifiers: UInt32(cmdKey | shiftKey)
@@ -132,6 +138,26 @@ enum HotKeyDefaults {
         guard let data = AppEnvironment.userDefaults.data(forKey: key),
               let configuration = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) else {
             return .defaultValue
+        }
+        return configuration
+    }
+
+    static func save(_ configuration: HotKeyConfiguration) {
+        if let data = try? JSONEncoder().encode(configuration) {
+            AppEnvironment.userDefaults.set(data, forKey: key)
+            NotificationCenter.default.post(name: changedNotification, object: configuration)
+        }
+    }
+}
+
+enum CloseSettingsHotKeyDefaults {
+    static let changedNotification = Notification.Name("ClipShelfCloseSettingsHotKeyChanged")
+    private static let key = "closeSettingsHotKey.configuration"
+
+    static func load() -> HotKeyConfiguration {
+        guard let data = AppEnvironment.userDefaults.data(forKey: key),
+              let configuration = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) else {
+            return .defaultCloseSettingsValue
         }
         return configuration
     }
