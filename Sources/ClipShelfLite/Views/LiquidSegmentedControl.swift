@@ -30,10 +30,15 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
     @State private var interactionToken = 0
 
     private let inset: CGFloat = 4
-    private let liftSpring = Animation.spring(response: 0.24, dampingFraction: 0.66)
-    private let glideSpring = Animation.spring(response: 0.3, dampingFraction: 0.74)
-    private let settleSpring = Animation.spring(response: 0.42, dampingFraction: 0.55)
-    private let tapHoldDuration: TimeInterval = 0.26
+    // Unhurried, soft springs: the lens should feel like liquid, not a snap.
+    private let liftSpring = Animation.spring(response: 0.32, dampingFraction: 0.72)
+    private let glideSpring = Animation.spring(response: 0.42, dampingFraction: 0.8)
+    private let settleSpring = Animation.spring(response: 0.55, dampingFraction: 0.62)
+    /// Time for a tapped lens to glide over and come to rest before dropping.
+    private let tapHoldDuration: TimeInterval = 0.34
+    /// After a drag, let the lens land before the selection (and whatever it
+    /// drives, like rebuilding the history list) changes underneath it.
+    private let dragCommitDelay: TimeInterval = 0.2
 
     var body: some View {
         GeometryReader { proxy in
@@ -109,7 +114,9 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
                     .overlay(lensShape.stroke(AppTheme.subtleBorder, lineWidth: 0.5))
                     .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
             } else if #available(macOS 26.0, *) {
-                base.glassEffect(.clear.interactive(), in: lensShape)
+                // Not `.interactive()`: the lens is animated here, and the
+                // system's own press response would fight that motion.
+                base.glassEffect(.clear, in: lensShape)
             } else {
                 base
                     .background(.ultraThinMaterial, in: lensShape)
@@ -196,25 +203,31 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
                 let landing = didDrag
                     ? layout.nearestIndex(to: layout.rubberBanded(value.location.x))
                     : layout.nearestIndex(to: value.location.x)
-                if options[landing] != selection {
+                let token = interactionToken
+                // Change the selection only once the motion is done, so the
+                // work it triggers never competes with the animation.
+                let commit = {
+                    guard token == interactionToken, options[landing] != selection else { return }
                     selection = options[landing]
                 }
 
                 guard !didDrag else {
                     drop(at: landing)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + dragCommitDelay, execute: commit)
                     return
                 }
 
-                // Tap: glide the lifted lens to the tapped option, hold, then drop.
-                let token = interactionToken
+                // Tap: glide the lifted lens to the tapped option, let it
+                // settle, then drop it into the bar and switch.
                 let distance = abs(layout.center(of: landing) - (lensCenter ?? layout.center(of: landing)))
                 withAnimation(glideSpring) {
                     lensCenter = layout.center(of: landing)
                 }
-                pulseStretch(by: min(distance / max(layout.segment, 1) * 0.14, 0.3))
+                pulseStretch(by: min(distance / max(layout.segment, 1) * 0.1, 0.2))
                 DispatchQueue.main.asyncAfter(deadline: .now() + tapHoldDuration) {
                     guard token == interactionToken, !isTracking else { return }
                     drop(at: landing)
+                    commit()
                 }
             }
     }
@@ -231,12 +244,12 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
     /// Elongates briefly, then wobbles back: the "duang" on every jump.
     private func pulseStretch(by amount: CGFloat) {
         guard amount > 0.01 else { return }
-        withAnimation(.spring(response: 0.14, dampingFraction: 0.9)) {
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.9)) {
             stretch = 1 + amount
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             guard !isTracking else { return }
-            withAnimation(.spring(response: 0.46, dampingFraction: 0.42)) {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.5)) {
                 stretch = 1
             }
         }

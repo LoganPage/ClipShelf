@@ -12,7 +12,6 @@ struct MainView: View {
     @ObservedObject var watcher: ScreenshotFolderWatcher
     @State private var searchText = ""
     @State private var kindFilter: ClipKindFilter = HistoryFilterPreferences.value
-    @State private var showingSettings = false
     @State private var selectedIDs = Set<ClipItem.ID>()
     @State private var focusedID: ClipItem.ID?
     @State private var anchorID: ClipItem.ID?
@@ -46,6 +45,9 @@ struct MainView: View {
     @FocusState private var isSearchFocused: Bool
     @State private var toolbarHeight: CGFloat = 150
     @State private var glassTransparency = GlassPreferences.value
+    @State private var scrollEffect = ScrollEffectPreferences.value
+    @State private var copyToast: CopyToast?
+    @Namespace private var selectionGlassNamespace
     @State private var titlebarHeight: CGFloat = 28
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = GlassMetrics.edgeInset
@@ -54,6 +56,9 @@ struct MainView: View {
 
     /// The glass toolbar floats over the top of the list, so rows start below it
     /// and every viewport calculation treats that strip as covered.
+    /// Height of the custom titlebar row (traffic lights, icon, title).
+    private var titleRowHeight: CGFloat { max(titlebarHeight, 44) }
+
     private var historyListVerticalInset: CGFloat {
         toolbarHeight + GlassMetrics.stackSpacing - rowCardInset
     }
@@ -97,24 +102,23 @@ struct MainView: View {
                 toolbarHeight = rounded
             }
         }
+        .overlay(alignment: .bottom) {
+            if let copyToast {
+                CopyToastView(count: copyToast.count)
+                    .padding(.bottom, 24)
+                    .id(copyToast.id)
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .bottom).combined(with: .scale(scale: 0.85)).combined(with: .opacity),
+                            removal: .opacity.combined(with: .scale(scale: 0.95))
+                        )
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
         .frame(minWidth: 680, minHeight: 552)
         .environment(\.glassTransparency, glassTransparency)
         .preferredColorScheme(resolvedColorScheme)
-        .overlay {
-            ZStack {
-                if showingSettings {
-                    settingsOverlay
-                        .transition(
-                            .asymmetric(
-                                insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .center)),
-                                removal: .opacity.combined(with: .scale(scale: 0.99, anchor: .center))
-                            )
-                        )
-                        .zIndex(10)
-                }
-            }
-        }
-        .animation(.spring(response: 0.26, dampingFraction: 0.88), value: showingSettings)
         .background(WindowReader { window in
             hostWindow = window
             if let window {
@@ -144,6 +148,14 @@ struct MainView: View {
             lastRevealedNewest = HistoryScrollTarget.newestDate(in: store.items)
             installCommandKeyMonitorIfNeeded()
             updateChecker.checkIfNeeded()
+            SettingsWindowController.shared.configure(store: store, watcher: watcher)
+            // Build the settings window ahead of time, off screen, so the first
+            // open is instant and has a snapshot to animate.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                if let hostWindow {
+                    SettingsWindowController.shared.prepare(parent: hostWindow)
+                }
+            }
         }
         .onDisappear {
             endDragSelection()
@@ -159,35 +171,58 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .clipShelfOpenSettings)) { _ in
             openSettings()
         }
+        .onReceive(NotificationCenter.default.publisher(for: ScrollEffectPreferences.changedNotification)) { notification in
+            scrollEffect = notification.object as? ScrollEffectStyle ?? ScrollEffectPreferences.value
+        }
         .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.changedNotification)) { notification in
             withAnimation(.easeInOut(duration: 0.25)) {
                 glassTransparency = notification.object as? GlassTransparency ?? GlassPreferences.value
             }
         }
-    }
-
-    private var settingsOverlay: some View {
-        GeometryReader { proxy in
-            let panelWidth = min(max(proxy.size.width - 96, 560), 760)
-            let panelHeight = max(proxy.size.height - 96, 360)
-
-            ZStack {
-                    AppTheme.overlayBackground
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        closeSettings()
-                    }
-
-                SettingsView(store: store, watcher: watcher) {
-                    closeSettings()
-                }
-                .frame(width: panelWidth, height: panelHeight)
-                .clipShelfGlassPanel()
-                .contentShape(Rectangle())
-                .onTapGesture { }
+        // One O(1) change signal instead of re-scanning the history on every render.
+        .onChange(of: store.revision) { _ in
+            refreshFilteredItemsIfNeeded()
+            prewarmSearchIndexes(for: store.items)
+            imageThumbnailCache.setMaximumEntryCount(thumbnailCacheLimit)
+        }
+        .onChange(of: searchText) { _ in
+            refreshFilteredItemsIfNeeded()
+            clearSelection()
+        }
+        .onChange(of: kindFilter) { _ in
+            refreshFilteredItemsIfNeeded()
+            clearSelection()
+            HistoryFilterPreferences.value = kindFilter
+            DispatchQueue.main.async {
+                scrollHistoryToTop()
             }
-            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            clearSelection()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SelectionColorPreferences.changedNotification)) { _ in
+            selectionColor = SelectionColorPreferences.color
+            selectionColorPreset = SelectionColorPreferences.selectedPreset
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SelectionClickBehaviorPreferences.changedNotification)) { notification in
+            switchToClickedRecord = notification.object as? Bool ?? SelectionClickBehaviorPreferences.switchToClickedRecord
+            multiSelectionClickSelectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickSelectedBehavior
+            multiSelectionClickUnselectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickUnselectedBehavior
+        }
+        .onReceive(NotificationCenter.default.publisher(for: DragSelectionPreferences.changedNotification)) { notification in
+            postDragClickRecoveryDuration = notification.object as? TimeInterval ?? DragSelectionPreferences.clickRecoveryDuration
+            if postDragClickRecoveryDuration <= 0 {
+                suppressRowTapUntil = .distantPast
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppIconPreferences.changedNotification)) { notification in
+            appIconChoice = notification.object as? AppIconChoice ?? AppIconPreferences.selected
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ClearSelectionHotKeyDefaults.changedNotification)) { notification in
+            clearSelectionHotKey = notification.object as? HotKeyConfiguration ?? ClearSelectionHotKeyDefaults.load()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PinHotKeyDefaults.changedNotification)) { notification in
+            pinHotKey = notification.object as? HotKeyConfiguration ?? PinHotKeyDefaults.load()
         }
     }
 
@@ -205,10 +240,17 @@ struct MainView: View {
                             selectionColor: selectionColor,
                             selectionColorIsPreset: selectionColorPreset != nil,
                             imageThumbnailCache: imageThumbnailCache,
+                            selectionGlass: SelectionGlassIdentity(
+                                namespace: selectionGlassNamespace,
+                                // One shared identity slides between records; with
+                                // several selected each keeps its own.
+                                id: selectedIDs.count == 1 ? "selection" : "selection-\(item.id)"
+                            ),
                             handleClick: { event in handleRowClick(item, event: event) },
-                            handleCopy: { store.copy(actionItems(for: item)) }
+                            handleCopy: { performCopy(actionItems(for: item)) }
                         )
                         .equatable()
+                        .modifier(RotaryScrollEffect(style: scrollEffect, topEdge: toolbarHeight))
                         .id(item.id)
                     }
                 }
@@ -227,7 +269,7 @@ struct MainView: View {
             })
             .background(
                 DragSelectionCaptureView(
-                    isEnabled: !showingSettings,
+                    isEnabled: true,
                     clickRecoveryDuration: postDragClickRecoveryDuration,
                     itemIDs: filteredItemIDs,
                     rowHeight: historyRowHeight,
@@ -254,51 +296,10 @@ struct MainView: View {
                     }
                 )
             )
-            // One O(1) change signal instead of re-scanning the history on every render.
+            // Only scrolling needs the proxy; all state observers live on the
+            // root view so they keep working while the list is empty.
             .onChange(of: store.revision) { _ in
-                refreshFilteredItemsIfNeeded()
-                prewarmSearchIndexes(for: store.items)
-                imageThumbnailCache.setMaximumEntryCount(thumbnailCacheLimit)
                 revealNewestItemIfNeeded(proxy: proxy)
-            }
-            .onChange(of: searchText) { _ in
-                refreshFilteredItemsIfNeeded()
-                clearSelection()
-            }
-            .onChange(of: kindFilter) { _ in
-                refreshFilteredItemsIfNeeded()
-                clearSelection()
-                HistoryFilterPreferences.value = kindFilter
-                DispatchQueue.main.async {
-                    scrollHistoryToTop()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-                clearSelection()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: SelectionColorPreferences.changedNotification)) { _ in
-                selectionColor = SelectionColorPreferences.color
-                selectionColorPreset = SelectionColorPreferences.selectedPreset
-            }
-            .onReceive(NotificationCenter.default.publisher(for: SelectionClickBehaviorPreferences.changedNotification)) { notification in
-                switchToClickedRecord = notification.object as? Bool ?? SelectionClickBehaviorPreferences.switchToClickedRecord
-                multiSelectionClickSelectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickSelectedBehavior
-                multiSelectionClickUnselectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickUnselectedBehavior
-            }
-            .onReceive(NotificationCenter.default.publisher(for: DragSelectionPreferences.changedNotification)) { notification in
-                postDragClickRecoveryDuration = notification.object as? TimeInterval ?? DragSelectionPreferences.clickRecoveryDuration
-                if postDragClickRecoveryDuration <= 0 {
-                    suppressRowTapUntil = .distantPast
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: AppIconPreferences.changedNotification)) { notification in
-                appIconChoice = notification.object as? AppIconChoice ?? AppIconPreferences.selected
-            }
-            .onReceive(NotificationCenter.default.publisher(for: ClearSelectionHotKeyDefaults.changedNotification)) { notification in
-                clearSelectionHotKey = notification.object as? HotKeyConfiguration ?? ClearSelectionHotKeyDefaults.load()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: PinHotKeyDefaults.changedNotification)) { notification in
-                pinHotKey = notification.object as? HotKeyConfiguration ?? PinHotKeyDefaults.load()
             }
         }
     }
@@ -364,7 +365,7 @@ struct MainView: View {
                 .floatingTooltip("发现新版本 \(update.versionText)，点击打开下载页")
             }
         }
-        .frame(height: max(titlebarHeight, 44))
+        .frame(height: titleRowHeight)
         .background(WindowDragHandle())
     }
 
@@ -420,8 +421,27 @@ struct MainView: View {
                     watcher.chooseFolder(attachedTo: hostWindow)
                 }
                 toolbarButton("gearshape", tooltip: "设置") {
-                    openSettings()
+                    toggleSettings()
                 }
+                .onHover { inside in
+                    guard inside else { return }
+                    let controller = SettingsWindowController.shared
+                    if controller.isVisible {
+                        controller.prefetchClosingSnapshot()
+                    } else {
+                        controller.prefetchOpeningSnapshot(for: hostWindow)
+                    }
+                }
+                // Where the settings window pours out of and collapses back into.
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { SettingsWindowController.shared.anchorInWindow = proxy.frame(in: .global) }
+                            .onChange(of: proxy.frame(in: .global)) { frame in
+                                SettingsWindowController.shared.anchorInWindow = frame
+                            }
+                    }
+                )
             }
             .clipShelfGlassGroup()
 
@@ -458,15 +478,11 @@ struct MainView: View {
     }
 
     private func openSettings() {
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.88)) {
-            showingSettings = true
-        }
+        SettingsWindowController.shared.show(from: hostWindow)
     }
 
-    private func closeSettings() {
-        withAnimation(.easeOut(duration: 0.16)) {
-            showingSettings = false
-        }
+    private func toggleSettings() {
+        SettingsWindowController.shared.toggle(from: hostWindow)
     }
 
     private func refreshFilteredItemsIfNeeded() {
@@ -637,8 +653,7 @@ struct MainView: View {
     }
 
     private func shouldHandleMainWindowKeyEvent(_ event: NSEvent) -> Bool {
-        guard !showingSettings,
-              let window = event.window,
+        guard let window = event.window,
               window === NSApp.keyWindow,
               window.title.hasPrefix("ClipShelf") else {
             return false
@@ -659,7 +674,7 @@ struct MainView: View {
         case "a":
             selectAllVisibleItems()
         case "c":
-            store.copy(actionItems)
+            performCopy(actionItems)
         case "z":
             guard !isSearchFocused else { return }
             undoLastDeletion()
@@ -708,9 +723,23 @@ struct MainView: View {
     }
 
     private func copyActionItems() {
-        let items = actionItems
+        performCopy(actionItems)
+    }
+
+    /// Every copy goes through here so it always confirms with a toast.
+    private func performCopy(_ items: [ClipItem]) {
         guard !items.isEmpty else { return }
         store.copy(items)
+        let toast = CopyToast(count: items.count)
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+            copyToast = toast
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            guard copyToast?.id == toast.id else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                copyToast = nil
+            }
+        }
     }
 
     private func selectAllVisibleItems() {
@@ -1081,17 +1110,116 @@ struct MainView: View {
     }
 
     private var emptyView: some View {
-        VStack(spacing: 10) {
-            Image(systemName: store.items.isEmpty ? "tray" : "line.3.horizontal.decrease.circle")
+        let content = emptyStateContent
+        return VStack(spacing: 10) {
+            Image(systemName: content.symbol)
                 .font(.system(size: 42))
                 .foregroundStyle(.secondary)
-            Text(store.items.isEmpty ? "还没有记录" : "没有匹配的记录")
+            Text(content.title)
                 .font(.system(size: 17, weight: .semibold))
-            Text(store.items.isEmpty ? "复制文字或文件，或者截一张图。" : "试试其它记录类型或搜索内容。")
+            Text(content.message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Says why the list is empty: no history at all, no records of the chosen
+    /// type, or no search results.
+    private var emptyStateContent: (symbol: String, title: String, message: String) {
+        if store.items.isEmpty {
+            return ("tray", "还没有记录", "复制文字或文件，或者截一张图。")
+        }
+        let isSearching = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !isSearching, kindFilter != .all {
+            let hint: String
+            switch kindFilter {
+            case .file: hint = "在访达里复制文件后，会出现在这里。"
+            case .image: hint = "复制图片或截图后，会出现在这里。"
+            case .text, .all: hint = "复制文字后，会出现在这里。"
+            }
+            return ("tray", "还没有\(kindFilter.title)记录", hint)
+        }
+        return ("magnifyingglass", "没有匹配的记录", "试试其它关键词或记录类型。")
+    }
+}
+
+/// Perspective fold: towards the top and bottom the list bends away from the
+/// viewer like a page curving out of sight. The bend grows with a power of the
+/// distance from the middle, so most rows stay flat and readable and only the
+/// last row or two at each edge recede: smaller, drawn towards the middle,
+/// tilted and darker. Strength
+/// comes from the 滚动效果 setting. Render-only (`visualEffect`), so it never
+/// re-lays out rows.
+private struct RotaryScrollEffect: ViewModifier {
+    let style: ScrollEffectStyle
+    /// Where the visible area starts: rows above this are under the toolbar.
+    let topEdge: CGFloat
+
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *), let parameters = style.parameters {
+            content.visualEffect { [topEdge] effect, geometry in
+                let frame = geometry.frame(in: .scrollView(axis: .vertical))
+                let viewport = geometry.bounds(of: .scrollView(axis: .vertical)) ?? .zero
+                let visibleTop = topEdge
+                let visibleBottom = max(viewport.height, visibleTop + 1)
+                let center = (visibleTop + visibleBottom) / 2
+                let halfHeight = (visibleBottom - visibleTop) / 2
+                let offsetFromCenter = frame.midY - center
+                let curves = offsetFromCenter < 0 ? parameters.curvesTop : parameters.curvesBottom
+                let reach = abs(offsetFromCenter) / max(halfHeight, 1)
+                let direction: CGFloat = offsetFromCenter < 0 ? -1 : 1
+                // 0 across most of the middle, rising steeply only near the edges.
+                let bend = curves ? pow(min(reach, 1.25), parameters.power) : 0
+                let scale = 1 - parameters.shrink * min(bend, 1.3)
+                let pullTowardsMiddle = -direction * halfHeight * parameters.pull * min(bend, 1.3)
+                let angle = curves ? direction * parameters.tilt * .pi / 180 * min(bend, 1.3) : 0
+                let outside = curves ? max(reach - 1, 0) : 0
+
+                return effect
+                    .offset(y: pullTowardsMiddle)
+                    .scaleEffect(scale, anchor: .center)
+                    .rotation3DEffect(
+                        .radians(-angle),
+                        axis: (x: 1, y: 0, z: 0),
+                        anchor: .center,
+                        perspective: 0.6
+                    )
+                    // Light falls off as the surface turns away.
+                    .brightness(-parameters.shade * min(bend, 1.3))
+                    .saturation(1 - 0.2 * min(bend, 1))
+                    .blur(radius: parameters.outsideBlur * min(outside * 3, 1))
+                    .opacity(1 - min(outside, 0.6))
+            }
+        } else {
+            content
+        }
+    }
+}
+
+private struct CopyToast: Equatable {
+    let id = UUID()
+    let count: Int
+}
+
+/// "已复制" / "已复制 N 条" confirmation floating above the bottom of the list.
+private struct CopyToastView: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.green)
+            Text(count > 1 ? "已复制 \(count) 条" : "已复制")
+                .font(.system(size: 14, weight: .semibold))
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
+        .clipShelfGlass(in: Capsule())
+        .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.updatesFrequently)
     }
 }
 
@@ -1210,6 +1338,7 @@ private struct ClipRow: View, Equatable {
     let selectionColor: Color
     let selectionColorIsPreset: Bool
     let imageThumbnailCache: ImageThumbnailCache
+    let selectionGlass: SelectionGlassIdentity
     let handleClick: (NSEvent?) -> Void
     let handleCopy: () -> Void
 
@@ -1226,6 +1355,7 @@ private struct ClipRow: View, Equatable {
             && lhs.selectionColor == rhs.selectionColor
             && lhs.selectionColorIsPreset == rhs.selectionColorIsPreset
             && lhs.imageThumbnailCache === rhs.imageThumbnailCache
+            && lhs.selectionGlass == rhs.selectionGlass
     }
 
     var body: some View {
@@ -1248,31 +1378,23 @@ private struct ClipRow: View, Equatable {
 
             Spacer()
 
-            Button {
+            RowIconAction(
+                systemImage: item.isPinned ? "pin.fill" : "pin",
+                label: item.isPinned ? "取消置顶" : "置顶",
+                isSelected: isSelected
+            ) {
                 store.togglePinned(item)
-            } label: {
-                Image(systemName: item.isPinned ? "pin.fill" : "pin")
             }
-            .buttonStyle(ChatGPTIconButtonStyle(isSelected: isSelected))
-            .focusable(false)
             .floatingTooltip(item.isPinned ? "取消置顶" : "置顶")
 
-            Button {
+            RowIconAction(systemImage: "doc.on.doc", label: "复制", isSelected: isSelected) {
                 handleCopy()
-            } label: {
-                Image(systemName: "doc.on.doc")
             }
-            .buttonStyle(ChatGPTIconButtonStyle(isSelected: isSelected))
-            .focusable(false)
             .floatingTooltip(isSelected ? "复制选中的记录" : "复制")
 
-            Button(role: .destructive) {
+            RowIconAction(systemImage: "trash", label: "删除记录", isSelected: isSelected) {
                 store.remove(item)
-            } label: {
-                Image(systemName: "trash")
             }
-            .buttonStyle(ChatGPTIconButtonStyle(isSelected: isSelected))
-            .focusable(false)
             .floatingTooltip("删除记录")
         }
         .frame(height: 58)
@@ -1283,6 +1405,7 @@ private struct ClipRow: View, Equatable {
             ClipRowCardSurface(
                 isSelected: isSelected,
                 isHovered: isHovered,
+                selectionGlass: selectionGlass,
                 selectionColor: selectionColor,
                 selectionOpacity: SelectionRowMotion.surfaceOpacity(
                     isSelected: isSelected,
@@ -1356,6 +1479,7 @@ private struct ClipRowCardSurface: View {
     @Environment(\.glassTransparency) private var transparency
     let isSelected: Bool
     let isHovered: Bool
+    let selectionGlass: SelectionGlassIdentity
     let selectionColor: Color
     let selectionOpacity: Double
 
@@ -1365,30 +1489,68 @@ private struct ClipRowCardSurface: View {
 
     var body: some View {
         ZStack {
-            GlassCardBackground(isHovered: isHovered && !isSelected)
+            if !isSelected {
+                GlassCardBackground(isHovered: isHovered)
+            }
             if selectionOpacity > 0 {
                 selectedSurface
                     .opacity(selectionOpacity)
-                    .transition(.opacity)
+                    // With a single selection the glass slides from the old
+                    // record to the new one instead of blinking between them.
+                    .matchedGeometryEffect(id: selectionGlass.id, in: selectionGlass.namespace)
             }
         }
         .padding(.vertical, 3)
+        // The selected record floats up a touch, like a lifted pane of glass.
+        .scaleEffect(isSelected ? 1.008 : 1)
     }
 
+    /// Selected records become a lifted pane of tinted Liquid Glass with a soft
+    /// specular rim, rather than a solid fill with a hard outline.
     @ViewBuilder
     private var selectedSurface: some View {
+        let isDark = colorScheme == .dark
+        // Specular highlight on top, melting into the accent colour below.
+        let rim = LinearGradient(
+            colors: [
+                Color.white.opacity(isDark ? 0.5 : 0.95),
+                Color.accentColor.opacity(isDark ? 0.35 : 0.3),
+                Color.accentColor.opacity(isDark ? 0.7 : 0.6)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        // A glow that hugs the edge only, so it never greys out the glass.
+        let glow = shape
+            .stroke(Color.accentColor.opacity(isDark ? 0.45 : 0.35), lineWidth: 5)
+            .blur(radius: 6)
         if transparency == .opaque {
-            shape.fill(selectionColor)
+            shape.fill(selectionColor.opacity(isDark ? 0.55 : 0.4))
+                .overlay(shape.strokeBorder(rim, lineWidth: 1))
+                .shadow(color: selectionColor.opacity(0.35), radius: 12, y: 5)
         } else if #available(macOS 26.0, *) {
             Color.clear
                 .glassEffect(
-                    .regular.tint(selectionColor.opacity(colorScheme == .dark ? 0.55 : 0.4)),
+                    .regular.tint(selectionColor.opacity(isDark ? 0.42 : 0.3)).interactive(),
                     in: shape
                 )
+                // No drop shadow here: under translucent glass it shows
+                // through and turns the whole pane grey.
+                .background(glow)
+                .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
         } else {
-            shape.fill(selectionColor)
+            shape.fill(.ultraThinMaterial)
+                .overlay(shape.fill(selectionColor.opacity(isDark ? 0.4 : 0.3)))
+                .overlay(shape.strokeBorder(rim, lineWidth: 1))
+                .shadow(color: selectionColor.opacity(0.3), radius: 12, y: 5)
         }
     }
+}
+
+/// Where a row's selection glass belongs, so it can slide between records.
+private struct SelectionGlassIdentity: Equatable {
+    let namespace: Namespace.ID
+    let id: String
 }
 
 private struct CachedImageThumbnail: View {
@@ -1455,43 +1617,50 @@ private struct FileTypePreview: View {
     }
 }
 
-private struct ChatGPTIconButtonStyle: ButtonStyle {
-    let isSelected: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        IconButtonStyleBody(
-            label: configuration.label,
-            isSelected: isSelected,
-            isPressed: configuration.isPressed
-        )
-    }
-}
-
-private struct IconButtonStyleBody<Label: View>: View {
+/// Row action icon. Deliberately not a `Button`: every button joins SwiftUI's
+/// keyboard focus loop, which was rebuilt each time rows scrolled into view.
+/// Keyboard users already have shortcuts for copy, pin and delete.
+private struct RowIconAction: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered = false
-    let label: Label
+    @State private var isPressed = false
+    let systemImage: String
+    let label: String
     let isSelected: Bool
-    let isPressed: Bool
+    let action: () -> Void
 
     var body: some View {
-        label
+        Image(systemName: systemImage)
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(isSelected ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary)
             .frame(width: 34, height: 34)
             .scaleEffect(isPressed ? 0.9 : 1)
             .background(
                 Circle()
-                    .fill(
-                        IconButtonAppearance.background(
-                            isSelected: isSelected,
-                            isPressed: isPressed,
-                            isHovered: isHovered
-                        )
-                    )
-                    .animation(.easeOut(duration: 0.10), value: isHovered)
+                    .fill(IconButtonAppearance.background(isSelected: isSelected, isPressed: isPressed, isHovered: isHovered))
             )
-            .onHover { isHovered = $0 }
+            .contentShape(Circle())
+            .animation(.easeOut(duration: 0.1), value: isHovered)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
+            .onHover { inside in
+                isHovered = inside
+                if !inside { isPressed = false }
+            }
+            .onTapGesture {
+                isPressed = false
+                action()
+            }
+            // Press feedback only; the tap above performs the action on mouse-up.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in if !isPressed { isPressed = true } }
+                    .onEnded { _ in isPressed = false }
+            )
+            .onDisappear { isPressed = false }
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { action() }
     }
 }
 

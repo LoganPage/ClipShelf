@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var hostWindow: NSWindow?
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var glassTransparency = GlassPreferences.value
+    @State private var scrollEffect = ScrollEffectPreferences.value
     @State private var systemColorScheme = AppearancePreferences.systemColorScheme
     @State private var historyLimitText = ""
     @State private var oldHistoryRetentionDays = OldHistoryCleanup.retentionDays
@@ -34,19 +35,28 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Title and 完成 share one row so the scrolling area gets the height.
             HStack {
                 Text("设置")
                     .font(.system(size: 20, weight: .semibold))
                 Spacer()
+                DoneGlassButton {
+                    commitHistoryLimit()
+                    onClose()
+                }
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 6)
+            .padding(.horizontal, 22)
+            .padding(.top, 18)
+            .padding(.bottom, 4)
 
             ScrollView {
+                // Built in full before the panel fades in: lazily adding sections
+                // re-measured everything above them and stuttered while visible,
+                // and lazy stacks stalled mid-scroll to build each section.
                 VStack(alignment: .leading, spacing: 22) {
                     appearanceSection
                     glassSection
+                    scrollEffectSection
                     iconSection
                     screenshotSection
                     historySection
@@ -55,24 +65,12 @@ struct SettingsView: View {
                     launchSection
                 }
                 .padding(.horizontal, 22)
-                .padding(.vertical, 14)
+                .padding(.top, 10)
+                .padding(.bottom, 22)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .clipShelfGlassButtons()
             }
-            .background(AutoHidingScrollViewConfigurator())
-
-            HStack {
-                Spacer()
-                Button("完成") {
-                    commitHistoryLimit()
-                    onClose()
-                }
-                .keyboardShortcut(.defaultAction)
-                .controlSize(.large)
-                .clipShelfGlassButtons(prominent: true)
-            }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 14)
+            .background(OverlayScrollerConfigurator())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
@@ -129,8 +127,15 @@ struct SettingsView: View {
             clickRecoveryDuration = notification.object as? TimeInterval ?? DragSelectionPreferences.clickRecoveryDuration
         }
         .onAppear {
-            historyLimitText = String(store.maxItems)
-            oldHistoryRetentionDays = OldHistoryCleanup.retentionDays
+            reloadDisplayedValues()
+        }
+        // The window is reused, so refresh what it shows each time it opens,
+        // and save the history limit field however it is closed.
+        .onReceive(NotificationCenter.default.publisher(for: SettingsWindowController.willShowNotification)) { _ in
+            reloadDisplayedValues()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SettingsWindowController.willCloseNotification)) { _ in
+            commitHistoryLimit()
         }
     }
 
@@ -148,6 +153,28 @@ struct SettingsView: View {
             .accessibilityLabel("暗黑模式")
 
             Text("深色模式使用石墨背景和分层表面，类型颜色在暗色背景上保持清晰。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var scrollEffectSection: some View {
+        settingsSection("滚动效果") {
+            LiquidSegmentedControl(
+                options: ScrollEffectStyle.allCases,
+                selection: Binding(
+                    get: { scrollEffect },
+                    set: { value in
+                        scrollEffect = value
+                        ScrollEffectPreferences.value = value
+                    }
+                ),
+                title: \.title,
+                segmentWidth: 84
+            )
+            .accessibilityLabel("滚动效果")
+
+            Text("记录滚到列表边缘时的样子。轻度只在最边缘微微后翻淡出；只底部让记录在底部像滚轮一样卷走；滚轮在上下两端都有明显的翻转。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -463,6 +490,13 @@ struct SettingsView: View {
         }
     }
 
+    private func reloadDisplayedValues() {
+        historyLimitText = String(store.maxItems)
+        oldHistoryRetentionDays = OldHistoryCleanup.retentionDays
+        launchAtLogin = LoginItemController.isEnabled
+        loginError = nil
+    }
+
     private func updateLaunchAtLogin(_ enabled: Bool) {
         do {
             try LoginItemController.setEnabled(enabled)
@@ -623,109 +657,77 @@ struct SettingsView: View {
     }
 }
 
-private struct AutoHidingScrollViewConfigurator: NSViewRepresentable {
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
+/// Uses the system overlay scroller, which already fades in while scrolling
+/// and hides when idle. Configured once; no per-scroll-event work.
+private struct OverlayScrollerConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        configureSoon(from: view, coordinator: context.coordinator)
+        DispatchQueue.main.async {
+            guard let scrollView = Self.settingsScrollView(near: view) else { return }
+            scrollView.scrollerStyle = .overlay
+            scrollView.autohidesScrollers = true
+            scrollView.hasVerticalScroller = true
+        }
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        configureSoon(from: nsView, coordinator: context.coordinator)
-    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 
-    private func configureSoon(from view: NSView, coordinator: Coordinator) {
-        DispatchQueue.main.async {
-            guard let scrollView = resolveSettingsScrollView(from: view) else { return }
-            coordinator.configure(scrollView)
-        }
-    }
-
-    private func resolveSettingsScrollView(from view: NSView) -> NSScrollView? {
+    private static func settingsScrollView(near view: NSView) -> NSScrollView? {
         if let enclosing = view.enclosingScrollView {
             return enclosing
         }
-
         guard let contentView = view.window?.contentView else { return nil }
-        let candidates = allScrollViews(in: contentView)
+        // The settings scroll view is the smallest sizeable one in the window.
+        return allScrollViews(in: contentView)
             .filter { $0.bounds.width > 120 && $0.bounds.height > 120 }
-        guard !candidates.isEmpty else { return nil }
-
-        return candidates.min { lhs, rhs in
-            lhs.bounds.width * lhs.bounds.height < rhs.bounds.width * rhs.bounds.height
-        }
+            .min { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }
     }
 
-    private func allScrollViews(in view: NSView) -> [NSScrollView] {
+    private static func allScrollViews(in view: NSView) -> [NSScrollView] {
         var result: [NSScrollView] = []
         if let scrollView = view as? NSScrollView {
             result.append(scrollView)
         }
-
         for subview in view.subviews {
             result.append(contentsOf: allScrollViews(in: subview))
         }
-
         return result
     }
+}
 
-    final class Coordinator {
-        private weak var scrollView: NSScrollView?
-        private var monitor: Any?
-        private var hideWorkItem: DispatchWorkItem?
+/// Round, tinted Liquid Glass checkmark, like the confirm button on macOS 26
+/// system sheets. Return also triggers it.
+private struct DoneGlassButton: View {
+    let action: () -> Void
 
-        deinit {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 15, weight: .bold))
+                .frame(width: 22, height: 22)
+        }
+        .keyboardShortcut(.defaultAction)
+        .controlSize(.large)
+        .modifier(CircleButtonShape())
+        // Prepare the closing animation while the pointer is on its way to click.
+        .onHover { inside in
+            if inside {
+                SettingsWindowController.shared.prefetchClosingSnapshot()
             }
         }
+        .clipShelfGlassButtons(prominent: true)
+        .help("完成")
+        .accessibilityLabel("完成")
+    }
+}
 
-        func configure(_ scrollView: NSScrollView) {
-            guard self.scrollView !== scrollView else { return }
-            self.scrollView = scrollView
-            scrollView.scrollerStyle = .overlay
-            scrollView.autohidesScrollers = true
-            scrollView.hasVerticalScroller = true
-            scrollView.verticalScroller?.isHidden = true
-            scrollView.verticalScroller?.alphaValue = 0
-            installMonitorIfNeeded()
-        }
-
-        private func installMonitorIfNeeded() {
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self,
-                      let scrollView,
-                      event.window === scrollView.window else {
-                    return event
-                }
-
-                let point = scrollView.convert(event.locationInWindow, from: nil)
-                if scrollView.bounds.contains(point) {
-                    showScrollerBriefly(scrollView)
-                }
-
-                return event
-            }
-        }
-
-        private func showScrollerBriefly(_ scrollView: NSScrollView) {
-            scrollView.hasVerticalScroller = true
-            scrollView.verticalScroller?.isHidden = false
-            scrollView.verticalScroller?.alphaValue = 1
-            scrollView.reflectScrolledClipView(scrollView.contentView)
-
-            hideWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak scrollView] in
-                scrollView?.verticalScroller?.alphaValue = 0
-                scrollView?.verticalScroller?.isHidden = true
-            }
-            hideWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: workItem)
+private struct CircleButtonShape: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content.buttonBorderShape(.circle)
+        } else {
+            content.buttonBorderShape(.roundedRectangle)
         }
     }
 }

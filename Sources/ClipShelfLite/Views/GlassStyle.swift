@@ -174,8 +174,8 @@ extension View {
             .clipShelfGlass(in: Capsule(), interactive: true)
     }
 
-    func clipShelfGlassPanel(cornerRadius: CGFloat = GlassMetrics.panelRadius) -> some View {
-        modifier(GlassPanel(cornerRadius: cornerRadius))
+    func clipShelfGlassPanel(cornerRadius: CGFloat = GlassMetrics.panelRadius, isActive: Bool = true) -> some View {
+        modifier(GlassPanel(cornerRadius: cornerRadius, isActive: isActive))
     }
 
     func clipShelfLiquidGlassSurface(cornerRadius: CGFloat) -> some View {
@@ -195,10 +195,13 @@ extension View {
 private struct GlassPanel: ViewModifier {
     @Environment(\.glassTransparency) private var transparency
     let cornerRadius: CGFloat
+    var isActive = true
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if transparency == .opaque {
+        if !isActive {
+            content.clipShape(shape)
+        } else if transparency == .opaque {
             content
                 .background(AppTheme.settingsBackground)
                 .clipShape(shape)

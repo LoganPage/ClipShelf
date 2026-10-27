@@ -1087,9 +1087,9 @@ enum ClipShelfSelfTest {
 
         results.append(check(
             name: "selection row transition duration is a pinned literal",
-            condition: SelectionRowMotion.duration == 0.11,
-            success: "Selection rows use the pinned 0.11-second transition",
-            failure: "The selection-row transition duration drifted from 0.11 seconds"
+            condition: SelectionRowMotion.duration == 0.38 && SelectionRowMotion.dampingFraction == 0.78,
+            success: "Selection rows use the pinned 0.38-second, 0.78-damped spring",
+            failure: "The selection-row spring drifted from 0.38 s response / 0.78 damping"
         ))
 
         results.append(check(
@@ -1121,9 +1121,9 @@ enum ClipShelfSelfTest {
         } ?? runningFromAppBundle
         results.append(check(
             name: "selection row animation only targets the surface layer",
-            condition: SelectionRowMotion.animation == .easeOut(duration: SelectionRowMotion.duration)
+            condition: SelectionRowMotion.animation == .spring(response: SelectionRowMotion.duration, dampingFraction: SelectionRowMotion.dampingFraction)
                 && clipRowSurfaceAnimationIsScoped,
-            success: "The single selection animation is an ease-out transition scoped to the background surface",
+            success: "The single selection animation is a spring scoped to the background surface",
             failure: "The selection animation changed curve or escaped the background surface layer"
         ))
 

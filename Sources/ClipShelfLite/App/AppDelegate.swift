@@ -21,10 +21,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        CursorSetCoalescer.install()
         normalizeGlobalHotKeyIfNeeded()
         AppIconPreferences.applySavedChoice()
         configureStatusItem()
         showWindow()
+        DispatchQueue.main.async {
+            Self.closeEmptySystemSettingsWindows()
+        }
         watcher.start()
         HotKeyManager.shared.action = { [weak self] in
             self?.showWindow()
@@ -129,6 +133,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             hosting.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor)
         ])
         return backdrop
+    }
+
+    /// SwiftUI's placeholder Settings scene is never used (settings live in the
+    /// main window), but macOS can restore it from an earlier session as a blank
+    /// window. Close it and stop it from being restored again.
+    private static func closeEmptySystemSettingsWindows() {
+        for window in NSApp.windows where window.identifier?.rawValue.contains("Settings_window") == true {
+            window.isRestorable = false
+            window.close()
+        }
     }
 
     @objc func chooseFolder() {
