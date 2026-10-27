@@ -60,6 +60,7 @@ struct SettingsView: View {
                     iconSection
                     screenshotSection
                     historySection
+                    selectionSection
                     oldHistorySection
                     hotKeySection
                     launchSection
@@ -140,7 +141,7 @@ struct SettingsView: View {
     }
 
     private var appearanceSection: some View {
-        settingsSection("暗黑模式") {
+        settingsSection("外观") {
             LiquidSegmentedControl(
                 options: AppearanceMode.allCases,
                 selection: Binding(
@@ -150,9 +151,9 @@ struct SettingsView: View {
                 title: \.title,
                 segmentWidth: 96
             )
-            .accessibilityLabel("暗黑模式")
+            .accessibilityLabel("外观")
 
-            Text("深色模式使用石墨背景和分层表面，类型颜色在暗色背景上保持清晰。")
+            Text("跟随系统会随 macOS 的浅色 / 深色外观自动切换。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -248,7 +249,7 @@ struct SettingsView: View {
 
     private var historySection: some View {
         settingsSection("历史") {
-            Toggle("记录文字、文件和图片复制历史", isOn: $store.isClipboardHistoryEnabled)
+            settingsToggle("记录文字、文件和图片的复制历史", isOn: $store.isClipboardHistoryEnabled)
 
             HStack {
                 Text("最多保留记录")
@@ -272,11 +273,27 @@ struct SettingsView: View {
                 .labelsHidden()
             }
 
-            Text("可设置 1–10000 条。调低后会立即删除最旧的未置顶记录，只影响 ClipShelf 历史，不删除任何原文件。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            settingsCaption("可设置 1–10000 条。调低后会立即删除最旧的未置顶记录，只影响 ClipShelf 历史，不删除任何原文件。")
 
-            Toggle("单选后点击其它记录改选该记录", isOn: Binding(
+            HStack(spacing: 10) {
+                Button("查看历史存储位置") {
+                    store.revealStorage()
+                }
+
+                Button("清空历史…", role: .destructive) {
+                    guard ClearHistoryConfirmation.shouldConfirm(itemCount: store.items.count) else { return }
+                    showingClearHistoryConfirmation = true
+                }
+                .foregroundStyle(.red)
+            }
+
+            settingsCaption("清空历史只删除 ClipShelf 的记录，不删除截图文件夹或访达里的原文件。")
+        }
+    }
+
+    private var selectionSection: some View {
+        settingsSection("选择") {
+            settingsToggle("单选后点击其它记录，直接改选该记录", isOn: Binding(
                 get: { switchToClickedRecord },
                 set: updateSelectionClickBehavior
             ))
@@ -294,6 +311,7 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                .fixedSize()
             }
 
             HStack {
@@ -309,21 +327,13 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                .fixedSize()
             }
 
-            Text("单选点击自身会取消选择。多选点击已选记录和未选记录可分别设置。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            settingsCaption("单选时再点一次自身会取消选择。多选时点击已选、未选记录的行为可以分别设置。")
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("点击恢复期")
-                    Spacer()
-                    Text(String(format: "%.1f 秒", clickRecoveryDuration))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
+            HStack {
+                Text("点击恢复期")
                 Slider(
                     value: Binding(
                         get: { clickRecoveryDuration },
@@ -332,58 +342,46 @@ struct SettingsView: View {
                     in: 0...1,
                     step: 0.1
                 )
+                .frame(maxWidth: 260)
+                Text(String(format: "%.1f 秒", clickRecoveryDuration))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 52, alignment: .trailing)
+            }
 
-                Text("三指拖移松手后，短时间内的下一次点击会走恢复逻辑。设为 0 秒时几乎直接使用普通点击逻辑。")
+            settingsCaption("三指拖移松手后，短时间内的下一次点击会走恢复逻辑。设为 0 秒时直接使用普通点击。")
+
+            Divider()
+
+            Text("选中颜色")
+                .font(.system(size: 13, weight: .medium))
+
+            HStack(spacing: 8) {
+                ForEach(SelectionColorPreset.allCases) { preset in
+                    selectionColorPresetButton(preset)
+                }
+            }
+
+            HStack(spacing: 12) {
+                ColorPicker("自定义颜色", selection: Binding(
+                    get: { selectionColor },
+                    set: updateSelectionColor
+                ), supportsOpacity: false)
+
+                Text(selectionColorPreset == nil ? "当前使用自定义颜色" : "预设会随浅色 / 深色外观自动切换")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("选中记录底色")
-                    .font(.system(size: 13, weight: .medium))
+                Spacer()
 
-                HStack(spacing: 8) {
-                    ForEach(SelectionColorPreset.allCases) { preset in
-                        selectionColorPresetButton(preset)
-                    }
+                Button("恢复默认") {
+                    SelectionColorPreferences.reset()
+                    selectionColorPreset = SelectionColorPreferences.selectedPreset
+                    selectionColor = SelectionColorPreferences.color
                 }
-
-                HStack(spacing: 12) {
-                    ColorPicker("自定义颜色", selection: Binding(
-                        get: { selectionColor },
-                        set: updateSelectionColor
-                    ), supportsOpacity: false)
-
-                    Text(selectionColorPreset == nil ? "当前使用自定义颜色" : "预设会随浅色/深色模式自动切换")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    Button("恢复默认") {
-                        SelectionColorPreferences.reset()
-                        selectionColorPreset = SelectionColorPreferences.selectedPreset
-                        selectionColor = SelectionColorPreferences.color
-                    }
-                }
-
-                Text("记录被选中时只改变底色，文字保持黑色。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
-            Button("查看历史存储位置") {
-                store.revealStorage()
-            }
-
-            Button("清空历史", role: .destructive) {
-                guard ClearHistoryConfirmation.shouldConfirm(itemCount: store.items.count) else { return }
-                showingClearHistoryConfirmation = true
-            }
-
-            Text("清空历史只删除 ClipShelf 的记录，不删除截图文件夹或访达里的原文件。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            settingsCaption("选中的记录会变成带这个颜色的玻璃。")
         }
     }
 
@@ -436,32 +434,32 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                .fixedSize()
+            }
+
+            HStack(spacing: 10) {
+                Button("查看待清理记录数量") {
+                    refreshOldHistoryCleanupSummary()
+                }
+
+                Button("清理这些记录", role: .destructive) {
+                    confirmOldHistoryCleanup()
+                }
+                .foregroundStyle(oldHistoryEligibleCount == 0 ? Color.secondary : Color.red)
+                .disabled(oldHistoryEligibleCount == 0)
             }
 
             if !oldHistoryStatusText.isEmpty {
-                Text(oldHistoryStatusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                settingsCaption(oldHistoryStatusText)
             }
 
-            Button("查看待清理记录数量") {
-                refreshOldHistoryCleanupSummary()
-            }
-
-            Button("确认清理这些记录", role: .destructive) {
-                confirmOldHistoryCleanup()
-            }
-            .disabled(oldHistoryEligibleCount == 0)
-
-            Text("只移除所选天数之前的未置顶记录，不删除原文件。清理后仍可使用 Command-Z 撤销。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            settingsCaption("只移除所选天数之前的未置顶记录，不删除原文件。清理后仍可按 ⌘Z 撤销。")
         }
     }
 
     private var launchSection: some View {
         settingsSection("启动") {
-            Toggle("开机自启动", isOn: Binding(
+            settingsToggle("开机时自动启动 ClipShelf", isOn: Binding(
                 get: { launchAtLogin },
                 set: updateLaunchAtLogin
             ))
@@ -472,6 +470,25 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
             }
         }
+    }
+
+    /// A row with its label on the left and a switch on the right, like System Settings.
+    private func settingsToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Toggle(title, isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
+    }
+
+    private func settingsCaption(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

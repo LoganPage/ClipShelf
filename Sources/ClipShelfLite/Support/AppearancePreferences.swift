@@ -11,8 +11,8 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .system: "跟随系统"
-        case .light: "关闭"
-        case .dark: "开启"
+        case .light: "浅色"
+        case .dark: "深色"
         }
     }
 

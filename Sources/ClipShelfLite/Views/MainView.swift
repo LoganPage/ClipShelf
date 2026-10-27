@@ -250,7 +250,7 @@ struct MainView: View {
                             handleCopy: { performCopy(actionItems(for: item)) }
                         )
                         .equatable()
-                        .modifier(RotaryScrollEffect(style: scrollEffect, topEdge: toolbarHeight))
+                        .modifier(RotaryScrollEffect(style: scrollEffect, topEdge: toolbarHeight, restingTop: historyListVerticalInset))
                         .id(item.id)
                     }
                 }
@@ -1155,10 +1155,12 @@ private struct RotaryScrollEffect: ViewModifier {
     let style: ScrollEffectStyle
     /// Where the visible area starts: rows above this are under the toolbar.
     let topEdge: CGFloat
+    /// Where the first record sits when the list is scrolled to the top.
+    let restingTop: CGFloat
 
     func body(content: Content) -> some View {
         if #available(macOS 14.0, *), let parameters = style.parameters {
-            content.visualEffect { [topEdge] effect, geometry in
+            content.visualEffect { [topEdge, restingTop] effect, geometry in
                 let frame = geometry.frame(in: .scrollView(axis: .vertical))
                 let viewport = geometry.bounds(of: .scrollView(axis: .vertical)) ?? .zero
                 let visibleTop = topEdge
@@ -1166,15 +1168,24 @@ private struct RotaryScrollEffect: ViewModifier {
                 let center = (visibleTop + visibleBottom) / 2
                 let halfHeight = (visibleBottom - visibleTop) / 2
                 let offsetFromCenter = frame.midY - center
-                let curves = offsetFromCenter < 0 ? parameters.curvesTop : parameters.curvesBottom
-                let reach = abs(offsetFromCenter) / max(halfHeight, 1)
-                let direction: CGFloat = offsetFromCenter < 0 ? -1 : 1
-                // 0 across most of the middle, rising steeply only near the edges.
-                let bend = curves ? pow(min(reach, 1.25), parameters.power) : 0
+                let isUpper = offsetFromCenter < 0
+                let curves = isUpper ? parameters.curvesTop : parameters.curvesBottom
+                let direction: CGFloat = isUpper ? -1 : 1
+                // Bend only within about a row and a half of each edge. At the
+                // top it is measured from where the first record rests, so an
+                // idle list is perfectly even and records only recede while
+                // they are scrolled up under the toolbar.
+                let band: CGFloat = 112
+                let reach: CGFloat = isUpper
+                    ? (restingTop - frame.minY) / band
+                    : (frame.maxY - (visibleBottom - band * 0.6)) / band
+                let bend = curves ? pow(min(max(reach, 0), 1.25), parameters.power) : 0
                 let scale = 1 - parameters.shrink * min(bend, 1.3)
                 let pullTowardsMiddle = -direction * halfHeight * parameters.pull * min(bend, 1.3)
                 let angle = curves ? direction * parameters.tilt * .pi / 180 * min(bend, 1.3) : 0
-                let outside = curves ? max(reach - 1, 0) : 0
+                let outside = curves
+                    ? max(isUpper ? (visibleTop - frame.midY) / band : (frame.midY - visibleBottom) / band, 0)
+                    : 0
 
                 return effect
                     .offset(y: pullTowardsMiddle)
@@ -1370,7 +1381,7 @@ private struct ClipRow: View, Equatable {
                     .lineLimit(2)
                 HStack(spacing: 8) {
                     Text(kindText)
-                    Text(DateText.formatter.string(from: item.createdAt))
+                    Text(DateText.relative(item.createdAt))
                 }
                 .font(.caption)
                 .foregroundStyle(isSelected ? selectedMetadataColor : Color.secondary)
@@ -1381,7 +1392,9 @@ private struct ClipRow: View, Equatable {
             RowIconAction(
                 systemImage: item.isPinned ? "pin.fill" : "pin",
                 label: item.isPinned ? "取消置顶" : "置顶",
-                isSelected: isSelected
+                isSelected: isSelected,
+                // Pinned reads by colour, not by a heavier glyph.
+                tint: item.isPinned ? .orange : nil
             ) {
                 store.togglePinned(item)
             }
@@ -1569,10 +1582,13 @@ private struct CachedImageThumbnail: View {
             RoundedRectangle(cornerRadius: thumbnail == nil ? 10 : 7)
                 .fill(thumbnail == nil ? AppTheme.imagePreviewBackground : AppTheme.imageThumbnailBackground)
             if let thumbnail {
+                // Fill the tile and crop the centre: wide screenshots used to
+                // shrink to a thin strip with empty space above and below.
                 Image(decorative: thumbnail, scale: 2)
                     .resizable()
-                    .scaledToFit()
-                    .padding(2)
+                    .scaledToFill()
+                    .frame(width: 52, height: 40)
+                    .clipped()
             } else {
                 Image(systemName: "photo")
                     .foregroundStyle(AppTheme.imagePreviewForeground)
@@ -1627,12 +1643,13 @@ private struct RowIconAction: View {
     let systemImage: String
     let label: String
     let isSelected: Bool
+    var tint: Color? = nil
     let action: () -> Void
 
     var body: some View {
         Image(systemName: systemImage)
             .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(isSelected ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary)
+            .foregroundStyle(tint ?? (isSelected ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary))
             .frame(width: 34, height: 34)
             .scaleEffect(isPressed ? 0.9 : 1)
             .background(

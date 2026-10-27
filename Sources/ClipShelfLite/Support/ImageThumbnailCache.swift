@@ -113,7 +113,9 @@ final class ImageThumbnailCache: @unchecked Sendable {
                 [
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
                     kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 104
+                    // Large enough that very tall or wide images still cover
+                    // the tile after cropping.
+                    kCGImageSourceThumbnailMaxPixelSize: 360
                 ] as CFDictionary
               ),
               let context = CGContext(
@@ -128,7 +130,9 @@ final class ImageThumbnailCache: @unchecked Sendable {
             return nil
         }
 
-        let scale = min(104 / CGFloat(sourceImage.width), 80 / CGFloat(sourceImage.height))
+        // Aspect-fill and centre-crop, so screenshots of any shape fill the
+        // tile instead of shrinking to a thin strip.
+        let scale = max(104 / CGFloat(sourceImage.width), 80 / CGFloat(sourceImage.height))
         let width = CGFloat(sourceImage.width) * scale
         let height = CGFloat(sourceImage.height) * scale
         context.interpolationQuality = .high

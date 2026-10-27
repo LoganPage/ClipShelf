@@ -97,7 +97,7 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
 
     private func restingPill(layout: Layout) -> some View {
         Capsule()
-            .fill(Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.09))
+            .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.32 : 0.14))
             .frame(width: layout.segment, height: height - inset * 2)
             .scaleEffect(x: stretch, y: 1 / sqrt(stretch))
     }
@@ -132,7 +132,9 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
                 Text(title(option))
                     .font(.system(size: 13, weight: index == highlighted ? .semibold : .medium))
-                    .foregroundStyle(index == highlighted ? Color.accentColor : Color.primary.opacity(0.78))
+                    // Selected text uses the label colour on an accent-tinted pill,
+                    // which stays legible in both light and dark mode.
+                    .foregroundStyle(index == highlighted ? Color.primary : Color.primary.opacity(0.7))
                     .lineLimit(1)
                     .frame(width: layout.segment, height: height)
                     .scaleEffect(isLifted && index == highlighted ? 1.08 : 1)
