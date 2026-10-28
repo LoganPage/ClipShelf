@@ -43,15 +43,18 @@ struct MainView: View {
     @State private var searchIndexCache = ClipSearchIndexCache()
     @State private var imageThumbnailCache = ImageThumbnailCache()
     @FocusState private var isSearchFocused: Bool
-    @State private var toolbarHeight: CGFloat = 150
-    /// Toolbar height with the search field showing; the list's top inset
-    /// stays at this so rows don't jump when the search field collapses.
-    @State private var expandedToolbarHeight: CGFloat = 150
-    @State private var isSearchCollapsed = false
-    @State private var obstructionCollapsed = false
-    @State private var scrollObserver: NSObjectProtocol?
-    /// Plain reference, so tracking scroll direction never re-renders the view.
-    @State private var scrollTracker = ScrollDirectionTracker()
+    /// Height of the title row and the type / action bar.
+    @State private var toolbarHeight: CGFloat = 100
+    /// The search row exists (laid out below the action bar).
+    @State private var isSearchVisible = false
+    /// The search glass has poured out of its button to full width.
+    @State private var isSearchExpanded = false
+    @State private var searchButtonFrame: CGRect = .zero
+    /// While the search glass moves it shows a look-alike placeholder
+    /// instead of the native text field, which is costly to animate.
+    @State private var isSearchFieldLive = false
+    @State private var searchMotionGeneration = 0
+    @State private var toggleSearchHotKey = ToggleSearchHotKeyDefaults.load()
     @State private var listGeneration = 0
     @State private var listEntrance: ListEntrance?
     @State private var listEntranceStyle = ListEntrancePreferences.value
@@ -72,20 +75,24 @@ struct MainView: View {
     /// Height of the custom titlebar row (traffic lights, icon, title).
     private var titleRowHeight: CGFloat { max(titlebarHeight, 44) }
 
-    /// How far the type bar moves up when the search field collapses.
-    private var searchCollapseDistance: CGFloat {
+    /// Height of the search row plus its gap.
+    private var searchRowDistance: CGFloat {
         GlassMetrics.controlHeight + GlassMetrics.stackSpacing
     }
 
-    /// Height of the toolbar as it currently covers the list. Follows the
-    /// collapse without animating: animating it made every row re-render its
-    /// edge blur on every frame of the collapse.
+    /// Height of the toolbar as it covers the list. The search field floats
+    /// over the list like Spotlight, so it never pushes records down.
     private var visibleToolbarHeight: CGFloat {
-        obstructionCollapsed ? toolbarHeight - searchCollapseDistance : toolbarHeight
+        toolbarHeight
+    }
+
+    /// The toolbar's clickable strip, including the floating search field.
+    private var toolbarHitHeight: CGFloat {
+        toolbarHeight + (isSearchVisible ? searchRowDistance : 0)
     }
 
     private var historyListVerticalInset: CGFloat {
-        expandedToolbarHeight + GlassMetrics.stackSpacing - rowCardInset
+        visibleToolbarHeight + GlassMetrics.stackSpacing - rowCardInset
     }
 
     private var searchSignature: SearchSignature {
@@ -108,7 +115,7 @@ struct MainView: View {
         ZStack(alignment: .top) {
             if filteredItems.isEmpty {
                 emptyView
-                    .padding(.top, toolbarHeight)
+                    .padding(.top, visibleToolbarHeight)
             } else {
                 historyList
             }
@@ -125,9 +132,6 @@ struct MainView: View {
             let rounded = height.rounded()
             if abs(rounded - toolbarHeight) > 0.5 {
                 toolbarHeight = rounded
-            }
-            if abs(rounded - expandedToolbarHeight) > 0.5 {
-                expandedToolbarHeight = rounded
             }
         }
         .overlay(alignment: .bottom) {
@@ -202,10 +206,8 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: ListEntrancePreferences.changedNotification)) { notification in
             listEntranceStyle = notification.object as? ListEntranceStyle ?? ListEntrancePreferences.value
         }
-        .onChange(of: isSearchFocused) { focused in
-            if focused {
-                setSearchCollapsed(false)
-            }
+        .onReceive(NotificationCenter.default.publisher(for: ToggleSearchHotKeyDefaults.changedNotification)) { notification in
+            toggleSearchHotKey = notification.object as? HotKeyConfiguration ?? ToggleSearchHotKeyDefaults.load()
         }
         .onReceive(NotificationCenter.default.publisher(for: ScrollEffectPreferences.changedNotification)) { notification in
             scrollEffect = notification.object as? ScrollEffectStyle ?? ScrollEffectPreferences.value
@@ -279,29 +281,16 @@ struct MainView: View {
                             selectionColor: selectionColor,
                             selectionColorIsPreset: selectionColorPreset != nil,
                             imageThumbnailCache: imageThumbnailCache,
-                            pile: PileContext(
-                                style: scrollEffect,
-                                index: index,
-                                count: filteredItems.count,
-                                bottomPadding: historyListBottomPadding
-                            ),
-                            isPileCard: false,
                             handleClick: { event in handleRowClick(item, event: event) },
                             handleCopy: { performCopy(actionItems(for: item)) }
                         )
                         .equatable()
-                        .modifier(ListEdgeEffect(
-                            style: scrollEffect,
-                            topEdge: visibleToolbarHeight,
-                            index: index,
-                            count: filteredItems.count,
-                            bottomPadding: historyListBottomPadding
-                        ))
+                        // Rows are a fixed height; saying so stops the lazy
+                        // stack from measuring every row on every scroll frame.
+                        .modifier(FixedRowHeight(height: historyRowHeight))
+                        .modifier(ListEdgeEffect(style: scrollEffect, topEdge: visibleToolbarHeight))
                         .modifier(ListEntranceEffect(entrance: listEntrance, index: index, rowHeight: historyRowHeight))
                         .id(item.id)
-                        // Rows further down sit underneath the ones above, so
-                        // the bottom pile tucks cards in behind.
-                        .zIndex(-Double(index))
                     }
                 }
                 // A new identity per type switch, so every row of the new type
@@ -309,8 +298,6 @@ struct MainView: View {
                 .id(listGeneration)
                 // The previous type's rows fade out instead of vanishing.
                 .transition(.opacity)
-                // Selection glass sits above the pile copies, so a selected
-                // front row is never cut off by the card tucked behind it.
                 .background(alignment: .top) {
                     SelectionGlassLayer(
                         items: filteredItems,
@@ -319,15 +306,8 @@ struct MainView: View {
                         rowHeight: historyRowHeight,
                         selectionColor: selectionColor,
                         scrollEffect: scrollEffect,
-                        topEdge: visibleToolbarHeight,
-                        count: filteredItems.count,
-                        bottomPadding: historyListBottomPadding
+                        topEdge: visibleToolbarHeight
                     )
-                }
-                .background(alignment: .top) {
-                    if scrollEffect.stacksBottom {
-                        pileLayer
-                    }
                 }
                 .padding(.horizontal, historyListHorizontalInset)
                 .padding(.top, historyListVerticalInset)
@@ -337,7 +317,6 @@ struct MainView: View {
             .background(
                 ScrollViewResolver { scrollView in
                     historyScrollView = scrollView
-                    observeScrolling(of: scrollView)
                 }
             )
             .background(KeyboardCaptureView { event in
@@ -383,13 +362,6 @@ struct MainView: View {
     private var toolbar: some View {
         VStack(spacing: GlassMetrics.stackSpacing) {
             titleRow
-            // Layout never changes when the search field collapses: it fades
-            // and the row below slides up over its place. Only render-time
-            // transforms animate, so there is no per-frame re-layout.
-            searchField
-                .scaleEffect(isSearchCollapsed ? 0.94 : 1, anchor: .top)
-                .opacity(isSearchCollapsed ? 0 : 1)
-                .allowsHitTesting(!isSearchCollapsed)
 
             HStack(spacing: 12) {
                 HistoryTypeFilterBar(selection: $kindFilter)
@@ -397,12 +369,20 @@ struct MainView: View {
                 Spacer(minLength: 8)
                 primaryToolbar
             }
-            .offset(y: isSearchCollapsed ? -searchCollapseDistance : 0)
         }
+        // The search field floats below the toolbar as its own glass layer,
+        // over the list, like Spotlight: records stay where they are.
+        .overlay(alignment: .bottom) {
+            if isSearchVisible {
+                searchRow
+                    .offset(y: searchRowDistance)
+            }
+        }
+        .coordinateSpace(name: ToolbarSpace.name)
         .padding(.horizontal, GlassMetrics.edgeInset)
         // Gaps between controls must not click through to rows hidden
         // underneath; once collapsed, the freed strip is clickable again.
-        .contentShape(TopStrip(height: visibleToolbarHeight))
+        .contentShape(TopStrip(height: toolbarHitHeight))
         .background(alignment: .top) {
             TitlebarScrollEdge(height: max(titlebarHeight, 28) + 6)
         }
@@ -453,15 +433,51 @@ struct MainView: View {
         .background(WindowDragHandle())
     }
 
+    private static let searchPlaceholder = "搜索文字、文件名、截图名"
+
+    /// The search field pours out of the search button: its glass grows from
+    /// the button's circle down into a full-width capsule (and back).
+    private var searchRow: some View {
+        let height = GlassMetrics.controlHeight
+        return GeometryReader { proxy in
+            let row = proxy.frame(in: .named(ToolbarSpace.name))
+            let start = CGRect(
+                x: searchButtonFrame.minX - row.minX,
+                y: searchButtonFrame.minY - row.minY,
+                width: max(searchButtonFrame.width, height),
+                height: height
+            )
+            let target = CGRect(x: 0, y: 0, width: proxy.size.width, height: height)
+            let rect = isSearchExpanded ? target : start
+            searchField
+                .frame(width: rect.width, height: rect.height)
+                .offset(x: rect.minX, y: rect.minY)
+        }
+        .frame(height: height)
+    }
+
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField("搜索文字、文件名、截图名", text: $searchText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .focused($isSearchFocused)
+            if isSearchFieldLive || !searchText.isEmpty {
+                TextField(Self.searchPlaceholder, text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .focused($isSearchFocused)
+            } else {
+                Text(Self.searchPlaceholder)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color(nsColor: .placeholderTextColor))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        isSearchFieldLive = true
+                        DispatchQueue.main.async { isSearchFocused = true }
+                    }
+            }
             if let selectionCountText = SelectionCountLabel.text(for: selectedIDs.count) {
                 Text(selectionCountText)
                     .font(.caption.weight(.medium))
@@ -481,8 +497,83 @@ struct MainView: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: GlassMetrics.controlHeight)
-        .clipShelfLiquidGlassSurface(cornerRadius: GlassMetrics.controlHeight / 2)
+        // Contents appear once the glass has poured out.
+        .opacity(isSearchExpanded ? 1 : 0)
+        .animation(.easeOut(duration: isSearchExpanded ? 0.18 : 0.08).delay(isSearchExpanded ? 0.24 : 0), value: isSearchExpanded)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            // Focused: the same tinted glass as a selected record.
+            if isSearchFocused {
+                SelectionGlassSlab(
+                    selectionColor: selectionColor,
+                    cornerRadius: GlassMetrics.controlHeight / 2,
+                    verticalInset: 0
+                )
+                .transition(.opacity)
+            } else {
+                Color.clear
+                    .clipShelfGlass(in: Capsule())
+                    .transition(.opacity)
+            }
+        }
+        // It floats over records, so frost what is underneath first (like
+        // Spotlight); otherwise their text showed through the query.
+        .background(Capsule().fill(.regularMaterial))
+        .animation(SelectionRowMotion.animation, value: isSearchFocused)
+        .clipShape(Capsule())
+        // Lifted off the list, like Spotlight.
+        .shadow(color: .black.opacity(isSearchExpanded ? 0.22 : 0), radius: 16, y: 8)
+    }
+
+    /// Opens the search row by pouring it out of its button, or tucks it back.
+    private func setSearchVisible(_ visible: Bool, focus: Bool = true) {
+        if visible, isSearchVisible, isSearchExpanded {
+            if focus {
+                isSearchFieldLive = true
+                DispatchQueue.main.async { isSearchFocused = true }
+            }
+            return
+        }
+        guard visible || isSearchVisible else { return }
+        searchMotionGeneration += 1
+        let generation = searchMotionGeneration
+        var plain = Transaction()
+        plain.disablesAnimations = true
+        let motion = Animation.spring(response: 0.46, dampingFraction: 0.8)
+        if visible {
+            withTransaction(plain) {
+                isSearchFieldLive = false
+                isSearchVisible = true
+            }
+            DispatchQueue.main.async {
+                guard generation == searchMotionGeneration else { return }
+                withAnimation(motion) {
+                    isSearchExpanded = true
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+                guard generation == searchMotionGeneration, isSearchVisible else { return }
+                withTransaction(plain) { isSearchFieldLive = true }
+                if focus {
+                    DispatchQueue.main.async { isSearchFocused = true }
+                }
+            }
+        } else {
+            if isSearchFocused {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+            }
+            searchText = ""
+            withTransaction(plain) { isSearchFieldLive = false }
+            withAnimation(motion) {
+                isSearchExpanded = false
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
+                guard generation == searchMotionGeneration, !isSearchExpanded else { return }
+                withTransaction(plain) {
+                    isSearchVisible = false
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -499,6 +590,19 @@ struct MainView: View {
     /// Two glass capsules, like system toolbar groups: places, then actions.
     private var primaryToolbarButtons: some View {
         HStack(spacing: 10) {
+            toolbarButton("magnifyingglass", tooltip: "搜索（\(toggleSearchHotKey.displayText)）", isActive: isSearchVisible && isSearchExpanded) {
+                setSearchVisible(!isSearchVisible)
+            }
+            .clipShelfGlassGroup()
+            // Where the search field pours out of.
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { searchButtonFrame = proxy.frame(in: .named(ToolbarSpace.name)) }
+                        .onChange(of: proxy.frame(in: .named(ToolbarSpace.name))) { searchButtonFrame = $0 }
+                }
+            )
+
             HStack(spacing: 0) {
                 toolbarButton("folder", tooltip: "选择截图文件夹") {
                     debugFolderPickerLog("choose folder button clicked")
@@ -552,12 +656,13 @@ struct MainView: View {
         _ systemImage: String,
         tooltip: String,
         isDimmed: Bool = false,
+        isActive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
         }
-        .buttonStyle(GlassToolbarIconButtonStyle(isDimmed: isDimmed))
+        .buttonStyle(GlassToolbarIconButtonStyle(isDimmed: isDimmed, isActive: isActive))
         .floatingTooltip(tooltip)
     }
 
@@ -614,66 +719,6 @@ struct MainView: View {
         filteredItemsSignature = signature
     }
 
-    /// Collapses the search field once the list is scrolled down (the type
-    /// bar then sits right under the title), and brings it back at the top.
-    private func observeScrolling(of scrollView: NSScrollView?) {
-        if let scrollObserver {
-            NotificationCenter.default.removeObserver(scrollObserver)
-            self.scrollObserver = nil
-        }
-        guard let clipView = scrollView?.contentView else { return }
-        clipView.postsBoundsChangedNotifications = true
-        scrollObserver = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification,
-            object: clipView,
-            queue: .main
-        ) { _ in
-            updateSearchCollapse()
-        }
-    }
-
-    /// Like Safari: 40pt of scrolling down collapses the search field, 40pt
-    /// of scrolling up brings it back. Travel resets when the direction
-    /// changes, so small back-and-forth scrolling never toggles it, and a
-    /// fast fling toggles it once.
-    private func updateSearchCollapse() {
-        guard let scrollView = historyScrollView,
-              let range = visibleContentRange(in: scrollView) else { return }
-        let offset = range.lowerBound
-        let tracker = scrollTracker
-        let delta = offset - tracker.lastOffset
-        tracker.lastOffset = offset
-        if offset < 6 {
-            tracker.travel = 0
-            setSearchCollapsed(false)
-            return
-        }
-        guard delta != 0 else { return }
-        if (delta > 0) != (tracker.travel > 0) {
-            tracker.travel = 0
-        }
-        tracker.travel += delta
-        if tracker.travel > 40, !isSearchCollapsed, searchText.isEmpty, !isSearchFocused {
-            tracker.travel = 0
-            setSearchCollapsed(true)
-        } else if tracker.travel < -40, isSearchCollapsed {
-            tracker.travel = 0
-            setSearchCollapsed(false)
-        }
-    }
-
-    private func setSearchCollapsed(_ collapsed: Bool) {
-        guard isSearchCollapsed != collapsed else { return }
-        var plain = Transaction()
-        plain.disablesAnimations = true
-        withTransaction(plain) {
-            obstructionCollapsed = collapsed
-        }
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.92)) {
-            isSearchCollapsed = collapsed
-        }
-    }
-
     private func startListEntrance(from old: ClipKindFilter, to new: ClipKindFilter) {
         guard listEntranceStyle != .off, old != new else {
             listEntrance = nil
@@ -695,48 +740,6 @@ struct MainView: View {
         withAnimation(.easeInOut(duration: 0.24)) {
             listGeneration &+= 1
         }
-    }
-
-    /// The cards in the bottom pile. Rows below the visible area aren't
-    /// rendered by the list, so the pile is a second, lightweight list laid
-    /// out a few rows higher (which brings those rows into view) and moved
-    /// back down into the pile by `PileCardEffect`. A card reaches the
-    /// front of the pile exactly where its real row appears, so they hand
-    /// over seamlessly.
-    private var pileLayer: some View {
-        LazyVStack(spacing: 0) {
-            ForEach(filteredItems) { item in
-                let index = filteredIndexByID[item.id] ?? 0
-                PileCardContent(
-                    title: item.title,
-                    symbol: item.kind == .text ? "text.alignleft" : (item.kind == .image ? "photo" : "doc"),
-                    index: index,
-                    count: filteredItems.count,
-                    rowHeight: historyRowHeight,
-                    bottomPadding: historyListBottomPadding,
-                    layoutShift: PileGeometry.layoutShiftRows * historyRowHeight
-                ) {
-                    ClipRow(
-                        item: item,
-                        store: store,
-                        isFocused: false,
-                        isSelected: false,
-                        selectionColor: selectionColor,
-                        selectionColorIsPreset: selectionColorPreset != nil,
-                        imageThumbnailCache: imageThumbnailCache,
-                        pile: PileContext(style: .off, index: index, count: filteredItems.count, bottomPadding: historyListBottomPadding),
-                        isPileCard: true,
-                        handleClick: { _ in },
-                        handleCopy: {}
-                    )
-                    .equatable()
-                }
-                .zIndex(-Double(index))
-            }
-        }
-        .padding(.top, -PileGeometry.layoutShiftRows * historyRowHeight)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 
     /// Where the selection glass goes. A single selection keeps one stable
@@ -846,7 +849,16 @@ struct MainView: View {
                 return nil
             }
 
+            if toggleSearchHotKey.matches(event) {
+                setSearchVisible(!isSearchVisible)
+                return nil
+            }
+
             if event.keyCode == 53 {
+                if isSearchVisible {
+                    setSearchVisible(false)
+                    return nil
+                }
                 if !searchText.isEmpty {
                     clearSearchState()
                     return nil
@@ -880,7 +892,9 @@ struct MainView: View {
     private func shouldHandleMainWindowKeyEvent(_ event: NSEvent) -> Bool {
         guard let window = event.window,
               window === NSApp.keyWindow,
-              window.title.hasPrefix("ClipShelf") else {
+              window.title.hasPrefix("ClipShelf"),
+              // Settings covers the list; its keys belong to settings.
+              !SettingsWindowController.shared.isVisible else {
             return false
         }
 
@@ -1369,10 +1383,27 @@ struct MainView: View {
     }
 }
 
-private final class ScrollDirectionTracker {
-    var lastOffset: CGFloat = 0
-    /// Distance scrolled in the current direction (positive = down).
-    var travel: CGFloat = 0
+/// Gives a row its known height without asking the row to measure itself.
+private struct FixedRowHeight: ViewModifier {
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        FixedHeightLayout(height: height) { content }
+    }
+}
+
+private struct FixedHeightLayout: Layout {
+    let height: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+        }
+    }
 }
 
 /// The top `height` points of a view, for hit testing.
@@ -1380,7 +1411,8 @@ private struct TopStrip: Shape {
     var height: CGFloat
 
     func path(in rect: CGRect) -> Path {
-        Path(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(height, rect.height)))
+        // Not clamped: the search row hangs below the toolbar's own bounds.
+        Path(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: height))
     }
 }
 
@@ -1425,7 +1457,7 @@ private struct TitlebarScrollEdge: View {
 
     var body: some View {
         Rectangle()
-            .fill(transparency == .opaque ? AnyShapeStyle(AppTheme.appBackground) : AnyShapeStyle(.bar))
+            .fill(.bar)
             .mask(
                 LinearGradient(
                     stops: [
@@ -1462,11 +1494,13 @@ private struct WindowDragHandle: NSViewRepresentable {
 
 private struct GlassToolbarIconButtonStyle: ButtonStyle {
     let isDimmed: Bool
+    var isActive = false
 
     func makeBody(configuration: Configuration) -> some View {
         GlassToolbarIconButtonBody(
             label: configuration.label,
             isDimmed: isDimmed,
+            isActive: isActive,
             isPressed: configuration.isPressed
         )
     }
@@ -1477,12 +1511,14 @@ private struct GlassToolbarIconButtonBody<Label: View>: View {
     @State private var isHovered = false
     let label: Label
     let isDimmed: Bool
+    var isActive = false
     let isPressed: Bool
 
     var body: some View {
         label
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(isDimmed || !isEnabled ? Color.secondary.opacity(0.45) : Color.primary.opacity(0.82))
+            .font(.system(size: 14, weight: isActive ? .semibold : .medium))
+            .foregroundStyle(isDimmed || !isEnabled ? Color.secondary.opacity(0.45) : (isActive ? Color.accentColor : Color.primary.opacity(0.82)))
+            .animation(.easeOut(duration: 0.2), value: isActive)
             .frame(width: 38, height: GlassMetrics.controlHeight)
             .background(
                 Circle()
@@ -1525,9 +1561,6 @@ private struct ClipRow: View, Equatable {
     let selectionColor: Color
     let selectionColorIsPreset: Bool
     let imageThumbnailCache: ImageThumbnailCache
-    let pile: PileContext
-    /// A copy drawn in the bottom pile: solid card, no hover.
-    let isPileCard: Bool
     let handleClick: (NSEvent?) -> Void
     let handleCopy: () -> Void
 
@@ -1544,11 +1577,9 @@ private struct ClipRow: View, Equatable {
             && lhs.selectionColor == rhs.selectionColor
             && lhs.selectionColorIsPreset == rhs.selectionColorIsPreset
             && lhs.imageThumbnailCache === rhs.imageThumbnailCache
-            && lhs.pile == rhs.pile
-            && lhs.isPileCard == rhs.isPileCard
     }
 
-    var body: some View {
+    private var face: some View {
         HStack(spacing: 12) {
             preview
                 .frame(width: 52, height: 40)
@@ -1573,64 +1604,68 @@ private struct ClipRow: View, Equatable {
                 label: item.isPinned ? "取消置顶" : "置顶",
                 isSelected: isSelected,
                 // Pinned reads by colour, not by a heavier glyph.
-                tint: item.isPinned ? .orange : nil
+                tint: item.isPinned ? .orange : nil,
+                tooltip: item.isPinned ? "取消置顶" : "置顶"
             ) {
                 store.togglePinned(item)
             }
-            .floatingTooltip(item.isPinned ? "取消置顶" : "置顶")
 
-            RowIconAction(systemImage: "doc.on.doc", label: "复制", isSelected: isSelected) {
+            RowIconAction(systemImage: "doc.on.doc", label: "复制", isSelected: isSelected, tooltip: isSelected ? "复制选中的记录" : "复制") {
                 handleCopy()
             }
-            .floatingTooltip(isSelected ? "复制选中的记录" : "复制")
 
-            RowIconAction(systemImage: "trash", label: "删除记录", isSelected: isSelected) {
+            RowIconAction(systemImage: "trash", label: "删除记录", isSelected: isSelected, tooltip: "删除记录") {
                 store.remove(item)
             }
-            .floatingTooltip("删除记录")
         }
-        .frame(height: 58)
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .foregroundStyle(isSelected ? selectedTextColor : Color.primary)
-        .background {
-            ClipRowCardSurface(
-                isSelected: isSelected,
-                isHovered: isHovered,
-                pile: pile,
-                isPileCard: isPileCard,
-                selectionColor: selectionColor,
-                selectionOpacity: SelectionRowMotion.surfaceOpacity(
-                    isSelected: isSelected,
-                    isDark: colorScheme == .dark,
-                    isPreset: selectionColorIsPreset
-                )
-            )
-            .animation(SelectionRowMotion.animation, value: isSelected)
-        }
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
-        .onTapGesture {
-            handleClick(NSApp.currentEvent)
-        }
-        .contextMenu {
-            ForEach(ClipRowMenu.orderedActions, id: \.self) { action in
-                switch action {
-                case .copy:
-                    Button(ClipRowMenu.title(for: action)) {
-                        handleCopy()
-                    }
-                case .pin:
-                    Button(ClipRowMenu.pinTitle(isPinned: item.isPinned)) {
-                        store.togglePinned(item)
-                    }
-                case .delete:
-                    Button(ClipRowMenu.title(for: action), role: .destructive) {
-                        store.remove(item)
+    }
+
+    var body: some View {
+        card
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .onTapGesture {
+                handleClick(NSApp.currentEvent)
+            }
+            .contextMenu {
+                ForEach(ClipRowMenu.orderedActions, id: \.self) { action in
+                    switch action {
+                    case .copy:
+                        Button(ClipRowMenu.title(for: action)) {
+                            handleCopy()
+                        }
+                    case .pin:
+                        Button(ClipRowMenu.pinTitle(isPinned: item.isPinned)) {
+                            store.togglePinned(item)
+                        }
+                    case .delete:
+                        Button(ClipRowMenu.title(for: action), role: .destructive) {
+                            store.remove(item)
+                        }
                     }
                 }
             }
-        }
+    }
+
+    private var card: some View {
+        face
+            .frame(height: 58)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .foregroundStyle(isSelected ? selectedTextColor : Color.primary)
+            .background {
+                ClipRowCardSurface(
+                    isSelected: isSelected,
+                    isHovered: isHovered,
+                    selectionColor: selectionColor,
+                    selectionOpacity: SelectionRowMotion.surfaceOpacity(
+                        isSelected: isSelected,
+                        isDark: colorScheme == .dark,
+                        isPreset: selectionColorIsPreset
+                    )
+                )
+                .animation(SelectionRowMotion.animation, value: isSelected)
+            }
     }
 
     private var selectedTextColor: Color {
@@ -1672,22 +1707,13 @@ private struct ClipRow: View, Equatable {
 private struct ClipRowCardSurface: View {
     let isSelected: Bool
     let isHovered: Bool
-    let pile: PileContext
-    let isPileCard: Bool
     let selectionColor: Color
     let selectionOpacity: Double
 
     var body: some View {
-        ZStack {
-            if isPileCard {
-                PileCardFill()
-            } else {
-                PileBacking(context: pile, inset: 3)
-            }
-            GlassCardBackground(isHovered: isHovered)
-                .opacity(selectionOpacity > 0 ? 0 : 1)
-        }
-        .padding(.vertical, 3)
+        GlassCardBackground(isHovered: isHovered)
+            .opacity(selectionOpacity > 0 ? 0 : 1)
+            .padding(.vertical, 3)
     }
 }
 
@@ -1709,19 +1735,17 @@ private struct SelectionGlassLayer: View {
     let selectionColor: Color
     let scrollEffect: ScrollEffectStyle
     let topEdge: CGFloat
-    let count: Int
-    let bottomPadding: CGFloat
 
     var body: some View {
         if panes.count > 1 {
             // Many selected: a lazy stack, so only on-screen panes are drawn
             // (selecting a hundred records used to build a hundred glass panes).
             LazyVStack(spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                ForEach(Array(items.enumerated()), id: \.element.id) { _, item in
                     if selectedIDs.contains(item.id) {
                         SelectionGlassSlab(selectionColor: selectionColor, lightweight: true)
                             .frame(height: rowHeight)
-                            .modifier(edge(index))
+                            .modifier(edge)
                     } else {
                         Color.clear.frame(height: rowHeight)
                     }
@@ -1736,7 +1760,7 @@ private struct SelectionGlassLayer: View {
                         .frame(width: proxy.size.width, height: rowHeight)
                         // Before positioning, so the edge effect measures this
                         // pane's own frame rather than the whole list.
-                        .modifier(edge(pane.index))
+                        .modifier(edge)
                         .position(x: proxy.size.width / 2, y: CGFloat(pane.index) * rowHeight + rowHeight / 2)
                         .transition(.opacity.combined(with: .scale(scale: 0.97)))
                 }
@@ -1746,8 +1770,8 @@ private struct SelectionGlassLayer: View {
         }
     }
 
-    private func edge(_ index: Int) -> ListEdgeEffect {
-        ListEdgeEffect(style: scrollEffect, topEdge: topEdge, index: index, count: count, bottomPadding: bottomPadding)
+    private var edge: ListEdgeEffect {
+        ListEdgeEffect(style: scrollEffect, topEdge: topEdge)
     }
 }
 
@@ -1758,14 +1782,17 @@ private struct SelectionGlassSlab: View {
     let selectionColor: Color
     /// For multi-select: no blurred glow, which is costly with many panes.
     var lightweight = false
+    /// Records use the card radius; the search field passes a capsule's.
+    var cornerRadius: CGFloat = GlassMetrics.cardRadius
+    var verticalInset: CGFloat = 3
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
     }
 
     var body: some View {
         surface
-            .padding(.vertical, 3)
+            .padding(.vertical, verticalInset)
             .scaleEffect(1.008)
     }
 
@@ -1786,11 +1813,7 @@ private struct SelectionGlassSlab: View {
         let glow = shape
             .stroke(Color.accentColor.opacity(lightweight ? 0 : (isDark ? 0.45 : 0.35)), lineWidth: 5)
             .blur(radius: lightweight ? 0 : 6)
-        if transparency == .opaque {
-            shape.fill(selectionColor.opacity(isDark ? 0.55 : 0.4))
-                .background(glow)
-                .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
-        } else if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *) {
             Color.clear
                 .glassEffect(
                     .regular.tint(selectionColor.opacity(isDark ? 0.42 : 0.3)),
@@ -1887,6 +1910,9 @@ private struct RowIconAction: View {
     let label: String
     let isSelected: Bool
     var tint: Color? = nil
+    /// Shown on hover. Handled by this view's own hover tracking rather than
+    /// a separate tooltip modifier: one hover region per button, not two.
+    var tooltip: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -1905,6 +1931,13 @@ private struct RowIconAction: View {
             .onHover { inside in
                 isHovered = inside
                 if !inside { isPressed = false }
+                if let tooltip {
+                    if inside {
+                        FloatingTooltipWindow.shared.scheduleShow(text: tooltip)
+                    } else {
+                        FloatingTooltipWindow.shared.cancelAndHide()
+                    }
+                }
             }
             .onTapGesture {
                 isPressed = false
@@ -1916,7 +1949,12 @@ private struct RowIconAction: View {
                     .onChanged { _ in if !isPressed { isPressed = true } }
                     .onEnded { _ in isPressed = false }
             )
-            .onDisappear { isPressed = false }
+            .onDisappear {
+                if isHovered, tooltip != nil {
+                    FloatingTooltipWindow.shared.cancelAndHide()
+                }
+                isPressed = false
+            }
             .accessibilityElement()
             .accessibilityLabel(label)
             .accessibilityAddTraits(.isButton)
@@ -2712,4 +2750,8 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
             pendingRecoveredClickPoint = nil
         }
     }
+}
+
+enum ToolbarSpace {
+    static let name = "ClipShelfToolbar"
 }

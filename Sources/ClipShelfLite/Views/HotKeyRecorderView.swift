@@ -3,6 +3,9 @@ import Carbon.HIToolbox
 import SwiftUI
 
 struct HotKeyRecorderView: View {
+    /// How many recorders are listening, so other key handlers stand aside.
+    static var activeRecorders = 0
+
     @Binding var configuration: HotKeyConfiguration
     var save: (HotKeyConfiguration) -> Void = HotKeyDefaults.save
     var pausesGlobalHotKey = true
@@ -13,7 +16,8 @@ struct HotKeyRecorderView: View {
         Button(isRecording ? "请按快捷键" : configuration.displayText) {
             toggleRecording()
         }
-        .clipShelfGlassButtons(prominent: isRecording)
+        // Stays glass while recording, tinted with the accent colour.
+        .buttonStyle(LiquidGlassButtonStyle(isActive: isRecording))
         .onDisappear {
             stopRecording()
         }
@@ -24,7 +28,9 @@ struct HotKeyRecorderView: View {
     }
 
     private func startRecording() {
+        guard !isRecording else { return }
         isRecording = true
+        Self.activeRecorders += 1
         if pausesGlobalHotKey {
             HotKeyManager.shared.unregister()
         }
@@ -36,6 +42,9 @@ struct HotKeyRecorderView: View {
     }
 
     private func stopRecording() {
+        if isRecording {
+            Self.activeRecorders = max(Self.activeRecorders - 1, 0)
+        }
         isRecording = false
         if let monitor {
             NSEvent.removeMonitor(monitor)

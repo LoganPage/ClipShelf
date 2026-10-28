@@ -54,6 +54,12 @@ struct HotKeyConfiguration: Codable, Equatable {
         modifiers: UInt32(cmdKey)
     )
 
+    /// ⌘F shows or hides the search field by default.
+    static let defaultToggleSearchValue = HotKeyConfiguration(
+        keyCode: UInt32(kVK_ANSI_F),
+        modifiers: UInt32(cmdKey)
+    )
+
     static let defaultPinValue = HotKeyConfiguration(
         keyCode: UInt32(kVK_ANSI_P),
         modifiers: UInt32(cmdKey | shiftKey)
@@ -158,6 +164,26 @@ enum CloseSettingsHotKeyDefaults {
         guard let data = AppEnvironment.userDefaults.data(forKey: key),
               let configuration = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) else {
             return .defaultCloseSettingsValue
+        }
+        return configuration
+    }
+
+    static func save(_ configuration: HotKeyConfiguration) {
+        if let data = try? JSONEncoder().encode(configuration) {
+            AppEnvironment.userDefaults.set(data, forKey: key)
+            NotificationCenter.default.post(name: changedNotification, object: configuration)
+        }
+    }
+}
+
+enum ToggleSearchHotKeyDefaults {
+    static let changedNotification = Notification.Name("ClipShelfToggleSearchHotKeyChanged")
+    private static let key = "toggleSearchHotKey.configuration"
+
+    static func load() -> HotKeyConfiguration {
+        guard let data = AppEnvironment.userDefaults.data(forKey: key),
+              let configuration = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) else {
+            return .defaultToggleSearchValue
         }
         return configuration
     }

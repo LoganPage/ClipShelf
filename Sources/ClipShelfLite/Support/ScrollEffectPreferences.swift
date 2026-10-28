@@ -2,25 +2,22 @@ import Foundation
 
 /// How history rows behave at the edges of the list.
 enum ScrollEffectStyle: String, CaseIterable, Identifiable {
-    /// Rows slipping under the toolbar blur gradually; rows reaching the
-    /// bottom gather into a stack that unfolds as the list scrolls.
-    case stack
-    /// Only the gradual blur under the toolbar.
-    case blurOnly
+    /// Rows blur gradually as they slide under the toolbar at the top or
+    /// past the bottom edge. (Stored as "blurOnly" from before; the old
+    /// bottom stack, "stack", now falls back to this too.)
+    case blur = "blurOnly"
     case off
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .stack: "叠放"
-        case .blurOnly: "仅模糊"
+        case .blur: "渐进模糊"
         case .off: "关闭"
         }
     }
 
-    var stacksBottom: Bool { self == .stack }
-    var blursTop: Bool { self != .off }
+    var blursEdges: Bool { self != .off }
 }
 
 enum ScrollEffectPreferences {
@@ -29,7 +26,7 @@ enum ScrollEffectPreferences {
 
     static var value: ScrollEffectStyle {
         get {
-            AppEnvironment.userDefaults.string(forKey: key).flatMap(ScrollEffectStyle.init(rawValue:)) ?? .stack
+            AppEnvironment.userDefaults.string(forKey: key).flatMap(ScrollEffectStyle.init(rawValue:)) ?? .blur
         }
         set {
             AppEnvironment.userDefaults.set(newValue.rawValue, forKey: key)

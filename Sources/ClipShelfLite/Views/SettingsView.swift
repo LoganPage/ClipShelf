@@ -7,17 +7,14 @@ struct SettingsView: View {
     var onClose: () -> Void = {}
     @State private var launchAtLogin = LoginItemController.isEnabled
     @State private var loginError: String?
-    @State private var selectionColor = SelectionColorPreferences.color
-    @State private var selectionColorPreset = SelectionColorPreferences.selectedPreset
     @State private var switchToClickedRecord = SelectionClickBehaviorPreferences.switchToClickedRecord
     @State private var multiSelectionClickSelectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickSelectedBehavior
     @State private var multiSelectionClickUnselectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickUnselectedBehavior
-    @State private var clickRecoveryDuration = DragSelectionPreferences.clickRecoveryDuration
     @State private var hotKey = HotKeyDefaults.load()
     @State private var clearSelectionHotKey = ClearSelectionHotKeyDefaults.load()
     @State private var pinHotKey = PinHotKeyDefaults.load()
     @State private var closeSettingsHotKey = CloseSettingsHotKeyDefaults.load()
-    @State private var appIconChoice = AppIconPreferences.selected
+    @State private var toggleSearchHotKey = ToggleSearchHotKeyDefaults.load()
     @State private var hostWindow: NSWindow?
     @State private var appearanceMode = AppearancePreferences.mode
     @State private var glassTransparency = GlassPreferences.value
@@ -45,7 +42,6 @@ struct SettingsView: View {
                     appearanceSection
                     glassSection
                     scrollEffectSection
-                    iconSection
                     screenshotSection
                     historySection
                     selectionSection
@@ -54,11 +50,11 @@ struct SettingsView: View {
                     launchSection
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 10)
+                // Clears the 设置 capsule (the header inset ends at its bottom edge).
+                .padding(.top, 18)
                 .padding(.bottom, 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .clipShelfGlassButtons()
-                .modifier(CapsuleButtonShape())
+                .buttonStyle(LiquidGlassButtonStyle())
             }
             // The title and ✓ float over the content as glass, and content
             // softly blurs away under them and at the bottom edge.
@@ -76,12 +72,15 @@ struct SettingsView: View {
                     }
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
+                .padding(.top, 10)
+                // Frosts what scrolls under the header: exactly from the top
+                // of the panel to the bottom edge of the 设置 capsule.
+                .background { HeaderBlurBand() }
             }
             .background(OverlayScrollerConfigurator())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay { LiquidMenuOverlay() }
         .coordinateSpace(name: SettingsPanelSpace.name)
         .background {
             // On macOS 26 the hosting panel is Liquid Glass; keep it visible.
@@ -114,9 +113,6 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: PinHotKeyDefaults.changedNotification)) { notification in
             pinHotKey = notification.object as? HotKeyConfiguration ?? PinHotKeyDefaults.load()
         }
-        .onReceive(NotificationCenter.default.publisher(for: AppIconPreferences.changedNotification)) { notification in
-            appIconChoice = notification.object as? AppIconChoice ?? AppIconPreferences.selected
-        }
         .onReceive(NotificationCenter.default.publisher(for: AppearancePreferences.changedNotification)) { notification in
             appearanceMode = notification.object as? AppearanceMode ?? AppearancePreferences.mode
             systemColorScheme = AppearancePreferences.systemColorScheme
@@ -124,17 +120,10 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: AppearancePreferences.systemChangedNotification)) { _ in
             systemColorScheme = AppearancePreferences.systemColorScheme
         }
-        .onReceive(NotificationCenter.default.publisher(for: SelectionColorPreferences.changedNotification)) { _ in
-            selectionColor = SelectionColorPreferences.color
-            selectionColorPreset = SelectionColorPreferences.selectedPreset
-        }
         .onReceive(NotificationCenter.default.publisher(for: SelectionClickBehaviorPreferences.changedNotification)) { notification in
             switchToClickedRecord = notification.object as? Bool ?? SelectionClickBehaviorPreferences.switchToClickedRecord
             multiSelectionClickSelectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickSelectedBehavior
             multiSelectionClickUnselectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickUnselectedBehavior
-        }
-        .onReceive(NotificationCenter.default.publisher(for: DragSelectionPreferences.changedNotification)) { notification in
-            clickRecoveryDuration = notification.object as? TimeInterval ?? DragSelectionPreferences.clickRecoveryDuration
         }
         .onAppear {
             reloadDisplayedValues()
@@ -188,7 +177,7 @@ struct SettingsView: View {
                 .accessibilityLabel("滚动效果")
             }
 
-            settingsCaption("叠放：记录滑到工具栏下时逐渐模糊，底部的记录收成一摞、随滚动展开；仅模糊：只保留顶部的渐变模糊。")
+            settingsCaption("渐进模糊：记录滑到顶部工具栏下或滑出底部时，随滑入的程度逐渐模糊。")
 
             HStack {
                 Text("切换动画")
@@ -214,37 +203,15 @@ struct SettingsView: View {
 
     private var glassSection: some View {
         settingsSection("玻璃效果") {
-            LiquidSegmentedControl(
-                options: GlassTransparency.allCases,
-                selection: Binding(
-                    get: { glassTransparency },
-                    set: { value in
-                        glassTransparency = value
-                        GlassPreferences.value = value
-                    }
+            GlassLevelSlider(
+                value: Binding(
+                    get: { glassTransparency.level },
+                    set: { glassTransparency = GlassTransparency(level: $0) }
                 ),
-                title: \.title,
-                segmentWidth: 84
+                onCommit: { GlassPreferences.value = GlassTransparency(level: $0) }
             )
-            .accessibilityLabel("玻璃效果")
 
-            Text("清透最通透；着色更易读；不透明关闭玻璃与背景模糊，最省电，滚动也最流畅。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var iconSection: some View {
-        settingsSection("图标") {
-            HStack(spacing: 14) {
-                ForEach(AppIconChoice.allCases) { choice in
-                    iconChoiceButton(choice)
-                }
-            }
-
-            Text("选择后会立即更新应用内图标预览，并在下次打开时继续使用。程序坞图标固定使用 AppIcon，避免运行时大小变化。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            settingsCaption("往左更清透，背后的桌面更多地透出来；往右玻璃着色更重、更易读。")
         }
     }
 
@@ -351,57 +318,6 @@ struct SettingsView: View {
             }
 
             settingsCaption("单选时再点一次自身会取消选择。多选时点击已选、未选记录的行为可以分别设置。")
-
-            HStack {
-                Text("点击恢复期")
-                LiquidSlider(
-                    value: Binding(
-                        get: { clickRecoveryDuration },
-                        set: updateClickRecoveryDuration
-                    ),
-                    range: 0...1,
-                    step: 0.1
-                )
-                .frame(maxWidth: 260)
-                Text(String(format: "%.1f 秒", clickRecoveryDuration))
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 52, alignment: .trailing)
-            }
-
-            settingsCaption("三指拖移松手后，短时间内的下一次点击会走恢复逻辑。设为 0 秒时直接使用普通点击。")
-
-            Divider()
-
-            Text("选中颜色")
-                .font(.system(size: 13, weight: .medium))
-
-            HStack(spacing: 8) {
-                ForEach(SelectionColorPreset.allCases) { preset in
-                    selectionColorPresetButton(preset)
-                }
-            }
-
-            HStack(spacing: 12) {
-                ColorPicker("自定义颜色", selection: Binding(
-                    get: { selectionColor },
-                    set: updateSelectionColor
-                ), supportsOpacity: false)
-
-                Text(selectionColorPreset == nil ? "当前使用自定义颜色" : "预设会随浅色 / 深色外观自动切换")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Button("恢复默认") {
-                    SelectionColorPreferences.reset()
-                    selectionColorPreset = SelectionColorPreferences.selectedPreset
-                    selectionColor = SelectionColorPreferences.color
-                }
-            }
-
-            settingsCaption("选中的记录会变成带这个颜色的玻璃。")
         }
     }
 
@@ -434,6 +350,16 @@ struct SettingsView: View {
             }
 
             HStack {
+                Text("呼出 / 关闭搜索框")
+                Spacer()
+                HotKeyRecorderView(
+                    configuration: $toggleSearchHotKey,
+                    save: ToggleSearchHotKeyDefaults.save,
+                    pausesGlobalHotKey: false
+                )
+            }
+
+            HStack {
                 Text("关闭设置")
                 Spacer()
                 HotKeyRecorderView(
@@ -443,9 +369,7 @@ struct SettingsView: View {
                 )
             }
 
-            Text("点击快捷键按钮后按新的组合键，按 Esc 取消录入。设置窗口也可以用 ⌘, 或 Esc 打开 / 关闭。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            settingsCaption("点击快捷键按钮后按新的组合键，按 Esc 取消录入。设置窗口也可以用 ⌘, 或 Esc 打开 / 关闭。")
         }
     }
 
@@ -512,7 +436,8 @@ struct SettingsView: View {
     private func settingsCaption(_ text: String) -> some View {
         Text(text)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            // A notch stronger than .secondary: on dark glass that read too faint.
+            .foregroundStyle(Color.primary.opacity(resolvedColorScheme == .dark ? 0.68 : 0.58))
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -520,7 +445,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.primary.opacity(resolvedColorScheme == .dark ? 0.72 : 0.6))
                 .padding(.leading, 4)
                 .modifier(ScrollEdgeBlur())
 
@@ -551,18 +476,6 @@ struct SettingsView: View {
         }
     }
 
-    private func updateSelectionColor(_ color: Color) {
-        selectionColor = color
-        selectionColorPreset = nil
-        SelectionColorPreferences.color = color
-    }
-
-    private func selectSelectionColorPreset(_ preset: SelectionColorPreset) {
-        selectionColorPreset = preset
-        selectionColor = preset.color
-        SelectionColorPreferences.select(preset)
-    }
-
     private func updateSelectionClickBehavior(_ enabled: Bool) {
         switchToClickedRecord = enabled
         SelectionClickBehaviorPreferences.switchToClickedRecord = enabled
@@ -576,11 +489,6 @@ struct SettingsView: View {
     private func updateMultiSelectionClickUnselectedBehavior(_ behavior: MultiSelectionClickUnselectedBehavior) {
         multiSelectionClickUnselectedBehavior = behavior
         SelectionClickBehaviorPreferences.multiSelectionClickUnselectedBehavior = behavior
-    }
-
-    private func updateClickRecoveryDuration(_ duration: TimeInterval) {
-        clickRecoveryDuration = duration
-        DragSelectionPreferences.clickRecoveryDuration = duration
     }
 
     private func updateHistoryLimit(_ value: Int) {
@@ -629,82 +537,11 @@ struct SettingsView: View {
         updateHistoryLimit(normalizedValue)
     }
 
-    private func updateAppIcon(_ choice: AppIconChoice) {
-        appIconChoice = choice
-        AppIconPreferences.selected = choice
-    }
-
     private func updateAppearanceMode(_ mode: AppearanceMode) {
         appearanceMode = mode
         AppearancePreferences.mode = mode
     }
 
-    private func selectionColorPresetButton(_ preset: SelectionColorPreset) -> some View {
-        Button {
-            selectSelectionColorPreset(preset)
-        } label: {
-            VStack(spacing: 5) {
-                Capsule()
-                    .fill(preset.color)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 30)
-                    .overlay {
-                        if selectionColorPreset == preset {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(Color(nsColor: .labelColor))
-                        }
-                    }
-                    .overlay {
-                        Capsule()
-                            .strokeBorder(selectionColorPreset == preset ? Color.accentColor : AppTheme.subtleBorder, lineWidth: selectionColorPreset == preset ? 2 : 1)
-                    }
-
-                Text(preset.title)
-                    .font(.caption2)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
-        }
-        .buttonStyle(.plain)
-        .help(preset.feeling)
-    }
-
-    @ViewBuilder
-    private func iconChoiceButton(_ choice: AppIconChoice) -> some View {
-        Button {
-            updateAppIcon(choice)
-        } label: {
-            VStack(spacing: 8) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(appIconChoice == choice ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: appIconChoice == choice ? 2 : 0.5)
-
-                    if let image = choice.previewImage {
-                        Image(nsImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .padding(10)
-                    } else {
-                        Image(systemName: "app")
-                            .font(.system(size: 24))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(width: 76, height: 76)
-                .scaleEffect(appIconChoice == choice ? 1 : 0.96)
-                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: appIconChoice)
-
-                Text(choice.title)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("选择\(choice.title)")
-    }
 }
 
 /// Uses the system overlay scroller, which already fades in while scrolling
@@ -782,16 +619,6 @@ private struct CircleButtonShape: ViewModifier {
     }
 }
 
-private struct CapsuleButtonShape: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 14.0, *) {
-            content.buttonBorderShape(.capsule)
-        } else {
-            content
-        }
-    }
-}
-
 /// Applies `ScrollEdgeBlur` to each row of a settings card separately, so
 /// rows blur one by one as they slide under the header or off the bottom,
 /// like records under the main window's toolbar.
@@ -825,10 +652,6 @@ enum SettingsPanelSpace {
 /// floating header or past the bottom edge of the settings panel.
 private struct ScrollEdgeBlur: ViewModifier {
     @ObservedObject private var snapshotMode = SettingsSnapshotMode.shared
-    /// Where blurring starts, measured from the top of the panel: the bottom
-    /// of the 设置 capsule (16 + 40) plus a little under half its height. At
-    /// rest the first row sits just below this, so nothing is blurred.
-    private static let topLine: CGFloat = 16 + 40 + 16
     /// Distance over which the blur builds up.
     private static let ramp: CGFloat = 20
 
@@ -839,11 +662,10 @@ private struct ScrollEdgeBlur: ViewModifier {
             content.visualEffect { effect, geometry in
                 let frame = geometry.frame(in: .named(SettingsPanelSpace.name))
                 let panel = geometry.bounds(of: .named(SettingsPanelSpace.name)) ?? .zero
-                let top = min(max((Self.topLine - frame.minY) / Self.ramp, 0), 1)
-                let bottom = panel.height > 0
+                // Bottom edge only; the top uses the system scroll edge effect.
+                let amount = panel.height > 0
                     ? min(max((frame.maxY - (panel.height - 6)) / Self.ramp, 0), 1)
                     : 0
-                let amount = max(top, bottom)
                 return effect
                     .blur(radius: 7 * amount)
                     .opacity(1 - 0.55 * Double(amount))
@@ -851,5 +673,26 @@ private struct ScrollEdgeBlur: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// A progressive frosted band: fully blurred at the top of the panel, fading
+/// to nothing at its bottom edge.
+private struct HeaderBlurBand: View {
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: 0.45),
+                        .init(color: .black.opacity(0), location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .allowsHitTesting(false)
     }
 }

@@ -26,9 +26,10 @@ enum AppIconPreferences {
     static let changedNotification = Notification.Name("AppIconPreferences.changed")
     private static let selectedKey = "appIcon.selected"
 
+    /// Only 方案 2 is offered now, everywhere.
     static var selected: AppIconChoice {
         get {
-            AppIconChoice(rawValue: AppEnvironment.userDefaults.integer(forKey: selectedKey)) ?? .clipboardHistory
+            .historyList
         }
         set {
             AppEnvironment.userDefaults.set(newValue.rawValue, forKey: selectedKey)

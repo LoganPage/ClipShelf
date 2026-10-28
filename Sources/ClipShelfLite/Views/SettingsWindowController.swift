@@ -147,7 +147,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         setFrames(targetFrame(in: parent))
         setAlpha(1)
         attach(to: parent)
-        panel?.makeKey()
         isShown = true
         installCloseShortcut()
     }
@@ -208,8 +207,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         // Window-server rects are top-left based on the main display.
         let rect = CGRect(x: frame.minX, y: screenHeight - frame.maxY, width: frame.width, height: frame.height)
         let radius = GlassMetrics.panelRadius
+        // Front to back: content, its glass, the main window under it.
+        let windows = [panel?.windowNumber, glassWindow?.windowNumber, parent?.windowNumber].compactMap { $0 }
         snapshotQueue.async { [weak self] in
-            guard let image = WindowSnapshot.captureScreen(rect: rect, cornerRadius: radius) else { return }
+            guard let image = WindowSnapshot.captureWindows(windows, rect: rect, cornerRadius: radius) else { return }
             DispatchQueue.main.async {
                 self?.liveImage = (image, key)
                 completion(image)
@@ -272,7 +273,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             self.setAlpha(0)
             self.setFrames(frame)
             self.attach(to: parent)
-            self.panel?.makeKey()
             // Dissolve from the animation image into the live glass rather
             // than switching, so the hand-over has no visible colour jump.
             self.setAlpha(1, animatedOver: Self.handOverDuration)
@@ -292,10 +292,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             return
         }
         isAnimating = true
-        // Take focus now, while still parked off screen. Liquid Glass renders
-        // differently in an inactive window; doing this only on arrival made
-        // the panel land dim and then visibly "light up" a moment later.
-        panel.makeKey()
         let start = { (snapshot: CGImage?) in
             guard let snapshot else {
                 reveal()
@@ -331,6 +327,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func close() {
         guard !isAnimating, isShown, let panel, let parent else { return }
+        LiquidMenuPresenter.shared.dismissImmediately()
         NotificationCenter.default.post(name: Self.willCloseNotification, object: nil)
         let frame = panel.frame
         let fresh = prefetchedClose.flatMap { entry in
@@ -400,7 +397,18 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         guard closeShortcutMonitor == nil else { return }
         closeShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.isShown, !self.isAnimating,
-                  CloseSettingsHotKeyDefaults.load().matches(event) else { return event }
+                  HotKeyRecorderView.activeRecorders == 0 else { return event }
+            // The main window keeps focus while settings is open, so Esc is
+            // handled here: an open pull-down first, then settings itself.
+            if event.keyCode == 53, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+                if LiquidMenuPresenter.shared.isOpen {
+                    LiquidMenuPresenter.shared.dismiss()
+                } else {
+                    self.close()
+                }
+                return nil
+            }
+            guard CloseSettingsHotKeyDefaults.load().matches(event) else { return event }
             self.close()
             return nil
         }
@@ -485,7 +493,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         // Parked off screen while hidden: keep it out of Mission Control and the window cycle.
         panel.collectionBehavior = [.transient, .ignoresCycle]
         panel.delegate = self
-        panel.onCancel = { [weak self] in self?.close() }
+        // Esc closes an open pull-down first, then settings.
+        panel.onCancel = { [weak self] in
+            if LiquidMenuPresenter.shared.isOpen {
+                LiquidMenuPresenter.shared.dismiss()
+            } else {
+                self?.close()
+            }
+        }
+        // The page is transparent between its cards; without this, clicks and
+        // scrolling there fell through to the main window underneath.
+        panel.ignoresMouseEvents = false
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             panel.standardWindowButton(button)?.isHidden = true
         }
@@ -523,24 +541,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// The glass surface on its own (the content lives in the window above).
     private func makeBackdropView() -> NSView {
         let radius = GlassMetrics.panelRadius
-        if GlassPreferences.value != .opaque, #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.cornerRadius = radius
-            switch GlassPreferences.value {
-            case .clear:
-                glass.style = .clear
-            case .tinted:
-                glass.style = .regular
-                glass.tintColor = NSColor.windowBackgroundColor.withAlphaComponent(0.55)
-            case .regular, .opaque:
-                glass.style = .regular
-            }
+            glass.style = .clear
+            glass.tintColor = Self.backdropTint
             backdrop = glass
             return glass
         }
         let effect = NSVisualEffectView()
-        effect.material = GlassPreferences.value == .opaque ? .windowBackground : .hudWindow
-        effect.blendingMode = GlassPreferences.value == .opaque ? .withinWindow : .behindWindow
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
         effect.layer?.cornerRadius = radius
@@ -670,15 +681,36 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Clear glass frosted continuously by the transparency slider.
+    private static var backdropTint: NSColor {
+        // Same range as the main window's background: nearly clear glass at
+        // the clear end, firmly frosted at the tinted end.
+        NSColor.windowBackgroundColor.withAlphaComponent(0.7 * GlassPreferences.value.level)
+    }
+
     @objc private func glassChanged() {
-        glassWindow?.contentView = makeBackdropView()
+        // Dragging the slider: just re-tint the existing glass.
+        if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
+            glass.tintColor = Self.backdropTint
+        } else {
+            glassWindow?.contentView = makeBackdropView()
+        }
         scheduleFallbackRender()
     }
 }
 
 /// Settings window: no traffic lights, closes on Esc with the genie animation.
-final class SettingsPanel: NSWindow {
+/// A panel that only takes keyboard focus when a text field needs it, so the
+/// main window stays key (and looks focused) while settings is open.
+final class SettingsPanel: NSPanel {
     var onCancel: (() -> Void)?
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        becomesKeyOnlyIfNeeded = true
+        hidesOnDeactivate = false
+        isFloatingPanel = false
+    }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -732,13 +764,22 @@ enum WindowSnapshot {
         create?(.null, 1 << 3, UInt32(windowNumber), 1 << 0)?.takeRetainedValue()
     }
 
-    /// What is on screen in `rect` (top-left based, in points), with the
-    /// corners outside `cornerRadius` made transparent. Captures only this
-    /// app's own windows without screen recording permission, and is safe
-    /// to call off the main thread.
-    static func captureScreen(rect: CGRect, cornerRadius: CGFloat) -> CGImage? {
-        // .optionOnScreenOnly, no relative window, default image options.
-        guard let image = create?(rect, 1 << 0, 0, 0)?.takeRetainedValue(),
+    private typealias CreateImageFromArray = @convention(c) (CGRect, CFArray, UInt32) -> Unmanaged<CGImage>?
+
+    private static let createFromArray: CreateImageFromArray? = {
+        guard let handle = dlopen(nil, RTLD_NOW), let symbol = dlsym(handle, "CGWindowListCreateImageFromArray") else { return nil }
+        return unsafeBitCast(symbol, to: CreateImageFromArray.self)
+    }()
+
+    /// `windowNumbers` (this app's own windows, front to back) composited
+    /// within `rect` (top-left based, in points), with the corners outside
+    /// `cornerRadius` made transparent. Naming only our own windows needs no
+    /// screen recording permission (a plain screen-region capture asked for
+    /// it, again after every reinstall). Safe to call off the main thread.
+    static func captureWindows(_ windowNumbers: [Int], rect: CGRect, cornerRadius: CGFloat) -> CGImage? {
+        var ids: [UnsafeRawPointer?] = windowNumbers.map { UnsafeRawPointer(bitPattern: UInt($0)) }
+        guard let array = CFArrayCreate(nil, &ids, ids.count, nil),
+              let image = createFromArray?(rect, array, 0)?.takeRetainedValue(),
               let context = CGContext(
                 data: nil,
                 width: image.width,

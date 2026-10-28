@@ -17,13 +17,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var window: NSWindow?
     private var statusItem: NSStatusItem?
     private var controlServer: RuntimeControlServer?
-    private var backdrop: NSVisualEffectView?
+    private var backdrop: BackdropContainerView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         CursorSetCoalescer.install()
         normalizeGlobalHotKeyIfNeeded()
         AppIconPreferences.applySavedChoice()
+        // Selection colour and click-recovery time are no longer in Settings:
+        // everyone uses the defaults.
+        if SelectionColorPreferences.selectedPreset != .coolGrayBlue {
+            SelectionColorPreferences.reset()
+        }
+        DragSelectionPreferences.resetToDefault()
         configureStatusItem()
         showWindow()
         DispatchQueue.main.async {
@@ -180,6 +186,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // One seamless surface: the SwiftUI glass toolbar draws into the titlebar area.
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            // Transparent, so the clear end of the glass slider can let the
+            // desktop show through the backdrop.
+            window.isOpaque = false
+            window.backgroundColor = .clear
             // An empty unified toolbar gives the taller titlebar, so the
             // traffic lights centre on the app icon row.
             window.toolbar = NSToolbar(identifier: "ClipShelfMainToolbar")
@@ -198,18 +208,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The desktop shows through, blurred and tinted, behind every card and
     /// glass control, which is what gives Liquid Glass something to refract.
-    private static func makeVibrantContentView(hosting: NSView) -> NSVisualEffectView {
-        let backdrop = NSVisualEffectView()
-        WindowBackdrop.apply(GlassPreferences.value, to: backdrop)
-        backdrop.state = .followsWindowActiveState
-        hosting.translatesAutoresizingMaskIntoConstraints = false
-        backdrop.addSubview(hosting)
-        NSLayoutConstraint.activate([
-            hosting.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor),
-            hosting.topAnchor.constraint(equalTo: backdrop.topAnchor),
-            hosting.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor)
-        ])
+    private static func makeVibrantContentView(hosting: NSView) -> BackdropContainerView {
+        let backdrop = BackdropContainerView(content: hosting)
+        backdrop.apply(GlassPreferences.value)
         return backdrop
     }
 
@@ -288,8 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func glassTransparencyDidChange(_ notification: Notification) {
-        guard let backdrop else { return }
-        WindowBackdrop.apply(GlassPreferences.value, to: backdrop)
+        backdrop?.apply(GlassPreferences.value)
     }
 
     @objc func systemAppearanceDidChange(_ notification: Notification) {

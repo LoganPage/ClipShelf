@@ -110,6 +110,11 @@ enum DragSelectionPreferences {
         }
     }
 
+    /// The setting was removed from Settings; go back to the default.
+    static func resetToDefault() {
+        AppEnvironment.userDefaults.removeObject(forKey: clickRecoveryDurationKey)
+    }
+
     private static func clampedAndRounded(_ value: TimeInterval) -> TimeInterval {
         min(max((value * 10).rounded() / 10, 0), 1)
     }

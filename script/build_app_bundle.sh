@@ -34,7 +34,7 @@ chmod +x "$APP_MACOS/$APP_NAME"
 for variant in 1 2 3 4; do
   iconutil -c icns "$ROOT_DIR/Assets/AppIcon${variant}.iconset" -o "$ROOT_DIR/Assets/AppIcon${variant}.icns"
 done
-cp "$ROOT_DIR/Assets/AppIcon1.icns" "$ICON_SOURCE"
+cp "$ROOT_DIR/Assets/AppIcon2.icns" "$ICON_SOURCE"
 
 cp "$ICON_SOURCE" "$APP_RESOURCES/$ICON_FILE"
 cp "$ROOT_DIR"/Assets/AppIcon{1,2,3,4}.icns "$APP_RESOURCES/"

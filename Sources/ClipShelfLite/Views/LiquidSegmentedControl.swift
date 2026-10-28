@@ -105,12 +105,7 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
         let base = Color.clear
             .frame(width: layout.segment + 16, height: height + 10)
         Group {
-            if transparency == .opaque {
-                base
-                    .background(lensShape.fill(AppTheme.searchBackground))
-                    .overlay(lensShape.stroke(AppTheme.subtleBorder, lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
-            } else if #available(macOS 26.0, *) {
+            if #available(macOS 26.0, *) {
                 // Not `.interactive()`: the lens is animated here, and the
                 // system's own press response would fight that motion.
                 base.glassEffect(.clear, in: lensShape)
@@ -131,7 +126,7 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
                     .font(.system(size: 13, weight: index == highlighted ? .semibold : .medium))
                     // Selected text uses the label colour on an accent-tinted pill,
                     // which stays legible in both light and dark mode.
-                    .foregroundStyle(index == highlighted ? Color.primary : Color.primary.opacity(0.7))
+                    .foregroundStyle(index == highlighted ? Color.primary : Color.primary.opacity(colorScheme == .dark ? 0.84 : 0.7))
                     .lineLimit(1)
                     .frame(width: layout.segment, height: height)
                     .scaleEffect(isLifted && index == highlighted ? 1.08 : 1)
