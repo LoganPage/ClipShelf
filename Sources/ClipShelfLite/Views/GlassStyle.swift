@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 /// Shared measurements and surfaces so the main window, settings and
@@ -12,6 +13,9 @@ enum GlassMetrics {
     static let edgeInset: CGFloat = 16
     static let cardRadius: CGFloat = 16
     static let panelRadius: CGFloat = 26
+    /// Main window corners, concentric with the record cards inside
+    /// (card radius + the inset between card and window edge).
+    static let windowRadius: CGFloat = cardRadius + edgeInset
     static let thumbnailRadius: CGFloat = 10
 }
 
@@ -28,35 +32,43 @@ struct GlassTransparency: Equatable {
         self.level = min(max(level, 0), 1)
     }
 
-    // Each layer has its own range, so they always read as separate panes:
-    // at the clearest setting the window behind is ~80% see-through while
-    // cards stay ~40% see-through; towards tinted both firm up.
+    // The window and settings panel are frosted Liquid Glass with low
+    // transparency (one blur for the whole window); the cards on top are
+    // crystal-clear glass, drawn as an almost-clear pane with lit edges, so
+    // scrolling costs next to nothing. Controls are clear glass. The slider
+    // (clear ↔ tinted) adds tint throughout.
 
-    /// How much of the window's frosted backdrop shows (the rest is the
-    /// desktop itself): 0.2 → 0.95.
-    var backdropOpacity: Double { 0.2 + 0.75 * level }
+    /// Tint over the frosted window / settings panel glass: 0.22 → 0.62.
+    var windowGlassTint: Double { 0.22 + 0.4 * level }
 
-    /// Extra frosting laid over the backdrop: 0 → 0.4.
-    var backdropTint: Double { 0.4 * level }
+    /// Dark mode: smoke over the window glass, darker than the system's
+    /// focused glass but lighter than its inactive look.
+    var darkWindowSmoke: Double { 0.12 + 0.3 * level }
 
-    /// Tint of the main window's Liquid Glass (macOS 26): 0.05 → 0.75.
-    var windowGlassTint: Double { 0.05 + 0.7 * level }
+    /// Light mode: grey tint over the window glass, calming its glare.
+    var lightWindowTint: Double { 0.28 + 0.4 * level }
 
-    /// Tint laid over control glass: light frosting in light mode, smoked in dark.
-    func tintOpacity(isDark: Bool) -> Double {
-        isDark ? 0.14 + 0.4 * level : 0.32 + 0.45 * level
-    }
+    /// Light mode: white over a card.
+    var lightCardFill: Double { 0.4 + 0.4 * level }
 
-    /// Fill of the record / settings cards: 0.6 → 0.92 in light mode.
-    func cardOpacity(isDark: Bool) -> Double {
-        isDark ? 0.09 + 0.07 * level : 0.6 + 0.32 * level
-    }
+    /// Tint over control glass: none at the clear end.
+    func controlTint(isDark: Bool) -> Double { (isDark ? 0.32 : 0.36) * level }
+
+    /// Tint of a card's clear glass: nearly clear, milkier towards tinted.
+    func cardTint(isDark: Bool) -> Double { isDark ? 0.3 + 0.25 * level : 0.14 + 0.3 * level }
+
+    // Kept for the pre-macOS-26 fallback.
+    var backdropOpacity: Double { 0.75 + 0.25 * level }
+    var backdropTint: Double { 0.3 * level }
 }
 
 enum GlassPreferences {
     static let changedNotification = Notification.Name("ClipShelfGlassTransparencyChanged")
     private static let key = "glass.level"
     private static let legacyKey = "glass.transparency"
+
+    /// Posted while the slider is dragged (not saved, settings only).
+    static let previewNotification = Notification.Name("ClipShelfGlassPreview")
 
     static var value: GlassTransparency {
         get {
@@ -87,6 +99,8 @@ private struct GlassStandInKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+
+
 extension EnvironmentValues {
     var glassTransparency: GlassTransparency {
         get { self[GlassTransparencyKey.self] }
@@ -103,9 +117,8 @@ extension EnvironmentValues {
 
 // MARK: - Surfaces
 
-/// One glass surface for every control, honouring the transparency setting.
-/// A bright rim along the top edge and (in light mode) a soft shadow give it
-/// the raised, refractive look of system glass instead of a flat plate.
+/// One glass surface for every control: Apple's clear glass, the same as
+/// the type switcher's lens, tinted only as the slider moves towards tinted.
 private struct GlassSurface<S: Shape>: ViewModifier {
     @Environment(\.glassTransparency) private var transparency
     @Environment(\.glassStandIn) private var standIn
@@ -121,85 +134,76 @@ private struct GlassSurface<S: Shape>: ViewModifier {
                 .background(shape.fill(Color.white.opacity(isDark ? 0.12 : 0.62)))
                 .overlay(shape.stroke(Color.white.opacity(isDark ? 0.16 : 0.85), lineWidth: 0.6))
         } else if #available(macOS 26.0, *) {
-            content
-                .glassEffect(glass(isDark: isDark), in: shape)
-                .overlay(shape.stroke(rim(isDark: isDark), lineWidth: 0.8).allowsHitTesting(false))
-                // Lifted off the card: a crisp shade just under the bottom
-                // edge (a blurred shadow on every control made scrolling stutter).
-                .background(shape.fill(Color.black.opacity(isDark ? 0.32 : 0.09)).offset(y: 1.5))
+            content.glassEffect(glass(isDark: isDark), in: shape)
         } else {
             content
-                .background(material, in: shape)
-                .overlay(shape.stroke(rim(isDark: isDark), lineWidth: 0.8).allowsHitTesting(false))
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(isDark ? 0.16 : 0.7), lineWidth: 0.6))
         }
     }
 
     @available(macOS 26.0, *)
     private func glass(isDark: Bool) -> Glass {
-        // Always clear glass, frosted continuously by the tint, so the
-        // slider changes smoothly from one end to the other.
-        // A faintly cool grey in light mode, so controls read as panes of
-        // glass on the near-white cards instead of disappearing into them.
-        var glass = Glass.clear.tint(
-            (isDark ? Color.black : Color(red: 0.93, green: 0.945, blue: 0.965)).opacity(transparency.tintOpacity(isDark: isDark))
-        )
+        var glass = Glass.clear
+        let amount = transparency.controlTint(isDark: isDark)
+        if amount > 0.01 {
+            glass = glass.tint((isDark ? Color.black : Color.white).opacity(amount))
+        }
         if let tint {
             glass = glass.tint(tint)
         }
         return interactive ? glass.interactive() : glass
     }
-
-    private func rim(isDark: Bool) -> LinearGradient {
-        LinearGradient(
-            colors: [
-                Color.white.opacity(isDark ? 0.28 : 0.95),
-                Color.white.opacity(isDark ? 0.05 : 0.35),
-                Color.white.opacity(isDark ? 0.12 : 0.6)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
-    private var material: Material {
-        transparency.level < 0.33 ? .ultraThinMaterial : (transparency.level < 0.66 ? .regularMaterial : .thickMaterial)
-    }
 }
 
-/// The translucent card used for history records and settings groups.
-struct GlassCardBackground: View {
+private struct CardGlass: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.glassTransparency) private var transparency
-    var isHovered = false
+    let isHovered: Bool
+    let isHidden: Bool
 
-    private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
-    }
-
-    var body: some View {
+    func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
-        ZStack {
-            shape.fill(Color.white.opacity(fillOpacity))
-            // A thick-glass edge: a bright outer rim with a faint darker band
-            // just inside, where the edge would bend the light. Solid colours
-            // only: gradient strokes were re-drawn on the CPU for every row on
-            // every scroll frame, and real glass per card halved the frame rate.
-            shape.strokeBorder(Color.white.opacity(isDark ? 0.2 : 0.85), lineWidth: 1)
-            shape.inset(by: 1.5).strokeBorder(Color.black.opacity(isDark ? 0.16 : 0.035), lineWidth: 1.2)
+        let shape = RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
+        if #available(macOS 26.0, *) {
+            // Glass cards on the tinted window glass, like dark mode: white
+            // in light mode, smoked in dark mode so white text keeps contrast.
+            let fill = isDark
+                ? Color.black.opacity(transparency.cardTint(isDark: true) + (isHovered ? 0.08 : 0))
+                : Color.white.opacity(transparency.lightCardFill + (isHovered ? 0.1 : 0))
+            content
+                .glassEffect(isHidden ? .identity : .clear.tint(fill), in: shape)
+                .animation(.easeOut(duration: 0.12), value: isHovered)
+        } else {
+            content.background(shape.fill(.regularMaterial).opacity(isHidden ? 0 : 1))
         }
-        .animation(.easeOut(duration: 0.12), value: isHovered)
-    }
-
-    private var fillOpacity: Double {
-        let isDark = colorScheme == .dark
-        let base = transparency.cardOpacity(isDark: isDark)
-        return isHovered ? base + (isDark ? 0.04 : 0.2) : base
     }
 }
 
 extension View {
     func clipShelfGlass<S: Shape>(in shape: S, interactive: Bool = false, tint: Color? = nil) -> some View {
         modifier(GlassSurface(shape: shape, interactive: interactive, tint: tint))
+    }
+
+    /// A card of system Liquid Glass with this view as its content, so the
+    /// content is drawn on top of its own glass (inside a container, glass
+    /// that is only a background gets composited over its siblings).
+    /// `isHidden` drops the glass (e.g. while the selection glass shows).
+    func cardGlass(isHovered: Bool = false, isHidden: Bool = false) -> some View {
+        modifier(CardGlass(isHovered: isHovered, isHidden: isHidden))
+    }
+
+    /// Groups many glass shapes (cards in a list) in one system
+    /// GlassEffectContainer, so they are rendered together, which is Apple's
+    /// recommended way to keep lots of glass cheap. Spacing 0: cards never
+    /// melt into each other.
+    @ViewBuilder
+    func glassGroup() -> some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 0) { self }
+        } else {
+            self
+        }
     }
 
     /// Buttons inside settings and sheets: Liquid Glass on macOS 26.
@@ -263,31 +267,120 @@ private struct GlassPanel: ViewModifier {
 /// The main window's content: a frosted backdrop and a tint layer behind
 /// the SwiftUI content. Only the backdrop layers fade with the glass slider;
 /// the content on top always stays fully opaque.
-final class BackdropContainerView: NSView {
-    /// macOS 26: real Liquid Glass, which bends the desktop at its edges.
-    /// Earlier systems: a frosted visual-effect view plus a tint layer.
-    private let backdrop: NSView
+/// The window's base, the same in the main window and settings:
+/// - dark mode: frosted Liquid Glass (bends the desktop at the edges), smoked;
+/// - light mode: the same glass with a grey tint, so it doesn't glare.
+/// Neither changes when the window loses focus (the windows report an active look).
+final class WindowBackdropView: NSView {
+    private let glass: NSView?
+    private let frosted = NSVisualEffectView()
     private let tint = NSView()
+    private let radius: CGFloat
+    /// Extra grey in light mode, so the white cards on top stand apart.
+    private let lightDepth: Double
+    private var shownLevel: Double?
+    private var easeTimer: Timer?
 
-    init(content: NSView) {
+    init(cornerRadius: CGFloat, lightDepth: Double = 1) {
+        radius = cornerRadius
+        self.lightDepth = lightDepth
         if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.style = .clear
-            // Matches the corners of a window with a toolbar.
-            glass.cornerRadius = 26
-            backdrop = glass
+            let view = NSGlassEffectView()
+            view.style = .regular
+            view.cornerRadius = cornerRadius
+            glass = view
         } else {
-            let effect = NSVisualEffectView()
-            // Always the active look: settings sits in its own window, and the
-            // main window used to turn flat grey whenever settings had focus.
-            effect.state = .active
-            effect.material = .underWindowBackground
-            effect.blendingMode = .behindWindow
-            backdrop = effect
+            glass = nil
         }
         super.init(frame: .zero)
+        frosted.material = .underWindowBackground
+        frosted.blendingMode = .behindWindow
+        frosted.state = .active
+        frosted.wantsLayer = true
+        frosted.layer?.cornerRadius = cornerRadius
+        frosted.layer?.cornerCurve = .continuous
+        frosted.layer?.masksToBounds = true
         tint.wantsLayer = true
-        for view in [backdrop, tint, content] {
+        tint.layer?.cornerRadius = cornerRadius
+        tint.layer?.cornerCurve = .continuous
+        for view in [glass, frosted, tint].compactMap({ $0 }) {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+            NSLayoutConstraint.activate([
+                view.leadingAnchor.constraint(equalTo: leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: trailingAnchor),
+                view.topAnchor.constraint(equalTo: topAnchor),
+                view.bottomAnchor.constraint(equalTo: bottomAnchor)
+            ])
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private var isDark: Bool {
+        effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
+
+    /// Eases to the new level over ~0.45 s instead of jumping.
+    func apply(_ transparency: GlassTransparency, animated: Bool = true) {
+        easeTimer?.invalidate()
+        let from = shownLevel ?? transparency.level
+        let to = transparency.level
+        guard animated, abs(to - from) > 0.005 else { set(level: to); return }
+        let start = CACurrentMediaTime()
+        easeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            let t = min((CACurrentMediaTime() - start) / 0.45, 1)
+            let eased = t * t * (3 - 2 * t)
+            self?.set(level: from + (to - from) * eased)
+            if t >= 1 { timer.invalidate(); self?.easeTimer = nil }
+        }
+    }
+
+    private func set(level: Double) {
+        shownLevel = level
+        let transparency = GlassTransparency(level: level)
+        let useGlass = glass != nil
+        glass?.isHidden = !useGlass
+        frosted.isHidden = useGlass
+        if #available(macOS 26.0, *), let glass = glass as? NSGlassEffectView {
+            if isDark {
+                glass.tintColor = NSColor(white: 0.06, alpha: transparency.darkWindowSmoke)
+            } else {
+                // Grey, not white: a white tint lets light glass glare.
+                glass.tintColor = NSColor(
+                    white: 0.72 - 0.12 * lightDepth,
+                    alpha: min(transparency.lightWindowTint + 0.2 * lightDepth, 0.95)
+                )
+            }
+            tint.layer?.backgroundColor = nil
+            return
+        }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            tint.layer?.backgroundColor = NSColor.windowBackgroundColor
+                .withAlphaComponent(isDark ? transparency.backdropTint : transparency.lightWindowTint).cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        set(level: shownLevel ?? GlassPreferences.value.level)
+    }
+}
+
+/// The main window's content view: the backdrop with the SwiftUI content on
+/// top, clipped to the window's rounded corners so records scrolling past
+/// the bottom never poke out of them.
+final class BackdropContainerView: NSView {
+    private let backdrop = WindowBackdropView(cornerRadius: GlassMetrics.windowRadius)
+
+    init(content: NSView) {
+        super.init(frame: .zero)
+        content.wantsLayer = true
+        content.layer?.cornerRadius = GlassMetrics.windowRadius
+        content.layer?.cornerCurve = .continuous
+        content.layer?.masksToBounds = true
+        for view in [backdrop, content] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
             NSLayoutConstraint.activate([
@@ -303,22 +396,7 @@ final class BackdropContainerView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func apply(_ transparency: GlassTransparency) {
-        if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
-            // Clear glass, frosted by the slider: at the clear end the desktop
-            // shows through, bent at the edges; at the tinted end it is milky.
-            glass.tintColor = NSColor.windowBackgroundColor.withAlphaComponent(transparency.windowGlassTint)
-            return
-        }
-        // Below full strength the desktop itself shows through.
-        backdrop.alphaValue = transparency.backdropOpacity
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            tint.layer?.backgroundColor = NSColor.windowBackgroundColor
-                .withAlphaComponent(transparency.backdropTint).cgColor
-        }
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        apply(GlassPreferences.value)
+        backdrop.apply(transparency)
     }
 }
+

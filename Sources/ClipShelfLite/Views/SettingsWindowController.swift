@@ -32,7 +32,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private weak var parent: NSWindow?
     private var store: ClipStore?
     private var watcher: ScreenshotFolderWatcher?
-    private var backdrop: NSView?
+    private var backdrop: WindowBackdropView?
     private var hosting: NSView?
     private var isAnimating = false
     /// Whether settings is on screen. While hidden, the window stays ordered
@@ -41,7 +41,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var isShown = false
     private static let parkingOrigin = NSPoint(x: -30_000, y: -30_000)
     /// Cross-dissolve between the live glass panel and the animation image.
-    private static let handOverDuration: TimeInterval = 0.18
+    private static let handOverDuration: TimeInterval = 0.3
     /// Opening and closing take the same time, so they feel like one motion.
     private static let genieDuration: TimeInterval = 0.5
     /// Opening frame composed ahead of the click (see `prefetchOpeningSnapshot`).
@@ -275,7 +275,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             self.attach(to: parent)
             // Dissolve from the animation image into the live glass rather
             // than switching, so the hand-over has no visible colour jump.
-            self.setAlpha(1, animatedOver: Self.handOverDuration)
+            // The live view comes in quickly (ease-out) while the animation
+            // image underneath leaves slowly (ease-in, see GenieAnimator), so
+            // there is no see-through dip in the middle of the hand-over.
+            self.setAlpha(1, animatedOver: Self.handOverDuration, timing: .easeOut)
             self.isShown = true
             self.isAnimating = false
             self.installCloseShortcut()
@@ -297,7 +300,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 reveal()
                 return
             }
-            GenieAnimator.run(image: snapshot, from: source, to: frame, opening: true, duration: Self.genieDuration, above: parent, crossfade: Self.handOverDuration, completion: reveal)
+            GenieAnimator.run(image: snapshot, from: source, to: frame, opening: true, duration: Self.genieDuration, above: parent, crossfade: Self.handOverDuration * 1.6, completion: reveal)
         }
 
         let fresh = prefetched.flatMap { entry in
@@ -360,7 +363,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         // dissolves into it, so the hand-over never freezes on screen.
         let start = { [weak self] (snapshot: CGImage?) in
             guard let self else { return }
-            self.setAlpha(0, animatedOver: Self.handOverDuration)
+            self.setAlpha(0, animatedOver: 0.18)
             guard let snapshot, let source = self.anchorRectOnScreen(in: parent) else {
                 tidyUp()
                 return
@@ -438,7 +441,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         panel?.setFrame(frame, display: true)
     }
 
-    private func setAlpha(_ alpha: CGFloat, animatedOver duration: TimeInterval = 0) {
+    private func setAlpha(_ alpha: CGFloat, animatedOver duration: TimeInterval = 0, timing: CAMediaTimingFunctionName = .easeInEaseOut) {
         guard duration > 0 else {
             glassWindow?.alphaValue = alpha
             panel?.alphaValue = alpha
@@ -446,6 +449,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: timing)
             glassWindow?.animator().alphaValue = alpha
             panel?.animator().alphaValue = alpha
         }
@@ -532,6 +536,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         glass.collectionBehavior = [.transient, .ignoresCycle]
         glass.contentView = makeBackdropView()
         glassWindow = glass
+        // The system's border and shadow follow the glass's corners.
+        panel.matchSystemCornerRadius(GlassMetrics.panelRadius)
+        glass.matchSystemCornerRadius(GlassMetrics.panelRadius)
 
         self.panel = panel
         applyAppearance()
@@ -540,24 +547,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// The glass surface on its own (the content lives in the window above).
     private func makeBackdropView() -> NSView {
-        let radius = GlassMetrics.panelRadius
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.cornerRadius = radius
-            glass.style = .clear
-            glass.tintColor = Self.backdropTint
-            backdrop = glass
-            return glass
-        }
-        let effect = NSVisualEffectView()
-        effect.material = .hudWindow
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.wantsLayer = true
-        effect.layer?.cornerRadius = radius
-        effect.layer?.masksToBounds = true
-        backdrop = effect
-        return effect
+        let view = WindowBackdropView(cornerRadius: GlassMetrics.panelRadius, lightDepth: 1.8)
+        view.apply(GlassPreferences.value, animated: false)
+        backdrop = view
+        return view
     }
 
     /// Covers the main window below its titlebar row, with a slim margin.
@@ -629,7 +622,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         if let backdrop {
             context.draw(backdrop, in: bounds)
         }
-        let tint = request.isDark ? CGColor(gray: 0.12, alpha: 0.5) : CGColor(gray: 1, alpha: 0.5)
+        // The real glass's resulting colour (measured on screen), mostly
+        // covering the captured main window, so the opening animation hands
+        // over to the live glass without a change of colour.
+        let level = GlassPreferences.value.level
+        let tint = request.isDark
+            ? CGColor(gray: 0.32 - 0.14 * level, alpha: 0.82)
+            : CGColor(gray: 0.78 - 0.08 * level, alpha: 0.82)
         context.setFillColor(tint)
         context.fill(bounds)
         if let content = request.content {
@@ -681,20 +680,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Clear glass frosted continuously by the transparency slider.
-    private static var backdropTint: NSColor {
-        // Same range as the main window's background: nearly clear glass at
-        // the clear end, firmly frosted at the tinted end.
-        NSColor.windowBackgroundColor.withAlphaComponent(0.7 * GlassPreferences.value.level)
+    /// Live preview while the glass slider is dragged: only the settings
+    /// panel changes; the main window follows once the slider is released.
+    func previewGlass(_ transparency: GlassTransparency) {
+        backdrop?.apply(transparency, animated: false)
+        NotificationCenter.default.post(name: GlassPreferences.previewNotification, object: transparency)
     }
 
     @objc private func glassChanged() {
         // Dragging the slider: just re-tint the existing glass.
-        if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
-            glass.tintColor = Self.backdropTint
-        } else {
-            glassWindow?.contentView = makeBackdropView()
-        }
+        backdrop?.apply(GlassPreferences.value)
         scheduleFallbackRender()
     }
 }
@@ -714,6 +709,10 @@ final class SettingsPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    // Keep the glass in its focused look when the app is in the background.
+    @objc(_hasActiveAppearance) func keepsActiveAppearance() -> Bool { true }
+    @objc(_hasActiveAppearanceIgnoringKeyFocus) func keepsActiveAppearanceIgnoringKeyFocus() -> Bool { true }
 
     /// Positions are always computed from the main window; don't let AppKit
     /// pull the off-screen pre-render back onto the display.
@@ -743,6 +742,12 @@ private struct SettingsWindowRoot: View {
             .ignoresSafeArea()
             .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.changedNotification)) { notification in
                 glassTransparency = notification.object as? GlassTransparency ?? GlassPreferences.value
+            }
+            // While the slider is dragged only settings itself follows live.
+            .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.previewNotification)) { notification in
+                if let preview = notification.object as? GlassTransparency {
+                    glassTransparency = preview
+                }
             }
     }
 }

@@ -55,6 +55,8 @@ struct SettingsView: View {
                 .padding(.bottom, 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .buttonStyle(LiquidGlassButtonStyle())
+                // All cards' glass in one system container.
+                .glassGroup()
             }
             // The title and ✓ float over the content as glass, and content
             // softly blurs away under them and at the bottom edge.
@@ -78,6 +80,13 @@ struct SettingsView: View {
                 .background { HeaderBlurBand() }
             }
             .background(OverlayScrollerConfigurator())
+            // The same progressive frost along the bottom edge (one band for
+            // the whole panel; a blur on every row re-ran on every scroll frame).
+            .overlay(alignment: .bottom) {
+                HeaderBlurBand()
+                    .rotationEffect(.degrees(180))
+                    .frame(height: 26)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay { LiquidMenuOverlay() }
@@ -214,10 +223,12 @@ struct SettingsView: View {
                     get: { glassTransparency.level },
                     set: { glassTransparency = GlassTransparency(level: $0) }
                 ),
+                onPreview: { SettingsWindowController.shared.previewGlass(GlassTransparency(level: $0)) },
                 onCommit: { GlassPreferences.value = GlassTransparency(level: $0) }
             )
 
-            settingsCaption("往左更清透，背后的桌面更多地透出来；往右玻璃着色更重、更易读。")
+            settingsCaption("往左更清透，往右玻璃着色更重、更易读。拖动时先预览设置面板，松手后主界面再跟上。")
+
         }
     }
 
@@ -448,20 +459,18 @@ struct SettingsView: View {
     }
 
     private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // The title sits inside the frosted card, not on the clear panel
+        // glass, so it stays readable whatever is behind the window.
+        VStack(alignment: .leading, spacing: 12) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.primary.opacity(resolvedColorScheme == .dark ? 0.72 : 0.6))
-                .padding(.leading, 4)
-                .modifier(ScrollEdgeBlur())
+                .foregroundStyle(Color.primary.opacity(resolvedColorScheme == .dark ? 0.78 : 0.66))
 
-            VStack(alignment: .leading, spacing: 12) {
-                EdgeBlurredRows { content() }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(GlassCardBackground())
+            content()
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardGlass()
     }
 
     private func reloadDisplayedValues() {
@@ -609,7 +618,7 @@ private struct DoneGlassButton: View {
                 SettingsWindowController.shared.prefetchClosingSnapshot()
             }
         }
-        .clipShelfGlassButtons(prominent: true)
+        .clipShelfGlassButtons()
         .help("完成")
         .accessibilityLabel("完成")
     }
@@ -625,23 +634,6 @@ private struct CircleButtonShape: ViewModifier {
     }
 }
 
-/// Applies `ScrollEdgeBlur` to each row of a settings card separately, so
-/// rows blur one by one as they slide under the header or off the bottom,
-/// like records under the main window's toolbar.
-private struct EdgeBlurredRows<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        if #available(macOS 15.0, *) {
-            ForEach(subviews: content) { row in
-                row.modifier(ScrollEdgeBlur())
-            }
-        } else {
-            content
-        }
-    }
-}
-
 /// While set, settings rows drop their edge blur. Only for the one-off CPU
 /// render made before settings is first shown (see `SettingsWindowController`);
 /// that blur makes such a render ~25× slower.
@@ -652,34 +644,6 @@ final class SettingsSnapshotMode: ObservableObject {
 
 enum SettingsPanelSpace {
     static let name = "ClipShelfSettingsPanel"
-}
-
-/// Blurs and fades a view in proportion to how far it has slid under the
-/// floating header or past the bottom edge of the settings panel.
-private struct ScrollEdgeBlur: ViewModifier {
-    @ObservedObject private var snapshotMode = SettingsSnapshotMode.shared
-    /// Distance over which the blur builds up.
-    private static let ramp: CGFloat = 20
-
-    func body(content: Content) -> some View {
-        if snapshotMode.isRendering {
-            content
-        } else if #available(macOS 14.0, *) {
-            content.visualEffect { effect, geometry in
-                let frame = geometry.frame(in: .named(SettingsPanelSpace.name))
-                let panel = geometry.bounds(of: .named(SettingsPanelSpace.name)) ?? .zero
-                // Bottom edge only; the top uses the system scroll edge effect.
-                let amount = panel.height > 0
-                    ? min(max((frame.maxY - (panel.height - 6)) / Self.ramp, 0), 1)
-                    : 0
-                return effect
-                    .blur(radius: 7 * amount)
-                    .opacity(1 - 0.55 * Double(amount))
-            }
-        } else {
-            content
-        }
-    }
 }
 
 /// A progressive frosted band: fully blurred at the top of the panel, fading

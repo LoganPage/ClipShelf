@@ -10,23 +10,27 @@ struct ListEdgeEffect: ViewModifier {
     /// Where the visible area starts: rows above this are under the toolbar.
     let topEdge: CGFloat
 
-    /// Where blurring starts at the bottom, above the window's lower edge.
-    private static let bottomInset: CGFloat = 4
+    /// Where blurring starts at the bottom, above the window's lower edge:
+    /// rows are gone before they reach the window's rounded corners.
+    private static let bottomInset: CGFloat = 6
 
     func body(content: Content) -> some View {
         if #available(macOS 14.0, *), style.blursEdges {
             content.visualEffect { [topEdge] effect, geometry in
                 let frame = geometry.frame(in: .scrollView(axis: .vertical))
                 let viewport = geometry.bounds(of: .scrollView(axis: .vertical)) ?? .zero
-                // Builds up over two thirds of a row, the same at both edges.
+                // Builds up over two thirds of a row at the top.
                 let ramp = max(frame.height, 1) * 0.67
                 let top = min(max((topEdge - frame.minY) / ramp, 0), 1)
+                // The bottom ramp is half as tall: a slimmer fade zone.
+                let bottomRamp = ramp / 2
                 let bottomEdge = viewport.height - Self.bottomInset
-                let bottom = viewport.height > 0 ? min(max((frame.maxY - bottomEdge) / ramp, 0), 1) : 0
+                let bottom = viewport.height > 0 ? min(max((frame.maxY - bottomEdge) / bottomRamp, 0), 1) : 0
                 let amount = max(top, bottom)
+                // Top: half-faded under the toolbar. Bottom: fully faded.
                 return effect
                     .blur(radius: 6 * amount)
-                    .opacity(1 - 0.45 * Double(amount))
+                    .opacity(min(1 - 0.45 * Double(top), 1 - Double(bottom)))
             }
         } else {
             content

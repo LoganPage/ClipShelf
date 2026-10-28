@@ -12,12 +12,21 @@ struct HotKeyRecorderView: View {
     @State private var isRecording = false
     @State private var monitor: Any?
 
+    private static let growth = Animation.spring(response: 0.38, dampingFraction: 0.72)
+
     var body: some View {
-        Button(isRecording ? "请按快捷键" : configuration.displayText) {
+        Button {
             toggleRecording()
+        } label: {
+            Text(isRecording ? "请按快捷键" : configuration.displayText)
+                .contentTransition(.opacity)
         }
         // Stays glass while recording, tinted with the accent colour.
         .buttonStyle(LiquidGlassButtonStyle(isActive: isRecording))
+        // The capsule itself grows to fit the prompt (and back), springing
+        // out from its trailing edge.
+        .animation(Self.growth, value: isRecording)
+        .animation(Self.growth, value: configuration)
         .onDisappear {
             stopRecording()
         }

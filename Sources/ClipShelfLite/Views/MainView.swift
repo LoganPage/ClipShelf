@@ -52,6 +52,9 @@ struct MainView: View {
     /// While the search glass moves it shows a look-alike placeholder
     /// instead of the native text field, which is costly to animate.
     @State private var isSearchFieldLive = false
+    /// The search field was clicked: only then does it light up like a
+    /// selected record (opening it focuses it without the highlight).
+    @State private var isSearchFieldClicked = false
     @State private var searchMotionGeneration = 0
     @State private var toggleSearchHotKey = ToggleSearchHotKeyDefaults.load()
     @State private var listGeneration = 0
@@ -65,14 +68,14 @@ struct MainView: View {
     @State private var titlebarHeight: CGFloat = 28
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = GlassMetrics.edgeInset
-    private let historyListBottomPadding: CGFloat = 18
-    /// Cards draw 3pt inside their row slot (see ClipRowCardSurface).
+    private let historyListBottomPadding: CGFloat = 16
+    /// Cards draw 3pt inside their row slot (see ClipRow.card).
     private let rowCardInset: CGFloat = 3
 
     /// The glass toolbar floats over the top of the list, so rows start below it
     /// and every viewport calculation treats that strip as covered.
     /// Height of the custom titlebar row (traffic lights, icon, title).
-    private var titleRowHeight: CGFloat { max(titlebarHeight, 44) }
+    private var titleRowHeight: CGFloat { max(titlebarHeight, 30) }
 
     /// Height of the search row plus its gap.
     private var searchRowDistance: CGFloat {
@@ -117,6 +120,9 @@ struct MainView: View {
                     .padding(.top, visibleToolbarHeight)
             } else {
                 historyList
+                    // Ends just above the window's lower edge: records fade
+                    // out there instead of running into the rounded corners.
+                    .padding(.bottom, 6)
             }
 
             toolbar
@@ -212,7 +218,8 @@ struct MainView: View {
             scrollEffect = notification.object as? ScrollEffectStyle ?? ScrollEffectPreferences.value
         }
         .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.changedNotification)) { notification in
-            withAnimation(.easeInOut(duration: 0.25)) {
+            // Settles smoothly once the slider is let go.
+            withAnimation(.easeInOut(duration: 0.45)) {
                 glassTransparency = notification.object as? GlassTransparency ?? GlassPreferences.value
             }
         }
@@ -291,6 +298,8 @@ struct MainView: View {
                 }
                 // A new identity per type switch, so every row of the new type
                 // is built fresh and can play its entrance.
+                // Every card's glass in one system container.
+                .glassGroup()
                 .id(listGeneration)
                 // The previous type's rows fade out instead of vanishing.
                 .transition(.opacity)
@@ -310,6 +319,24 @@ struct MainView: View {
                 .padding(.bottom, historyListBottomPadding)
             }
             .coordinateSpace(name: "historyList")
+            // Records melt away just above the window's lower edge, so their
+            // glass never runs into the rounded bottom corners.
+            .mask {
+                VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black.opacity(0.6), location: 0.45),
+                            .init(color: .black.opacity(0.15), location: 0.8),
+                            .init(color: .black.opacity(0), location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 12)
+                }
+            }
             .background(
                 ScrollViewResolver { scrollView in
                     historyScrollView = scrollView
@@ -356,7 +383,7 @@ struct MainView: View {
     }
 
     private var toolbar: some View {
-        VStack(spacing: GlassMetrics.stackSpacing) {
+        VStack(spacing: 4) {
             titleRow
 
             HStack(spacing: 12) {
@@ -380,7 +407,9 @@ struct MainView: View {
         // underneath; once collapsed, the freed strip is clickable again.
         .contentShape(TopStrip(height: toolbarHitHeight))
         .background(alignment: .top) {
-            TitlebarScrollEdge(height: max(titlebarHeight, 28) + 6)
+            // Covers the whole toolbar, so records scrolling underneath never
+            // sit right behind the controls.
+            TitlebarScrollEdge(height: toolbarHeight)
         }
     }
 
@@ -436,6 +465,12 @@ struct MainView: View {
             searchField
                 .frame(width: rect.width, height: rect.height)
                 .offset(x: rect.minX, y: rect.minY)
+                // Tucking back in, the glass melts into the button at the
+                // end instead of vanishing on top of it.
+                .modifier(ScopedOpacity(
+                    opacity: isSearchExpanded ? 1 : 0,
+                    animation: isSearchExpanded ? .easeOut(duration: 0.1) : .easeOut(duration: 0.26)
+                ))
         }
         .frame(height: height)
     }
@@ -459,6 +494,7 @@ struct MainView: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         isSearchFieldLive = true
+                        isSearchFieldClicked = true
                         DispatchQueue.main.async { isSearchFocused = true }
                     }
             }
@@ -481,13 +517,18 @@ struct MainView: View {
             }
         }
         .padding(.horizontal, 14)
+        // The text field takes the click itself; notice it on the way.
+        .overlay(ClickWatcher { isSearchFieldClicked = true })
+        .onChange(of: isSearchFocused) { focused in
+            if !focused { isSearchFieldClicked = false }
+        }
         // Contents appear once the glass has poured out.
         .opacity(isSearchExpanded ? 1 : 0)
         .animation(.easeOut(duration: isSearchExpanded ? 0.18 : 0.08).delay(isSearchExpanded ? 0.24 : 0), value: isSearchExpanded)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-            // Focused: the same tinted glass as a selected record.
-            if isSearchFocused {
+            // Clicked: the same tinted glass as a selected record.
+            if isSearchFocused && isSearchFieldClicked {
                 SelectionGlassSlab(
                     selectionColor: selectionColor,
                     cornerRadius: GlassMetrics.controlHeight / 2,
@@ -503,7 +544,7 @@ struct MainView: View {
         // It floats over records, so frost what is underneath first (like
         // Spotlight); otherwise their text showed through the query.
         .background(Capsule().fill(.regularMaterial))
-        .animation(SelectionRowMotion.animation, value: isSearchFocused)
+        .animation(SelectionRowMotion.animation, value: isSearchFocused && isSearchFieldClicked)
         .clipShape(Capsule())
         // Lifted off the list, like Spotlight.
         .shadow(color: .black.opacity(isSearchExpanded ? 0.22 : 0), radius: 16, y: 8)
@@ -543,18 +584,24 @@ struct MainView: View {
                 }
             }
         } else {
-            if isSearchFocused {
-                NSApp.keyWindow?.makeFirstResponder(nil)
-            }
-            searchText = ""
-            withTransaction(plain) { isSearchFieldLive = false }
-            withAnimation(motion) {
+            // Keyboard focus leaves only once the field is gone: resigning it
+            // re-renders the window and used to stall the first frames.
+            let hadFocus = isSearchFocused
+            isSearchFieldClicked = false
+            if !searchText.isEmpty { searchText = "" }
+            // No bounce on the way back: it settles into the button.
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.92)) {
                 isSearchExpanded = false
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 guard generation == searchMotionGeneration, !isSearchExpanded else { return }
                 withTransaction(plain) {
+                    // Swapped only once hidden, so no placeholder flashes.
+                    isSearchFieldLive = false
                     isSearchVisible = false
+                }
+                if hadFocus, let window = NSApp.keyWindow, window.firstResponder is NSText {
+                    window.makeFirstResponder(nil)
                 }
             }
         }
@@ -1435,26 +1482,82 @@ private struct ToolbarHeightKey: PreferenceKey {
 
 /// Frosts only the titlebar strip so scrolled rows don't collide with the
 /// title; below it rows stay visible under the glass controls.
+/// Notices mouse-downs over a view without taking them: it is never the
+/// hit view, so the click still reaches what is underneath.
+private struct ClickWatcher: NSViewRepresentable {
+    let onClick: () -> Void
+
+    func makeNSView(context: Context) -> WatcherView { WatcherView() }
+    func updateNSView(_ view: WatcherView, context: Context) { view.onClick = onClick }
+
+    final class WatcherView: NSView {
+        var onClick: (() -> Void)?
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            // `point` is in the superview's coordinates, like `frame`.
+            if NSApp.currentEvent?.type == .leftMouseDown, frame.contains(point) {
+                let action = onClick
+                DispatchQueue.main.async { action?() }
+            }
+            return nil
+        }
+    }
+}
+
+/// Animates only the opacity with its own curve, leaving the frame to the
+/// surrounding transaction (older systems: plain opacity).
+private struct ScopedOpacity: ViewModifier {
+    let opacity: Double
+    let animation: Animation
+
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content.animation(animation) { $0.opacity(opacity) }
+        } else {
+            content.opacity(opacity)
+        }
+    }
+}
+
 private struct TitlebarScrollEdge: View {
-    @Environment(\.glassTransparency) private var transparency
+    @Environment(\.colorScheme) private var colorScheme
     let height: CGFloat
+    private let fade: CGFloat = 24
+
+    /// Dark: the deep grey of an inactive titlebar. Light: a soft grey a
+    /// little darker than the white controls, so they stand out on it.
+    private var shade: Color {
+        colorScheme == .dark
+            ? Color(.sRGB, red: 47 / 255, green: 50 / 255, blue: 51 / 255)
+            : Color(.sRGB, red: 0.9, green: 0.9, blue: 0.91)
+    }
 
     var body: some View {
-        Rectangle()
-            .fill(.bar)
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.7),
-                        .init(color: .black.opacity(0), location: 1)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+        let total = max(height + fade, 1)
+        let solid = Double(height / total)
+        let tail = 1 - solid
+        ZStack {
+            Rectangle().fill(.bar)
+            Rectangle().fill(shade.opacity(0.9))
+        }
+        // Solid behind the toolbar, then an eased fade (no visible edge).
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: solid),
+                    .init(color: .black.opacity(0.8), location: solid + tail * 0.2),
+                    .init(color: .black.opacity(0.5), location: solid + tail * 0.45),
+                    .init(color: .black.opacity(0.22), location: solid + tail * 0.7),
+                    .init(color: .black.opacity(0.06), location: solid + tail * 0.9),
+                    .init(color: .black.opacity(0), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
             )
-            .frame(height: height + 18)
-            .allowsHitTesting(false)
+        )
+        .frame(height: total)
+        .allowsHitTesting(false)
     }
 }
 
@@ -1632,24 +1735,24 @@ private struct ClipRow: View, Equatable {
     }
 
     private var card: some View {
+        // The row's content lives inside its card of system glass (68pt
+        // tall, 3pt inside the 74pt row slot); while selected, the shared
+        // selection glass behind takes its place.
         face
             .frame(height: 58)
-            .padding(.vertical, 8)
+            .padding(.vertical, 5)
             .padding(.horizontal, 12)
             .foregroundStyle(isSelected ? selectedTextColor : Color.primary)
-            .background {
-                ClipRowCardSurface(
+            .cardGlass(
+                isHovered: isHovered,
+                isHidden: SelectionRowMotion.surfaceOpacity(
                     isSelected: isSelected,
-                    isHovered: isHovered,
-                    selectionColor: selectionColor,
-                    selectionOpacity: SelectionRowMotion.surfaceOpacity(
-                        isSelected: isSelected,
-                        isDark: colorScheme == .dark,
-                        isPreset: selectionColorIsPreset
-                    )
-                )
-                .animation(SelectionRowMotion.animation, value: isSelected)
-            }
+                    isDark: colorScheme == .dark,
+                    isPreset: selectionColorIsPreset
+                ) > 0
+            )
+            .animation(SelectionRowMotion.animation, value: isSelected)
+            .padding(.vertical, 3)
     }
 
     private var selectedTextColor: Color {
@@ -1683,24 +1786,6 @@ private struct ClipRow: View, Equatable {
     }
 }
 
-/// Each record is its own translucent card; the selected one becomes a tinted
-/// Liquid Glass slab on macOS 26. The glass layer exists only while selected,
-/// so scrolling never pays for off-screen glass.
-/// A record's own card. While the record is selected the shared selection
-/// glass (`SelectionGlassLayer`) takes its place, so the card steps aside.
-private struct ClipRowCardSurface: View {
-    let isSelected: Bool
-    let isHovered: Bool
-    let selectionColor: Color
-    let selectionOpacity: Double
-
-    var body: some View {
-        GlassCardBackground(isHovered: isHovered)
-            .opacity(selectionOpacity > 0 ? 0 : 1)
-            .padding(.vertical, 3)
-    }
-}
-
 private struct SelectionGlassPane: Identifiable, Equatable {
     let id: String
     let index: Int
@@ -1719,43 +1804,78 @@ private struct SelectionGlassLayer: View {
     let selectionColor: Color
     let scrollEffect: ScrollEffectStyle
     let topEdge: CGFloat
+    /// Records that were already selected before the latest change; panes
+    /// for them don't pop again (e.g. when scrolled back into view).
+    @State private var settled = Set<ClipItem.ID>()
 
     var body: some View {
-        if panes.count > 1 {
-            // Many selected: a lazy stack, so only on-screen panes are drawn
-            // (selecting a hundred records used to build a hundred glass panes).
-            LazyVStack(spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { _, item in
-                    if selectedIDs.contains(item.id) {
-                        SelectionGlassSlab(selectionColor: selectionColor, lightweight: true)
-                            .frame(height: rowHeight)
+        Group {
+            if panes.count > 1 {
+                // Many selected: a lazy stack, so only on-screen panes are drawn
+                // (selecting a hundred records used to build a hundred glass panes).
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { _, item in
+                        if selectedIDs.contains(item.id) {
+                            SelectionGlassSlab(selectionColor: selectionColor, lightweight: true)
+                                .modifier(SelectionPop(animates: !settled.contains(item.id)))
+                                .frame(height: rowHeight)
+                                .modifier(edge)
+                                .transition(.opacity)
+                        } else {
+                            Color.clear.frame(height: rowHeight)
+                        }
+                    }
+                }
+            } else {
+                // One selected: a single pane that slides from record to record.
+                GeometryReader { proxy in
+                    ForEach(panes) { pane in
+                        SelectionGlassSlab(selectionColor: selectionColor, lightweight: false)
+                            .frame(width: proxy.size.width, height: rowHeight)
+                            // Grows out of the record itself: scaled before
+                            // it is positioned, so it pops in place.
+                            .modifier(SelectionPop(animates: !selectedIDs.isSubset(of: settled)))
+                            // Before positioning, so the edge effect measures this
+                            // pane's own frame rather than the whole list.
                             .modifier(edge)
-                    } else {
-                        Color.clear.frame(height: rowHeight)
+                            .position(x: proxy.size.width / 2, y: CGFloat(pane.index) * rowHeight + rowHeight / 2)
+                            .transition(.opacity)
                     }
                 }
             }
-            .allowsHitTesting(false)
-        } else {
-            // One selected: a single pane that slides from record to record.
-            GeometryReader { proxy in
-                ForEach(panes) { pane in
-                    SelectionGlassSlab(selectionColor: selectionColor, lightweight: false)
-                        .frame(width: proxy.size.width, height: rowHeight)
-                        // Before positioning, so the edge effect measures this
-                        // pane's own frame rather than the whole list.
-                        .modifier(edge)
-                        .position(x: proxy.size.width / 2, y: CGFloat(pane.index) * rowHeight + rowHeight / 2)
-                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
-                }
-            }
-            .animation(SelectionRowMotion.animation, value: panes)
-            .allowsHitTesting(false)
         }
+        // Moves between records slide; deselected panes fade out.
+        .animation(SelectionRowMotion.animation, value: panes)
+        .allowsHitTesting(false)
+        .onChange(of: selectedIDs) { settled = $0 }
+        .onAppear { settled = selectedIDs }
     }
 
     private var edge: ListEdgeEffect {
         ListEdgeEffect(style: scrollEffect, topEdge: topEdge)
+    }
+}
+
+/// A newly selected record's glass springs up from the record itself.
+private struct SelectionPop: ViewModifier {
+    let animates: Bool
+    @State private var shown: Bool
+
+    init(animates: Bool) {
+        self.animates = animates
+        _shown = State(initialValue: !animates)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(shown ? 1 : 0.86)
+            .opacity(shown ? 1 : 0)
+            .onAppear {
+                guard !shown else { return }
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.56)) {
+                    shown = true
+                }
+            }
     }
 }
 

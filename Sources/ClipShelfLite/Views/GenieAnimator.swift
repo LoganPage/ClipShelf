@@ -148,7 +148,8 @@ final class GenieAnimator {
         }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = crossfade
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            // Stays nearly opaque at first while the real window fades in.
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             window.animator().alphaValue = 0
         }, completionHandler: remove)
     }

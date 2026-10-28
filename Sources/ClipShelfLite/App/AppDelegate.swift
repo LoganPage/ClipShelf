@@ -191,10 +191,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // desktop show through the backdrop.
             window.isOpaque = false
             window.backgroundColor = .clear
-            // An empty unified toolbar gives the taller titlebar, so the
-            // traffic lights centre on the app icon row.
+            // An empty compact toolbar: a slim titlebar, so the type and
+            // action bar sits close under the traffic lights.
             window.toolbar = NSToolbar(identifier: "ClipShelfMainToolbar")
-            window.toolbarStyle = .unified
+            window.toolbarStyle = .unifiedCompact
+            // The system draws the window's border and shadow at its own
+            // corner radius; match it to the glass so no second outline
+            // shows at the corners.
+            window.matchSystemCornerRadius(GlassMetrics.windowRadius)
             window.center()
             let backdrop = Self.makeVibrantContentView(
                 hosting: ClipShelfHostingView(rootView: MainView(store: store, watcher: watcher))
@@ -419,6 +423,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 /// The main window. It can be placed off screen briefly so it can be rendered
 /// for the reveal animation; AppKit would otherwise pull it back on screen.
+extension NSWindow {
+    /// Sets the radius the system uses for the window's border and shadow.
+    func matchSystemCornerRadius(_ radius: CGFloat) {
+        let selector = NSSelectorFromString("_setCornerRadius:")
+        guard responds(to: selector), let method = class_getInstanceMethod(type(of: self), selector) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, CGFloat) -> Void
+        unsafeBitCast(method_getImplementation(method), to: Setter.self)(self, selector, radius)
+    }
+}
+
 final class ClipShelfMainWindow: NSWindow {
     static let parkingOrigin = NSPoint(x: -30_000, y: -30_000)
     var allowsOffscreenPlacement = false
@@ -426,4 +440,9 @@ final class ClipShelfMainWindow: NSWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         allowsOffscreenPlacement ? frameRect : super.constrainFrameRect(frameRect, to: screen)
     }
+
+    // Keep the glass in its focused look when the app is in the background;
+    // the traffic lights still turn grey on their own.
+    @objc(_hasActiveAppearance) func keepsActiveAppearance() -> Bool { true }
+    @objc(_hasActiveAppearanceIgnoringKeyFocus) func keepsActiveAppearanceIgnoringKeyFocus() -> Bool { true }
 }

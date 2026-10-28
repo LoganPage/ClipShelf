@@ -1112,7 +1112,9 @@ enum ClipShelfSelfTest {
             let animationExpression = try? NSRegularExpression(pattern: #"\.animation\s*\("#)
             let range = NSRange(code.startIndex..<code.endIndex, in: code)
             let animationCount = animationExpression?.numberOfMatches(in: code, range: range) ?? 0
-            let surfacePattern = #"\.background\s*\{(?:(?!\n\s*\})[\s\S])*?SelectionRowMotion\.surfaceOpacity(?:(?!\n\s*\})[\s\S])*?\.animation\s*\("#
+            // The card's own glass (`cardGlass`) is the surface layer: the
+            // selection animation must follow it directly.
+            let surfacePattern = #"\.cardGlass\s*\([\s\S]*?SelectionRowMotion\.surfaceOpacity[\s\S]*?\)\s*\.animation\s*\(SelectionRowMotion\.animation"#
             let hStackRange = code.range(of: #"\bHStack\s*\("#, options: .regularExpression)
             let animationRange = code.range(of: #"\.animation\s*\("#, options: .regularExpression)
             return animationCount == 1

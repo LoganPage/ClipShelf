@@ -20,9 +20,10 @@ struct LiquidToggle: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            Capsule()
-                .fill(isOn ? Color.accentColor.opacity(colorScheme == .dark ? 0.8 : 0.85) : Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.1))
-                .clipShelfGlass(in: Capsule())
+            // Clear glass like every other control; tinted with the accent
+            // colour when on.
+            Color.clear
+                .clipShelfGlass(in: Capsule(), tint: isOn ? Color.accentColor.opacity(colorScheme == .dark ? 0.75 : 0.8) : nil)
             thumb
                 .position(x: thumbCenter, y: height / 2)
         }
@@ -96,28 +97,32 @@ struct LiquidToggle: View {
 /// A stepless slider like the Liquid Glass one in Apple's settings: clear
 /// glass on the left, tinted on the right.
 ///
-/// - Pressing lifts the knob into a big clear glass lens (like the type
-///   switcher's), releasing drops it back with a soft bounce.
-/// - Pulling past either end rubber-bands: the knob follows with resistance
-///   and stretches along the pull, then springs back.
-/// - While dragging only the slider itself redraws; `onCommit` (which
-///   re-tints every glass surface in the app) is throttled, and always fires
-///   when the drag ends.
+/// - Pressing lifts the knob into a big clear glass lens; releasing drops
+///   it back with a soft bounce.
+/// - Pulling past either end stretches the whole track out like a noodle:
+///   it gets longer and thinner, the knob stretches with it, and both spring
+///   back together on release.
+/// - It sticks for a moment at the middle (with a haptic tick), so the
+///   centre is easy to land on.
+/// - While dragging only the slider and `onPreview` (throttled) run; the
+///   app-wide `onCommit` fires once, on release.
 struct GlassLevelSlider: View {
     @Binding var value: Double
+    let onPreview: (Double) -> Void
     let onCommit: (Double) -> Void
     @Environment(\.colorScheme) private var colorScheme
     @State private var dragValue: Double?
     @State private var isLifted = false
-    @State private var overshoot: CGFloat = 0
-    @State private var stretch: CGFloat = 1
-    @State private var lastSample: (x: CGFloat, time: TimeInterval)?
-    @State private var lastCommit: CFTimeInterval = 0
+    /// Signed pull past an end, after resistance (points).
+    @State private var pull: CGFloat = 0
+    @State private var lastPreview: CFTimeInterval = 0
+    @State private var detentEntered = false
 
     private let knob: CGFloat = 24
-    private let ticks: [Double] = [0, 0.5, 1]
+    private let detent: Double = 0.5
+    private let detentHalfWidth: Double = 0.035
     private let liftSpring = Animation.spring(response: 0.32, dampingFraction: 0.72)
-    private let settleSpring = Animation.spring(response: 0.5, dampingFraction: 0.6)
+    private let settleSpring = Animation.spring(response: 0.5, dampingFraction: 0.55)
 
     private var shown: Double { dragValue ?? value }
 
@@ -129,20 +134,24 @@ struct GlassLevelSlider: View {
                 .accessibilityHidden(true)
             GeometryReader { proxy in
                 let usable = max(proxy.size.width - knob, 1)
-                let x = knob / 2 + usable * CGFloat(shown) + overshoot
-                ZStack(alignment: .leading) {
+                let midY = proxy.size.height / 2
+                let extra = abs(pull)
+                // The track lengthens by the pull and thins as it does.
+                let trackWidth = usable + extra
+                let trackX = knob / 2 + (pull < 0 ? pull : 0)
+                let trackHeight = max(5 / (1 + extra / 26), 1.6)
+                let knobX = knob / 2 + usable * CGFloat(shown) + pull
+                ZStack(alignment: .topLeading) {
                     Capsule()
-                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.22 : 0.12))
-                        .frame(height: 5)
-                        .padding(.horizontal, knob / 2)
-                    ForEach(ticks, id: \.self) { tick in
-                        Circle()
-                            .fill(Color.primary.opacity(0.3))
-                            .frame(width: 3.5, height: 3.5)
-                            .position(x: knob / 2 + usable * CGFloat(tick), y: proxy.size.height / 2 + 13)
-                    }
+                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.24 : 0.14))
+                        .frame(width: trackWidth, height: trackHeight)
+                        .position(x: trackX + trackWidth / 2, y: midY)
+                    Circle()
+                        .fill(Color.primary.opacity(0.32))
+                        .frame(width: 3.5, height: 3.5)
+                        .position(x: knob / 2 + usable * CGFloat(detent), y: midY + 13)
                     thumb
-                        .position(x: x, y: proxy.size.height / 2)
+                        .position(x: knobX, y: midY)
                 }
                 .contentShape(Rectangle())
                 .gesture(drag(usable: usable))
@@ -172,45 +181,46 @@ struct GlassLevelSlider: View {
                 if !isLifted {
                     withAnimation(liftSpring) { isLifted = true }
                 }
-                let raw = (drag.location.x - knob / 2) / usable
-                let clamped = Double(min(max(raw, 0), 1))
-                // Past an end: follow with resistance, and stretch along the pull.
-                let beyond = raw < 0 ? raw * usable : (raw > 1 ? (raw - 1) * usable : 0)
-                let resisted = beyond / (1 + abs(beyond) / 60) * 0.55
-                // Moving fast stretches the lens a little too.
-                var speed: CGFloat = 0
-                let now = drag.time.timeIntervalSinceReferenceDate
-                if let lastSample, now > lastSample.time {
-                    speed = abs(drag.location.x - lastSample.x) / CGFloat(now - lastSample.time)
+                let raw = Double((drag.location.x - knob / 2) / usable)
+                var next = min(max(raw, 0), 1)
+                // Detent: hold at the middle for a moment.
+                if abs(next - detent) < detentHalfWidth {
+                    next = detent
+                    if !detentEntered {
+                        detentEntered = true
+                        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+                    }
+                } else {
+                    detentEntered = false
                 }
-                lastSample = (drag.location.x, now)
-                let target = 1 + min(abs(beyond) / 110, 0.42) + min(speed / 3000, 0.18)
+                // Past an end: pull with growing resistance, like iOS.
+                let beyond = raw < 0 ? CGFloat(raw) * usable : (raw > 1 ? CGFloat(raw - 1) * usable : 0)
+                let resisted = beyond / (1 + abs(beyond) / 70) * 0.75
+                if (raw < 0 || raw > 1), pull == 0 {
+                    NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                }
                 var plain = Transaction()
                 plain.disablesAnimations = true
                 withTransaction(plain) {
-                    overshoot = resisted
-                    stretch += (target - stretch) * 0.4
+                    pull = resisted
+                    dragValue = next
                 }
-                if ticks.contains(where: { abs($0 - clamped) < 0.012 && abs($0 - shown) >= 0.012 }) {
-                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-                }
-                withTransaction(plain) { dragValue = clamped }
-                let time = CACurrentMediaTime()
-                if time - lastCommit > 0.12 {
-                    lastCommit = time
-                    onCommit(clamped)
+                let now = CACurrentMediaTime()
+                if now - lastPreview > 0.05 {
+                    lastPreview = now
+                    onPreview(next)
                 }
             }
             .onEnded { _ in
                 let final = dragValue ?? value
+                onPreview(final)
                 value = final
                 onCommit(final)
-                lastSample = nil
                 dragValue = nil
+                detentEntered = false
                 withAnimation(settleSpring) {
                     isLifted = false
-                    overshoot = 0
-                    stretch = 1
+                    pull = 0
                 }
             }
     }
@@ -218,6 +228,7 @@ struct GlassLevelSlider: View {
     @ViewBuilder
     private var thumb: some View {
         let shape = Capsule()
+        let stretch = 1 + min(abs(pull) / 45, 0.7)
         let width = (isLifted ? knob * 1.9 : knob) * stretch
         let height = (isLifted ? knob * 1.45 : knob) / sqrt(stretch)
         Group {
@@ -226,13 +237,13 @@ struct GlassLevelSlider: View {
                 // system's own press response would fight that motion.
                 Color.clear
                     .glassEffect(.clear, in: shape)
-                    .background(shape.fill(Color.white.opacity(isLifted ? 0.08 : 0.97)))
+                    .background(shape.fill(Color.white.opacity(isLifted ? 0.06 : 0.97)))
             } else {
                 shape.fill(Color.white.opacity(isLifted ? 0.6 : 1))
             }
         }
         .frame(width: width, height: height)
-        .shadow(color: .black.opacity(isLifted ? 0.14 : 0.24), radius: isLifted ? 9 : 2.5, y: isLifted ? 3 : 1)
+        .shadow(color: .black.opacity(isLifted ? 0.12 : 0.22), radius: isLifted ? 8 : 2.5, y: isLifted ? 3 : 1)
     }
 }
 
@@ -268,26 +279,13 @@ private struct LiquidGlassButtonBody: View {
             .padding(.horizontal, 16)
             .frame(minWidth: SettingsControlMetrics.height, minHeight: SettingsControlMetrics.height)
             .background {
-                // A slab of glass like the 设置 capsule: thick, with light on
-                // its top edge and a soft shade along the bottom inside.
-                ZStack {
-                    Color.clear.clipShelfGlass(
-                        in: Capsule(),
-                        interactive: true,
-                        tint: isActive ? Color.accentColor.opacity(isDark ? 0.36 : 0.24) : nil
-                    )
-                    Capsule()
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [.clear, .black.opacity(isDark ? 0.25 : 0.07)],
-                                startPoint: .center,
-                                endPoint: .bottom
-                            ),
-                            lineWidth: 2
-                        )
-                        .padding(1)
-                        .allowsHitTesting(false)
-                }
+                // Clear glass, the same as the 设置 capsule and the type
+                // switcher's lens.
+                Color.clear.clipShelfGlass(
+                    in: Capsule(),
+                    interactive: true,
+                    tint: isActive ? Color.accentColor.opacity(isDark ? 0.36 : 0.24) : nil
+                )
             }
             .overlay {
                 if isActive {
