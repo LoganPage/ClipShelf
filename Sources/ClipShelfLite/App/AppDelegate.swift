@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         CursorSetCoalescer.install()
         normalizeGlobalHotKeyIfNeeded()
         AppIconPreferences.applySavedChoice()
+        updateDockIcon(animated: false)
         // Selection colour and click-recovery time are no longer in Settings:
         // everyone uses the defaults.
         if SelectionColorPreferences.selectedPreset != .coolGrayBlue {
@@ -286,6 +287,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func appearanceDidChange(_ notification: Notification) {
         AppearancePreferences.apply(to: window)
+        updateDockIcon(animated: true)
+    }
+
+    // MARK: Dock icon
+
+    private var dockIconIsDark: Bool?
+    private var dockIconTimer: Timer?
+
+    /// The running app's Dock tile follows light / dark mode, melting from
+    /// one glass icon into the other instead of switching abruptly.
+    func updateDockIcon(animated: Bool) {
+        let dark = AppearancePreferences.resolvedColorScheme == .dark
+        guard dark != dockIconIsDark, let target = AppIconPreferences.fullImage(dark: dark) else { return }
+        let previous = dockIconIsDark.flatMap { AppIconPreferences.fullImage(dark: $0) }
+        dockIconIsDark = dark
+        dockIconTimer?.invalidate()
+        guard animated, let previous else {
+            NSApp.applicationIconImage = target
+            return
+        }
+        let steps = 10
+        var step = 0
+        dockIconTimer = Timer.scheduledTimer(withTimeInterval: 0.045, repeats: true) { [weak self] timer in
+            step += 1
+            let t = Double(step) / Double(steps)
+            // Ease in and out.
+            let eased = t * t * (3 - 2 * t)
+            NSApp.applicationIconImage = Self.blend(previous, into: target, amount: eased)
+            if step >= steps {
+                timer.invalidate()
+                NSApp.applicationIconImage = target
+                self?.dockIconTimer = nil
+            }
+        }
+    }
+
+    private static func blend(_ from: NSImage, into to: NSImage, amount: Double) -> NSImage {
+        let size = NSSize(width: 512, height: 512)
+        return NSImage(size: size, flipped: false) { rect in
+            from.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1 - amount)
+            to.draw(in: rect, from: .zero, operation: .sourceOver, fraction: amount)
+            return true
+        }
     }
 
     @objc func glassTransparencyDidChange(_ notification: Notification) {
@@ -296,6 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard AppearancePreferences.mode == .system else { return }
         DispatchQueue.main.async {
             AppearancePreferences.apply(to: self.window)
+            self.updateDockIcon(animated: true)
             NotificationCenter.default.post(name: AppearancePreferences.systemChangedNotification, object: nil)
         }
     }

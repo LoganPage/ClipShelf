@@ -26,7 +26,6 @@ struct MainView: View {
     @State private var multiSelectionClickUnselectedBehavior = SelectionClickBehaviorPreferences.multiSelectionClickUnselectedBehavior
     @State private var postDragClickRecoveryDuration = DragSelectionPreferences.clickRecoveryDuration
     @State private var commandKeyMonitor: Any?
-    @State private var appIconChoice = AppIconPreferences.selected
     @State private var clearSelectionHotKey = ClearSelectionHotKeyDefaults.load()
     @State private var pinHotKey = PinHotKeyDefaults.load()
     @State private var suppressRowTapUntil = Date.distantPast
@@ -255,9 +254,6 @@ struct MainView: View {
                 suppressRowTapUntil = .distantPast
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: AppIconPreferences.changedNotification)) { notification in
-            appIconChoice = notification.object as? AppIconChoice ?? AppIconPreferences.selected
-        }
         .onReceive(NotificationCenter.default.publisher(for: ClearSelectionHotKeyDefaults.changedNotification)) { notification in
             clearSelectionHotKey = notification.object as? HotKeyConfiguration ?? ClearSelectionHotKeyDefaults.load()
         }
@@ -393,18 +389,6 @@ struct MainView: View {
         HStack(spacing: 8) {
             Color.clear.frame(width: 62)
 
-            Group {
-                if let image = appIconChoice.previewImage {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                } else {
-                    Image(systemName: "doc.on.clipboard")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 36, height: 36)
 
             Text("ClipShelf")
                 .font(.system(size: 17, weight: .semibold))

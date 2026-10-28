@@ -140,20 +140,24 @@ struct SettingsView: View {
 
     private var appearanceSection: some View {
         settingsSection("外观") {
-            LiquidSegmentedControl(
-                options: AppearanceMode.allCases,
-                selection: Binding(
-                    get: { appearanceMode },
-                    set: updateAppearanceMode
-                ),
-                title: \.title,
-                segmentWidth: 96
-            )
-            .accessibilityLabel("外观")
+            // Label left, control right, like every other row.
+            HStack {
+                Text("外观模式")
+                Spacer()
+                LiquidSegmentedControl(
+                    options: AppearanceMode.allCases,
+                    selection: Binding(
+                        get: { appearanceMode },
+                        set: updateAppearanceMode
+                    ),
+                    title: \.title,
+                    segmentWidth: 84,
+                    height: SettingsControlMetrics.height
+                )
+                .accessibilityLabel("外观")
+            }
 
-            Text("跟随系统会随 macOS 的浅色 / 深色外观自动切换。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            settingsCaption("跟随系统会随 macOS 的浅色 / 深色外观自动切换。")
         }
     }
 
@@ -172,7 +176,8 @@ struct SettingsView: View {
                         }
                     ),
                     title: \.title,
-                    segmentWidth: 76
+                    segmentWidth: 76,
+                    height: SettingsControlMetrics.height
                 )
                 .accessibilityLabel("滚动效果")
             }
@@ -192,7 +197,8 @@ struct SettingsView: View {
                         }
                     ),
                     title: \.title,
-                    segmentWidth: 84
+                    segmentWidth: 84,
+                    height: SettingsControlMetrics.height
                 )
                 .accessibilityLabel("切换动画")
             }

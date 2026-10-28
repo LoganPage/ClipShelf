@@ -48,32 +48,38 @@ enum AppIconPreferences {
         // different visual size from the non-running icon.
     }
 
-    /// Icons are read once and shrunk to the largest size the UI draws
-    /// (76pt tiles at 2x). Views ask for these on every render, so reading the
-    /// multi-megabyte .icns from disk each time stalled the main thread.
-    private static var imageCache = [AppIconChoice: NSImage]()
+    // MARK: Liquid Glass icons (light and dark)
+
+    /// Icons are read once. Views ask for these on every render, so reading
+    /// the files from disk each time stalled the main thread.
+    private static var previewCache = [Bool: NSImage]()
+    private static var fullCache = [Bool: NSImage]()
     private static let previewPixelSize: CGFloat = 160
 
-    static func image(for choice: AppIconChoice) -> NSImage? {
-        if let cached = imageCache[choice] {
-            return cached
-        }
-        guard let image = loadImage(for: choice) else { return nil }
+    /// The icon as drawn inside the app (title row), for light or dark mode.
+    static func appImage(dark: Bool) -> NSImage? {
+        if let cached = previewCache[dark] { return cached }
+        guard let image = fullImage(dark: dark) else { return nil }
         let preview = downsampled(image)
-        imageCache[choice] = preview
+        previewCache[dark] = preview
         return preview
     }
 
-    private static func loadImage(for choice: AppIconChoice) -> NSImage? {
-        if let url = Bundle.main.url(forResource: choice.resourceName, withExtension: "icns") {
-            return NSImage(contentsOf: url)
+    /// The full-size icon, used for the running app's Dock tile.
+    static func fullImage(dark: Bool) -> NSImage? {
+        if let cached = fullCache[dark] { return cached }
+        let name = dark ? "AppIconDark" : "AppIconLight"
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png"),
+              let image = NSImage(contentsOf: url) else {
+            return Bundle.main.url(forResource: "AppIcon", withExtension: "icns").flatMap(NSImage.init(contentsOf:))
         }
+        fullCache[dark] = image
+        return image
+    }
 
-        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") {
-            return NSImage(contentsOf: url)
-        }
-
-        return nil
+    /// Kept for older call sites: the in-app icon for the current choice.
+    static func image(for choice: AppIconChoice) -> NSImage? {
+        appImage(dark: AppearancePreferences.resolvedColorScheme == .dark)
     }
 
     private static func downsampled(_ image: NSImage) -> NSImage {
@@ -101,12 +107,12 @@ enum AppIconPreferences {
         return preview
     }
 
+    /// The menu bar glyph: a template image, so macOS tints it for light
+    /// and dark menu bars by itself.
     static func statusBarImage(for choice: AppIconChoice) -> NSImage? {
-        guard let url = Bundle.main.url(forResource: "AppStatusIcon", withExtension: "png"),
-              let image = NSImage(contentsOf: url) else {
+        guard let image = Bundle.main.image(forResource: "AppStatusIcon") else {
             return nil
         }
-
         image.size = NSSize(width: 18, height: 18)
         image.isTemplate = true
         return image

@@ -94,18 +94,32 @@ struct LiquidToggle: View {
 }
 
 /// A stepless slider like the Liquid Glass one in Apple's settings: clear
-/// glass on the left, tinted on the right. The knob turns into a glass lens
-/// while dragged. `onCommit` is throttled while dragging (every change
-/// re-renders every glass surface) and always fires when the drag ends.
+/// glass on the left, tinted on the right.
+///
+/// - Pressing lifts the knob into a big clear glass lens (like the type
+///   switcher's), releasing drops it back with a soft bounce.
+/// - Pulling past either end rubber-bands: the knob follows with resistance
+///   and stretches along the pull, then springs back.
+/// - While dragging only the slider itself redraws; `onCommit` (which
+///   re-tints every glass surface in the app) is throttled, and always fires
+///   when the drag ends.
 struct GlassLevelSlider: View {
     @Binding var value: Double
     let onCommit: (Double) -> Void
     @Environment(\.colorScheme) private var colorScheme
-    @State private var isDragging = false
+    @State private var dragValue: Double?
+    @State private var isLifted = false
+    @State private var overshoot: CGFloat = 0
+    @State private var stretch: CGFloat = 1
+    @State private var lastSample: (x: CGFloat, time: TimeInterval)?
     @State private var lastCommit: CFTimeInterval = 0
 
     private let knob: CGFloat = 24
     private let ticks: [Double] = [0, 0.5, 1]
+    private let liftSpring = Animation.spring(response: 0.32, dampingFraction: 0.72)
+    private let settleSpring = Animation.spring(response: 0.5, dampingFraction: 0.6)
+
+    private var shown: Double { dragValue ?? value }
 
     var body: some View {
         HStack(spacing: 14) {
@@ -115,13 +129,12 @@ struct GlassLevelSlider: View {
                 .accessibilityHidden(true)
             GeometryReader { proxy in
                 let usable = max(proxy.size.width - knob, 1)
-                let x = usable * CGFloat(value)
+                let x = knob / 2 + usable * CGFloat(shown) + overshoot
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(Color.primary.opacity(colorScheme == .dark ? 0.22 : 0.12))
                         .frame(height: 5)
                         .padding(.horizontal, knob / 2)
-                    // Tick dots under the track, like the system slider.
                     ForEach(ticks, id: \.self) { tick in
                         Circle()
                             .fill(Color.primary.opacity(0.3))
@@ -129,31 +142,10 @@ struct GlassLevelSlider: View {
                             .position(x: knob / 2 + usable * CGFloat(tick), y: proxy.size.height / 2 + 13)
                     }
                     thumb
-                        .position(x: knob / 2 + x, y: proxy.size.height / 2)
+                        .position(x: x, y: proxy.size.height / 2)
                 }
                 .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { drag in
-                            if !isDragging {
-                                withAnimation(.spring(response: 0.26, dampingFraction: 0.7)) { isDragging = true }
-                            }
-                            let newValue = Double(min(max((drag.location.x - knob / 2) / usable, 0), 1))
-                            if ticks.contains(where: { abs($0 - newValue) < 0.012 && abs($0 - value) >= 0.012 }) {
-                                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-                            }
-                            value = newValue
-                            let now = CACurrentMediaTime()
-                            if now - lastCommit > 0.06 {
-                                lastCommit = now
-                                onCommit(newValue)
-                            }
-                        }
-                        .onEnded { _ in
-                            onCommit(value)
-                            withAnimation(.spring(response: 0.36, dampingFraction: 0.62)) { isDragging = false }
-                        }
-                )
+                .gesture(drag(usable: usable))
             }
             .frame(height: 34)
             Image(systemName: "square.fill.on.square.fill")
@@ -174,20 +166,73 @@ struct GlassLevelSlider: View {
         }
     }
 
+    private func drag(usable: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { drag in
+                if !isLifted {
+                    withAnimation(liftSpring) { isLifted = true }
+                }
+                let raw = (drag.location.x - knob / 2) / usable
+                let clamped = Double(min(max(raw, 0), 1))
+                // Past an end: follow with resistance, and stretch along the pull.
+                let beyond = raw < 0 ? raw * usable : (raw > 1 ? (raw - 1) * usable : 0)
+                let resisted = beyond / (1 + abs(beyond) / 60) * 0.55
+                // Moving fast stretches the lens a little too.
+                var speed: CGFloat = 0
+                let now = drag.time.timeIntervalSinceReferenceDate
+                if let lastSample, now > lastSample.time {
+                    speed = abs(drag.location.x - lastSample.x) / CGFloat(now - lastSample.time)
+                }
+                lastSample = (drag.location.x, now)
+                let target = 1 + min(abs(beyond) / 110, 0.42) + min(speed / 3000, 0.18)
+                var plain = Transaction()
+                plain.disablesAnimations = true
+                withTransaction(plain) {
+                    overshoot = resisted
+                    stretch += (target - stretch) * 0.4
+                }
+                if ticks.contains(where: { abs($0 - clamped) < 0.012 && abs($0 - shown) >= 0.012 }) {
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+                }
+                withTransaction(plain) { dragValue = clamped }
+                let time = CACurrentMediaTime()
+                if time - lastCommit > 0.12 {
+                    lastCommit = time
+                    onCommit(clamped)
+                }
+            }
+            .onEnded { _ in
+                let final = dragValue ?? value
+                value = final
+                onCommit(final)
+                lastSample = nil
+                dragValue = nil
+                withAnimation(settleSpring) {
+                    isLifted = false
+                    overshoot = 0
+                    stretch = 1
+                }
+            }
+    }
+
     @ViewBuilder
     private var thumb: some View {
         let shape = Capsule()
+        let width = (isLifted ? knob * 1.9 : knob) * stretch
+        let height = (isLifted ? knob * 1.45 : knob) / sqrt(stretch)
         Group {
             if #available(macOS 26.0, *) {
+                // Not interactive glass: the lens is animated here, and the
+                // system's own press response would fight that motion.
                 Color.clear
                     .glassEffect(.clear, in: shape)
-                    .background(shape.fill(Color.white.opacity(isDragging ? 0.12 : 0.97)))
+                    .background(shape.fill(Color.white.opacity(isLifted ? 0.08 : 0.97)))
             } else {
-                shape.fill(Color.white)
+                shape.fill(Color.white.opacity(isLifted ? 0.6 : 1))
             }
         }
-        .frame(width: isDragging ? knob * 1.6 : knob, height: isDragging ? knob * 1.2 : knob)
-        .shadow(color: .black.opacity(isDragging ? 0.12 : 0.24), radius: isDragging ? 6 : 2.5, y: isDragging ? 2 : 1)
+        .frame(width: width, height: height)
+        .shadow(color: .black.opacity(isLifted ? 0.14 : 0.24), radius: isLifted ? 9 : 2.5, y: isLifted ? 3 : 1)
     }
 }
 
@@ -203,6 +248,11 @@ struct LiquidGlassButtonStyle: ButtonStyle {
     }
 }
 
+/// One height for every control on a settings row, so they line up.
+enum SettingsControlMetrics {
+    static let height: CGFloat = 34
+}
+
 private struct LiquidGlassButtonBody: View {
     let configuration: ButtonStyleConfiguration
     let isActive: Bool
@@ -210,19 +260,34 @@ private struct LiquidGlassButtonBody: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let isDark = colorScheme == .dark
         configuration.label
-            .font(.system(size: 13, weight: isActive ? .semibold : .medium))
+            .font(.system(size: 13.5, weight: isActive ? .semibold : .medium))
             .lineLimit(1)
             .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .frame(minWidth: 30, minHeight: 30)
+            .padding(.horizontal, 16)
+            .frame(minWidth: SettingsControlMetrics.height, minHeight: SettingsControlMetrics.height)
             .background {
-                // A light tint only, so it still reads as glass when active.
-                Color.clear.clipShelfGlass(
-                    in: Capsule(),
-                    interactive: true,
-                    tint: isActive ? Color.accentColor.opacity(colorScheme == .dark ? 0.36 : 0.24) : nil
-                )
+                // A slab of glass like the 设置 capsule: thick, with light on
+                // its top edge and a soft shade along the bottom inside.
+                ZStack {
+                    Color.clear.clipShelfGlass(
+                        in: Capsule(),
+                        interactive: true,
+                        tint: isActive ? Color.accentColor.opacity(isDark ? 0.36 : 0.24) : nil
+                    )
+                    Capsule()
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(isDark ? 0.25 : 0.07)],
+                                startPoint: .center,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 2
+                        )
+                        .padding(1)
+                        .allowsHitTesting(false)
+                }
             }
             .overlay {
                 if isActive {
@@ -275,8 +340,8 @@ struct LiquidMenu<Value: Hashable>: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 30)
+        .padding(.horizontal, 16)
+        .frame(height: SettingsControlMetrics.height)
         .clipShelfGlass(in: Capsule(), interactive: true)
         .contentShape(Capsule())
         // Pressed-in look while its panel is out.
@@ -483,7 +548,7 @@ struct LiquidStepper: View {
                 .onSubmit(onCommit)
             stepButton("plus", action: onIncrement)
         }
-        .frame(height: 30)
+        .frame(height: SettingsControlMetrics.height)
         .clipShelfGlass(in: Capsule())
     }
 
@@ -491,7 +556,7 @@ struct LiquidStepper: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 11, weight: .bold))
-                .frame(width: 30, height: 30)
+                .frame(width: SettingsControlMetrics.height, height: SettingsControlMetrics.height)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)

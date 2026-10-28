@@ -30,15 +30,25 @@ mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_MACOS/$APP_NAME"
 chmod +x "$APP_MACOS/$APP_NAME"
 
-(cd "$ROOT_DIR" && swift script/generate_app_icon.swift)
-for variant in 1 2 3 4; do
-  iconutil -c icns "$ROOT_DIR/Assets/AppIcon${variant}.iconset" -o "$ROOT_DIR/Assets/AppIcon${variant}.icns"
+# Liquid Glass icons (generated with ChatGPT, light and dark). The bundle
+# icon (Finder, Dock when not running) is the light one; the running app
+# switches its Dock icon with the appearance (see AppDelegate).
+GLASS_ICONS="$ROOT_DIR/Assets/GlassIcon"
+ICONSET="$BUILD_APP_ROOT/AppIcon.iconset"
+mkdir -p "$ICONSET"
+for size in 16 32 128 256 512; do
+  sips -z "$size" "$size" "$GLASS_ICONS/AppIcon-light.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  double=$((size * 2))
+  sips -z "$double" "$double" "$GLASS_ICONS/AppIcon-light.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
-cp "$ROOT_DIR/Assets/AppIcon2.icns" "$ICON_SOURCE"
+iconutil -c icns "$ICONSET" -o "$ICON_SOURCE"
+rm -rf "$ICONSET"
 
 cp "$ICON_SOURCE" "$APP_RESOURCES/$ICON_FILE"
-cp "$ROOT_DIR"/Assets/AppIcon{1,2,3,4}.icns "$APP_RESOURCES/"
-cp "$ROOT_DIR"/Assets/AppStatusIcon.png "$APP_RESOURCES/"
+cp "$GLASS_ICONS/AppIcon-light.png" "$APP_RESOURCES/AppIconLight.png"
+cp "$GLASS_ICONS/AppIcon-dark.png" "$APP_RESOURCES/AppIconDark.png"
+cp "$GLASS_ICONS/StatusIcon.png" "$APP_RESOURCES/AppStatusIcon.png"
+cp "$GLASS_ICONS/StatusIcon@2x.png" "$APP_RESOURCES/AppStatusIcon@2x.png"
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
