@@ -16,49 +16,188 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
     private var imageOCRSession: ImageOCRSession?
     private var textPreviewSession: TextPreviewSession?
 
-    func togglePreview(_ items: [ClipItem], onNavigate: ((Int) -> Bool)? = nil) {
+    /// Screen rect of the record the glass preview grew out of, so it can
+    /// shrink back into it.
+    private var sourceRect: NSRect?
+    /// Set for the next glass preview that should grow out of a record.
+    private var pendingSource: NSRect?
+    /// The record on show, to draw the closing animation from.
+    private var previewedItem: ClipItem?
+
+    /// - Parameter source: screen rect of the record, to grow the glass
+    ///   preview out of (and back into).
+    func togglePreview(_ items: [ClipItem], from source: NSRect? = nil, onNavigate: ((Int) -> Bool)? = nil) {
         if closeIfVisible() {
             return
         }
 
+        pendingSource = source
+        sourceRect = source
         preview(items, onNavigate: onNavigate)
+        pendingSource = nil
     }
 
-    func preview(_ items: [ClipItem], onNavigate: ((Int) -> Bool)? = nil) {
+    /// - Parameter source: when stepping through records, where the newly
+    ///   shown one is, so closing (Space, Esc or ×) shrinks back into it.
+    func preview(_ items: [ClipItem], from source: NSRect? = nil, onNavigate: ((Int) -> Bool)? = nil) {
         guard items.count == 1 else { return }
+        if let source { sourceRect = source }
 
         self.onNavigate = onNavigate
 
         if let panel = QLPreviewPanel.shared(), panel.isVisible {
             panel.orderOut(nil)
         }
-        previewWindow?.orderOut(nil)
         imageZoomSession = nil
         imageOCRSession?.cancel()
         imageOCRSession = nil
         textPreviewSession?.cancel()
         textPreviewSession = nil
 
-        cleanupTemporaryFiles()
+        let keepTemporary = temporaryURLs
+        temporaryURLs = []
+        guard let item = items.first, let url = previewURL(for: item) else { return }
+        previewedItem = item
 
-        if showBuiltInPreviewIfPossible(items) {
-            return
-        }
-
-        previewEntries = items.compactMap(previewEntry(for:))
-
-        guard !previewEntries.isEmpty, let panel = QLPreviewPanel.shared() else {
-            return
-        }
-
-        panel.currentPreviewItemIndex = 0
-        panel.dataSource = self
-        panel.delegate = self
-        panel.reloadData()
-        applyFixedPreviewFrame(to: panel)
+        let panel = quickPanel ?? makeQuickPanel()
+        let title = item.kind == .file ? url.lastPathComponent : item.title
+        let size = quickLookSize(for: item, url: url)
+        let visible = (NSScreen.main ?? panel.screen)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        let frame = centeredFrame(for: size, in: visible)
+        previewWindow = panel
         startKeyMonitor()
+
+        // Stepping with the arrow keys: same window, new content and size.
+        if panel.isVisible, !panel.styleMask.contains(.fullScreen) {
+            // Window and content change in the same frame (an animated
+            // resize lagged behind the new content).
+            panel.disableScreenUpdatesUntilFlush()
+            panel.setFrame(frame, display: false)
+            panel.show(url: url, title: title)
+            panel.displayIfNeeded()
+            removeTemporaryFiles(keepTemporary)
+            return
+        }
+        panel.show(url: url, title: title)
+        removeTemporaryFiles(keepTemporary)
+        if !panel.styleMask.contains(.fullScreen) {
+            panel.setFrame(frame, display: true)
+        }
+        AppearancePreferences.apply(to: panel)
         NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(self)
+
+        // Pours out of the record (the genie), then the window itself fades
+        // in. Quick Look draws its content in another process, which can't be
+        // captured, so the animation shows a stand-in made from the record.
+        guard let source = pendingSource, let image = standInImage(for: item, size: frame.size) else {
+            panel.alphaValue = 1
+            panel.makeKeyAndOrderFront(nil)
+            return
+        }
+        panel.alphaValue = 0
+        panel.makeKeyAndOrderFront(nil)
+        GenieAnimator.run(image: image, from: source, to: frame, opening: true, duration: 0.45, above: nil, crossfade: 0.25, level: .floating) { [weak panel] in
+            guard let panel else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                panel.animator().alphaValue = 1
+            }
+        }
+    }
+
+    private var quickPanel: QuickPreviewPanel?
+
+    private func makeQuickPanel() -> QuickPreviewPanel {
+        let panel = QuickPreviewPanel()
+        panel.onClose = { [weak self] in self?.closeIfVisible() }
+        panel.onSpace = { [weak self] in self?.closeIfVisible() }
+        quickPanel = panel
+        return panel
+    }
+
+    /// Like Quick Look: an image gets a window of its own proportions, other
+    /// kinds the standard size.
+    private func quickLookSize(for item: ClipItem, url: URL) -> NSSize {
+        let visible = (NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800))
+        let header = QuickPreviewPanel.headerHeight
+        let image = image(for: item) ?? (Self.isImageFile(url) ? NSImage(contentsOf: url) : nil)
+        if let image, image.size.width > 0, image.size.height > 0 {
+            let maxSize = NSSize(width: visible.width * 0.6, height: visible.height * 0.75 - header)
+            let fit = min(maxSize.width / image.size.width, maxSize.height / image.size.height, 1)
+            return NSSize(
+                width: max(image.size.width * fit, 360),
+                height: max(image.size.height * fit, 200) + header
+            )
+        }
+        return NSSize(width: min(816, visible.width * 0.8), height: min(728, visible.height * 0.85))
+    }
+
+    private func removeTemporaryFiles(_ urls: [URL]) {
+        for url in urls {
+            let folder = url.deletingLastPathComponent()
+            try? FileManager.default.removeItem(at: folder.lastPathComponent.hasPrefix("ClipShelfPreview-") ? folder : url)
+        }
+    }
+
+    /// The record drawn the way the panel shows it: its image, the start
+    /// of its text, or its file icon, on the panel's background with a
+    /// title bar.
+    private func standInImage(for item: ClipItem, size: NSSize) -> CGImage? {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        guard size.width > 0, size.height > 0,
+              let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: Int(size.width * scale),
+                pixelsHigh: Int(size.height * scale),
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+              ) else { return nil }
+        rep.size = size
+        let isDark = AppearancePreferences.resolvedColorScheme == .dark
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        let bounds = NSRect(origin: .zero, size: size)
+        NSBezierPath(roundedRect: bounds, xRadius: 16, yRadius: 16).addClip()
+        (isDark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.97, alpha: 1)).setFill()
+        bounds.fill()
+        let barHeight: CGFloat = 52
+        (isDark ? NSColor(white: 0.22, alpha: 1) : NSColor(white: 0.92, alpha: 1)).setFill()
+        NSRect(x: 0, y: size.height - barHeight, width: size.width, height: barHeight).fill()
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: isDark ? NSColor(white: 0.9, alpha: 1) : NSColor(white: 0.2, alpha: 1)
+        ]
+        (item.title as NSString).draw(
+            in: NSRect(x: 64, y: size.height - barHeight + 17, width: size.width - 128, height: 18),
+            withAttributes: titleAttributes
+        )
+        let content = NSRect(x: 0, y: 0, width: size.width, height: size.height - barHeight)
+        if let image = image(for: item) {
+            // Aspect-fit, like the panel.
+            let fit = min(content.width / max(image.size.width, 1), content.height / max(image.size.height, 1), 1)
+            let drawn = NSSize(width: image.size.width * fit, height: image.size.height * fit)
+            image.draw(in: NSRect(x: content.midX - drawn.width / 2, y: content.midY - drawn.height / 2, width: drawn.width, height: drawn.height))
+        } else if item.kind == .text {
+            let text = String((item.text ?? item.title).prefix(4000))
+            (text as NSString).draw(
+                in: content.insetBy(dx: 14, dy: 10),
+                withAttributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                    .foregroundColor: isDark ? NSColor.white : NSColor.black
+                ]
+            )
+        } else if let path = item.filePaths.first {
+            let icon = NSWorkspace.shared.icon(forFile: path)
+            let side = min(content.width, content.height) * 0.4
+            icon.draw(in: NSRect(x: content.midX - side / 2, y: content.midY - side / 2, width: side, height: side))
+        }
+        return rep.cgImage
     }
 
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
@@ -68,6 +207,8 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
         previewEntries[index].url as NSURL
     }
+
+
 
     private func previewEntry(for item: ClipItem) -> PreviewEntry? {
         guard let url = previewURL(for: item) else { return nil }
@@ -87,18 +228,33 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
             }
 
             guard let imageData = item.imageData else { return nil }
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("ClipShelfPreview-\(item.id.uuidString).png")
+            let url = temporaryURL(for: item, fallbackName: "剪贴板图片", extension: "png")
             try? imageData.write(to: url, options: .atomic)
             temporaryURLs.append(url)
             return url
         case .text:
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("ClipShelfPreview-\(item.id.uuidString).txt")
+            let url = temporaryURL(for: item, fallbackName: "剪贴板文字", extension: "txt")
             try? (item.text ?? item.title).write(to: url, atomically: true, encoding: .utf8)
             temporaryURLs.append(url)
             return url
         }
+    }
+
+    /// A temporary file named after the record (Quick Look shows the name
+    /// as its title), in a folder of its own so names never clash.
+    private func temporaryURL(for item: ClipItem, fallbackName: String, extension ext: String) -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClipShelfPreview-\(item.id.uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var name = item.title
+            .replacingOccurrences(of: "/", with: "／")
+            .replacingOccurrences(of: ":", with: "：")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let firstLine = name.split(whereSeparator: \.isNewline).first { name = String(firstLine) }
+        if name.count > 60 { name = String(name.prefix(60)) + "…" }
+        if name.isEmpty { name = fallbackName }
+        if (name as NSString).pathExtension.lowercased() != ext { name += ".\(ext)" }
+        return folder.appendingPathComponent(name)
     }
 
     @discardableResult
@@ -106,12 +262,33 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
         var didClose = false
 
         if let window = previewWindow, window.isVisible {
-            window.orderOut(nil)
+            // Shrinks back into the record it came from.
+            if let source = sourceRect, let item = previewedItem,
+               !window.styleMask.contains(.fullScreen),
+               let image = standInImage(for: item, size: window.frame.size) {
+                let frame = window.frame
+                window.orderOut(nil)
+                GenieAnimator.run(image: image, from: source, to: frame, opening: false, duration: 0.42, above: nil, level: .floating) {}
+            } else if window.styleMask.contains(.fullScreen) {
+                window.toggleFullScreen(nil)
+                window.orderOut(nil)
+            } else {
+                window.orderOut(nil)
+            }
             didClose = true
         }
 
         if let panel = QLPreviewPanel.shared(), panel.isVisible {
-            panel.orderOut(nil)
+            // Shrinks back into its record the same way it came out.
+            if let source = sourceRect, let item = previewedItem,
+               let image = standInImage(for: item, size: panel.frame.size) {
+                let frame = panel.frame
+                panel.orderOut(nil)
+                panel.alphaValue = 1
+                GenieAnimator.run(image: image, from: source, to: frame, opening: false, duration: 0.42, above: nil, level: .floating) {}
+            } else {
+                panel.orderOut(nil)
+            }
             didClose = true
         }
 
@@ -205,11 +382,12 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
 
         let ocrSession = ImageOCRSession(image: image, imageView: imageView)
         let ocrToolbar = ocrSession.makeToolbar()
+        // Floats as a glass capsule, inset from the edges.
         ocrToolbar.frame = NSRect(
-            x: 0,
-            y: rootView.bounds.height - toolbarHeight,
-            width: rootView.bounds.width,
-            height: toolbarHeight
+            x: 12,
+            y: rootView.bounds.height - toolbarHeight + 2,
+            width: rootView.bounds.width - 24,
+            height: toolbarHeight - 6
         )
         ocrToolbar.autoresizingMask = [.width, .minYMargin]
         rootView.addSubview(ocrToolbar)
@@ -360,15 +538,27 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
         CGPoint(x: rect.midX, y: rect.midY)
     }
 
+    static let glassRadius: CGFloat = 26
+
     private func previewPanel(title: String, size: NSSize) -> NSPanel {
         previewWindow?.orderOut(nil)
 
+        // Liquid Glass like the main window: transparent titlebar over a
+        // system glass base, its border following the glass's corners.
         let panel = SpaceClosablePanel(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow],
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
+        panel.titlebarAppearsTransparent = true
+        AppearancePreferences.apply(to: panel)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.matchSystemCornerRadius(Self.glassRadius)
+        for button in [NSWindow.ButtonType.miniaturizeButton, .zoomButton] {
+            panel.standardWindowButton(button)?.isHidden = true
+        }
         panel.title = title
         panel.onSpace = { [weak self] in
             self?.closeIfVisible()
@@ -394,11 +584,42 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
     }
 
     private func show(_ panel: NSWindow, firstResponder: NSResponder? = nil) {
+        // The content goes on a system glass base.
+        if let content = panel.contentView, !(content is PreviewGlassContainer) {
+            panel.contentView = PreviewGlassContainer(content: content, cornerRadius: Self.glassRadius)
+        }
+        // Ends at the centre of the screen, where ClipShelf itself opens.
+        let visible = (NSScreen.main ?? panel.screen)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        panel.setFrame(centeredFrame(for: panel.frame.size, in: visible), display: true)
         startKeyMonitor()
         NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        if let firstResponder {
-            panel.makeFirstResponder(firstResponder)
+
+        let reveal = { [weak panel] in
+            guard let panel else { return }
+            panel.makeKeyAndOrderFront(nil)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                panel.animator().alphaValue = 1
+            }
+            if let firstResponder {
+                panel.makeFirstResponder(firstResponder)
+            }
+        }
+        // Grows out of the record that was previewed (not when stepping
+        // through records with the arrow keys).
+        guard let source = pendingSource else {
+            reveal()
+            return
+        }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let image = WindowSnapshot.capture(panel, cornerRadius: Self.glassRadius) else {
+            reveal()
+            return
+        }
+        panel.alphaValue = 0
+        panel.orderFront(nil)
+        GenieAnimator.run(image: image, from: source, to: panel.frame, opening: true, duration: 0.45, above: nil, crossfade: 0.25, level: .floating) {
+            reveal()
         }
     }
 
@@ -426,8 +647,10 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
                 return event
             }
 
-            if let direction = self.previewNavigationDirection(for: event),
-               self.onNavigate?(direction) == true {
+            // ↑ ↓ always belong to stepping, never to scrolling the content
+            // (that's for the mouse and trackpad).
+            if let direction = self.previewNavigationDirection(for: event) {
+                _ = self.onNavigate?(direction)
                 return nil
             }
 
@@ -475,8 +698,9 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
             return nil
         }
 
-        if event.keyCode == 123 { return -1 }
-        if event.keyCode == 124 { return 1 }
+        // ↑ ↓ step through records (← → no longer do).
+        if event.keyCode == 126 { return -1 }
+        if event.keyCode == 125 { return 1 }
 
         return nil
     }
@@ -498,7 +722,9 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
         textPreviewSession?.cancel()
         textPreviewSession = nil
         for url in temporaryURLs {
-            try? FileManager.default.removeItem(at: url)
+            // The file's own temporary folder goes with it.
+            let folder = url.deletingLastPathComponent()
+            try? FileManager.default.removeItem(at: folder.lastPathComponent.hasPrefix("ClipShelfPreview-") ? folder : url)
         }
         temporaryURLs.removeAll()
     }
@@ -567,13 +793,8 @@ private final class ImageZoomSession: NSObject {
     }
 
     func makeControls() -> NSView {
-        let effectView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 212, height: 40))
-        effectView.material = .hudWindow
-        effectView.blendingMode = .withinWindow
-        effectView.state = .active
-        effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = 9
-        effectView.layer?.masksToBounds = true
+        // A floating capsule of clear system glass.
+        let effectView = PreviewGlassBar(frame: NSRect(x: 0, y: 0, width: 212, height: 40), cornerRadius: 20)
 
         let zoomOutButton = NSButton(image: NSImage(systemSymbolName: "minus", accessibilityDescription: "缩小") ?? NSImage(), target: self, action: #selector(zoomOut))
         let resetButton = NSButton(title: "复位", target: self, action: #selector(reset))
@@ -700,10 +921,7 @@ private final class ImageOCRSession: NSObject {
     }
 
     func makeToolbar() -> NSView {
-        let toolbar = NSVisualEffectView()
-        toolbar.material = .headerView
-        toolbar.blendingMode = .withinWindow
-        toolbar.state = .active
+        let toolbar = PreviewGlassBar(frame: .zero, cornerRadius: 20)
 
         let recognizeButton = NSButton(title: "识别文字", target: self, action: #selector(startRecognition))
         recognizeButton.bezelStyle = .rounded
@@ -940,6 +1158,65 @@ private final class OCRSelectionOverlayView: NSView {
             height: size.height
         )
     }
+}
+
+/// A toolbar of clear system glass (frosted material on older systems);
+/// its controls are added on top like any subviews.
+final class PreviewGlassBar: NSView {
+    init(frame: NSRect, cornerRadius: CGFloat) {
+        super.init(frame: frame)
+        wantsLayer = true
+        let background: NSView
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .clear
+            glass.cornerRadius = cornerRadius
+            background = glass
+        } else {
+            let effect = NSVisualEffectView()
+            effect.material = .hudWindow
+            effect.blendingMode = .withinWindow
+            effect.state = .active
+            effect.wantsLayer = true
+            effect.layer?.cornerRadius = cornerRadius
+            effect.layer?.masksToBounds = true
+            background = effect
+        }
+        background.frame = bounds
+        background.autoresizingMask = [.width, .height]
+        addSubview(background)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// The preview's content over a system glass base with rounded corners.
+private final class PreviewGlassContainer: NSView {
+    init(content: NSView, cornerRadius: CGFloat) {
+        super.init(frame: content.frame)
+        wantsLayer = true
+        let backdrop = WindowBackdropView(cornerRadius: cornerRadius)
+        backdrop.apply(GlassPreferences.value, animated: false)
+        content.wantsLayer = true
+        content.layer?.cornerRadius = cornerRadius
+        content.layer?.cornerCurve = .continuous
+        content.layer?.masksToBounds = true
+        for view in [backdrop, content] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+            NSLayoutConstraint.activate([
+                view.leadingAnchor.constraint(equalTo: leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: trailingAnchor),
+                // The content starts below the transparent titlebar.
+                view.topAnchor.constraint(equalTo: topAnchor, constant: view === content ? 28 : 0),
+                view.bottomAnchor.constraint(equalTo: bottomAnchor)
+            ])
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
 private final class SpaceClosablePanel: NSPanel {

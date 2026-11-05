@@ -11,7 +11,7 @@ enum ClipKindFilter: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .all: "全部"
-        case .text: "文字"
+        case .text: "文本"
         case .file: "文件"
         case .image: "图片"
         }

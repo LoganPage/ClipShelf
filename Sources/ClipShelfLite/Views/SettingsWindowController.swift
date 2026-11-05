@@ -1,5 +1,4 @@
 import AppKit
-import CoreImage
 import SwiftUI
 
 /// Settings live in their own native window, attached to the main window as a
@@ -96,9 +95,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         guard panel == nil else { return }
         makePanelIfNeeded()
         park(size: targetFrame(in: parent).size)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.warmUpBlur()
-        }
         scheduleFallbackRender()
     }
 
@@ -199,18 +195,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         )
     }
 
-    /// Captures the panel exactly as it is on screen, off the main thread, and
+    /// Renders the panel as it is now (no screen capture: that asks for
+    /// screen-recording permission), composes it off the main thread and
     /// keeps it for the next opening. `completion` runs on the main thread.
     private func captureLive(frame: NSRect, completion: @escaping (CGImage) -> Void) {
+        guard let parent else { return }
         let key = lookKey(size: frame.size)
-        let screenHeight = NSScreen.screens.first?.frame.height ?? 0
-        // Window-server rects are top-left based on the main display.
-        let rect = CGRect(x: frame.minX, y: screenHeight - frame.maxY, width: frame.width, height: frame.height)
-        let radius = GlassMetrics.panelRadius
-        // Front to back: content, its glass, the main window under it.
-        let windows = [panel?.windowNumber, glassWindow?.windowNumber, parent?.windowNumber].compactMap { $0 }
+        renderFallback()
+        let request = request(over: parent, frame: frame, content: fallbackContent?.image)
         snapshotQueue.async { [weak self] in
-            guard let image = WindowSnapshot.captureWindows(windows, rect: rect, cornerRadius: radius) else { return }
+            guard let image = Self.composeSnapshot(request, backdrop: nil)?.image else { return }
             DispatchQueue.main.async {
                 self?.liveImage = (image, key)
                 completion(image)
@@ -458,6 +452,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// Glass above the main window, content above the glass.
     private func attach(to parent: NSWindow) {
         guard let glassWindow, let panel else { return }
+        // Bring both right above the main window first. They were parked off
+        // screen since launch, so other apps' windows sit above them; adding
+        // them as children from there pulled the whole app down behind those.
+        glassWindow.order(.above, relativeTo: parent.windowNumber)
+        panel.order(.above, relativeTo: glassWindow.windowNumber)
         parent.addChildWindow(glassWindow, ordered: .above)
         glassWindow.addChildWindow(panel, ordered: .above)
     }
@@ -554,16 +553,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Covers the main window below its titlebar row, with a slim margin.
+    /// Everything below the title row: the toolbar and the records are fully
+    /// covered, edge to edge, with the window's own bottom corners.
     private func targetFrame(in parent: NSWindow) -> NSRect {
-        let margin = GlassMetrics.edgeInset
-        let titlebar = max(parent.frame.height - parent.contentLayoutRect.height, 44)
-        let width = min(parent.frame.width - margin * 2, 860)
-        let height = max(parent.frame.height - titlebar - margin, 360)
+        let titlebar = parent.frame.height - parent.contentLayoutRect.height
         return NSRect(
-            x: parent.frame.midX - width / 2,
-            y: parent.frame.minY + margin,
-            width: width,
-            height: height
+            x: parent.frame.minX,
+            y: parent.frame.minY,
+            width: parent.frame.width,
+            height: max(parent.frame.height - titlebar, 360)
         ).integral
     }
 
@@ -618,17 +616,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         context.addPath(CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
         context.clip()
 
-        let backdrop = cached ?? blurredBackdrop(request)
+        // Nothing is captured from the screen (that needs screen-recording
+        // permission); the glass colour alone stands in for what's behind.
+        let backdrop = cached
         if let backdrop {
             context.draw(backdrop, in: bounds)
         }
         // The real glass's resulting colour (measured on screen), mostly
         // covering the captured main window, so the opening animation hands
         // over to the live glass without a change of colour.
-        let level = GlassPreferences.value.level
+        let level = GlassPreferences.value.strength
+        let alpha: CGFloat = backdrop == nil ? 1 : 0.82
         let tint = request.isDark
-            ? CGColor(gray: 0.32 - 0.14 * level, alpha: 0.82)
-            : CGColor(gray: 0.78 - 0.08 * level, alpha: 0.82)
+            ? CGColor(gray: 0.32 - 0.14 * level, alpha: alpha)
+            : CGColor(gray: 0.7, alpha: alpha)
         context.setFillColor(tint)
         context.fill(bounds)
         if let content = request.content {
@@ -637,54 +638,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         return context.makeImage().map { ($0, backdrop) }
     }
 
-    private static func blurredBackdrop(_ request: SnapshotRequest) -> CGImage? {
-        guard let window = WindowSnapshot.capture(windowNumber: request.parentWindowNumber) else { return nil }
-        let scale = request.scale
-        // CGImage crop rects are top-left based, in pixels.
-        let crop = CGRect(
-            x: (request.frame.minX - request.parentFrame.minX) * scale,
-            y: (request.parentFrame.maxY - request.frame.maxY) * scale,
-            width: request.frame.width * scale,
-            height: request.frame.height * scale
-        ).integral
-        guard let region = window.cropping(to: crop) else { return nil }
-        // Blur a quarter-size copy: a heavy blur hides the lower resolution and
-        // it is much cheaper.
-        let factor: CGFloat = 0.25
-        let input = CIImage(cgImage: region).transformed(by: CGAffineTransform(scaleX: factor, y: factor))
-        guard let blur = CIFilter(name: "CIGaussianBlur") else { return region }
-        blur.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
-        blur.setValue(22 * scale * factor, forKey: kCIInputRadiusKey)
-        guard let output = blur.outputImage?.cropped(to: input.extent) else { return region }
-        return ciContext.createCGImage(output, from: input.extent) ?? region
-    }
-
-    /// Creating the Core Image pipeline the first time costs tens of ms; do it
-    /// during the off-screen prepare instead of on the user's first click.
-    private func warmUpBlur() {
-        let pixel = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 8, height: 8))
-        guard let blur = CIFilter(name: "CIGaussianBlur") else { return }
-        blur.setValue(pixel.clampedToExtent(), forKey: kCIInputImageKey)
-        blur.setValue(2, forKey: kCIInputRadiusKey)
-        if let output = blur.outputImage?.cropped(to: pixel.extent) {
-            _ = Self.ciContext.createCGImage(output, from: pixel.extent)
-        }
-    }
-
-    private static let ciContext = CIContext(options: [.cacheIntermediates: false])
 
     @objc private func appearanceChanged() {
         DispatchQueue.main.async { [weak self] in
             self?.applyAppearance()
             self?.scheduleFallbackRender()
         }
-    }
-
-    /// Live preview while the glass slider is dragged: only the settings
-    /// panel changes; the main window follows once the slider is released.
-    func previewGlass(_ transparency: GlassTransparency) {
-        backdrop?.apply(transparency, animated: false)
-        NotificationCenter.default.post(name: GlassPreferences.previewNotification, object: transparency)
     }
 
     @objc private func glassChanged() {
@@ -743,72 +702,39 @@ private struct SettingsWindowRoot: View {
             .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.changedNotification)) { notification in
                 glassTransparency = notification.object as? GlassTransparency ?? GlassPreferences.value
             }
-            // While the slider is dragged only settings itself follows live.
-            .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.previewNotification)) { notification in
-                if let preview = notification.object as? GlassTransparency {
-                    glassTransparency = preview
-                }
-            }
     }
 }
 
-/// Captures one of ClipShelf's own windows, as composited on screen.
+/// Pictures of ClipShelf's own windows for animations, rendered by the app
+/// itself: any window-server capture (even of our own windows) makes macOS
+/// ask for screen-recording permission, again after every reinstall.
 enum WindowSnapshot {
-    private typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
-
-    /// CGWindowListCreateImage is no longer in the SDK headers but still
-    /// captures the app's own windows without screen-recording permission.
-    /// Thread-safe: it only talks to the window server.
-    private static let create: CreateImage? = {
-        guard let handle = dlopen(nil, RTLD_NOW), let symbol = dlsym(handle, "CGWindowListCreateImage") else { return nil }
-        return unsafeBitCast(symbol, to: CreateImage.self)
-    }()
-
-    static func capture(windowNumber: Int) -> CGImage? {
-        // .optionIncludingWindow, .boundsIgnoreFraming
-        create?(.null, 1 << 3, UInt32(windowNumber), 1 << 0)?.takeRetainedValue()
-    }
-
-    private typealias CreateImageFromArray = @convention(c) (CGRect, CFArray, UInt32) -> Unmanaged<CGImage>?
-
-    private static let createFromArray: CreateImageFromArray? = {
-        guard let handle = dlopen(nil, RTLD_NOW), let symbol = dlsym(handle, "CGWindowListCreateImageFromArray") else { return nil }
-        return unsafeBitCast(symbol, to: CreateImageFromArray.self)
-    }()
-
-    /// `windowNumbers` (this app's own windows, front to back) composited
-    /// within `rect` (top-left based, in points), with the corners outside
-    /// `cornerRadius` made transparent. Naming only our own windows needs no
-    /// screen recording permission (a plain screen-region capture asked for
-    /// it, again after every reinstall). Safe to call off the main thread.
-    static func captureWindows(_ windowNumbers: [Int], rect: CGRect, cornerRadius: CGFloat) -> CGImage? {
-        var ids: [UnsafeRawPointer?] = windowNumbers.map { UnsafeRawPointer(bitPattern: UInt($0)) }
-        guard let array = CFArrayCreate(nil, &ids, ids.count, nil),
-              let image = createFromArray?(rect, array, 0)?.takeRetainedValue(),
+    /// The window's content drawn over its base glass colour, with rounded
+    /// corners (live glass can't be drawn off screen, so a matching colour
+    /// stands in for it).
+    static func capture(_ window: NSWindow, cornerRadius: CGFloat = GlassMetrics.windowRadius) -> CGImage? {
+        guard let view = window.contentView,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let content = rep.cgImage,
               let context = CGContext(
                 data: nil,
-                width: image.width,
-                height: image.height,
+                width: content.width,
+                height: content.height,
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
                 space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
               ) else { return nil }
-        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
-        let radius = cornerRadius * CGFloat(image.width) / max(rect.width, 1)
+        let bounds = CGRect(x: 0, y: 0, width: content.width, height: content.height)
+        let radius = cornerRadius * CGFloat(content.width) / max(view.bounds.width, 1)
         context.addPath(CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
         context.clip()
-        context.draw(image, in: bounds)
+        let isDark = window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let level = GlassPreferences.value.strength
+        context.setFillColor(isDark ? CGColor(gray: 0.3 - 0.12 * level, alpha: 1) : CGColor(gray: 0.77, alpha: 1))
+        context.fill(bounds)
+        context.draw(content, in: bounds)
         return context.makeImage()
-    }
-
-    static func capture(_ window: NSWindow) -> CGImage? {
-        if let image = capture(windowNumber: window.windowNumber) {
-            return image
-        }
-        guard let view = window.contentView,
-              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        return rep.cgImage
     }
 }

@@ -43,9 +43,11 @@ struct HotKeyConfiguration: Codable, Equatable {
         modifiers: UInt32(optionKey)
     )
 
+    /// Plain Esc in the main window (after closing an open search field).
+    /// While settings is open, Esc only closes settings.
     static let defaultClearSelectionValue = HotKeyConfiguration(
         keyCode: UInt32(kVK_Escape),
-        modifiers: UInt32(cmdKey)
+        modifiers: 0
     )
 
     /// ⌘W closes the settings window by default.

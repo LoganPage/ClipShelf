@@ -27,10 +27,12 @@ struct ListEdgeEffect: ViewModifier {
                 let bottomEdge = viewport.height - Self.bottomInset
                 let bottom = viewport.height > 0 ? min(max((frame.maxY - bottomEdge) / bottomRamp, 0), 1) : 0
                 let amount = max(top, bottom)
-                // Top: half-faded under the toolbar. Bottom: fully faded.
+                // Top: nearly gone under the toolbar (the band there is
+                // slim, so the text mustn't show between the controls).
+                // Bottom: fully faded.
                 return effect
                     .blur(radius: 6 * amount)
-                    .opacity(min(1 - 0.45 * Double(top), 1 - Double(bottom)))
+                    .opacity(min(1 - 0.9 * Double(top), 1 - Double(bottom)))
             }
         } else {
             content

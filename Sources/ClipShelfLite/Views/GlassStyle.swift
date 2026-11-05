@@ -12,10 +12,12 @@ enum GlassMetrics {
     /// Shared left/right inset for the toolbar and the record list.
     static let edgeInset: CGFloat = 16
     static let cardRadius: CGFloat = 16
-    static let panelRadius: CGFloat = 26
     /// Main window corners, concentric with the record cards inside
     /// (card radius + the inset between card and window edge).
     static let windowRadius: CGFloat = cardRadius + edgeInset
+    /// Settings fills the window below the title row, so it shares the
+    /// window's corners.
+    static let panelRadius: CGFloat = windowRadius
     static let thumbnailRadius: CGFloat = 10
 }
 
@@ -26,11 +28,16 @@ enum GlassMetrics {
 struct GlassTransparency: Equatable {
     var level: Double
 
-    static let standard = GlassTransparency(level: 0.4)
+    static let standard = GlassTransparency(level: 0.8)
 
     init(level: Double) {
         self.level = min(max(level, 0), 1)
     }
+
+    /// How strongly the glass is tinted or frosted. The slider's full range
+    /// covers what used to be its left half: the old midpoint is the new
+    /// right end, so the most solid setting still reads as glass.
+    var strength: Double { level * 0.5 }
 
     // The window and settings panel are frosted Liquid Glass with low
     // transparency (one blur for the whole window); the cards on top are
@@ -39,36 +46,37 @@ struct GlassTransparency: Equatable {
     // (clear ↔ tinted) adds tint throughout.
 
     /// Tint over the frosted window / settings panel glass: 0.22 → 0.62.
-    var windowGlassTint: Double { 0.22 + 0.4 * level }
+    var windowGlassTint: Double { 0.22 + 0.4 * strength }
 
     /// Dark mode: smoke over the window glass, darker than the system's
     /// focused glass but lighter than its inactive look.
-    var darkWindowSmoke: Double { 0.12 + 0.3 * level }
+    var darkWindowSmoke: Double { 0.12 + 0.3 * strength }
 
-    /// Light mode: grey tint over the window glass, calming its glare.
-    var lightWindowTint: Double { 0.28 + 0.4 * level }
+    /// Light mode: grey tint over the window glass, calming its glare. The
+    /// same at every slider position.
+    var lightWindowTint: Double { 0.44 }
 
     /// Light mode: white over a card.
-    var lightCardFill: Double { 0.4 + 0.4 * level }
+    /// From nearly clear glass to frosted white as the slider goes right.
+    var lightCardFill: Double { 0.18 + 0.64 * strength }
 
-    /// Tint over control glass: none at the clear end.
-    func controlTint(isDark: Bool) -> Double { (isDark ? 0.32 : 0.36) * level }
 
     /// Tint of a card's clear glass: nearly clear, milkier towards tinted.
-    func cardTint(isDark: Bool) -> Double { isDark ? 0.3 + 0.25 * level : 0.14 + 0.3 * level }
+    func cardTint(isDark: Bool) -> Double { isDark ? 0.3 + 0.25 * strength : 0.14 + 0.3 * strength }
 
     // Kept for the pre-macOS-26 fallback.
-    var backdropOpacity: Double { 0.75 + 0.25 * level }
-    var backdropTint: Double { 0.3 * level }
+    var backdropOpacity: Double { 0.75 + 0.25 * strength }
+    var backdropTint: Double { 0.3 * strength }
 }
 
 enum GlassPreferences {
     static let changedNotification = Notification.Name("ClipShelfGlassTransparencyChanged")
-    private static let key = "glass.level"
+    /// The slider position on the current scale (see `strength`).
+    private static let key = "glass.slider"
+    /// The earlier scale, twice as strong per step.
+    private static let previousKey = "glass.level"
     private static let legacyKey = "glass.transparency"
 
-    /// Posted while the slider is dragged (not saved, settings only).
-    static let previewNotification = Notification.Name("ClipShelfGlassPreview")
 
     static var value: GlassTransparency {
         get {
@@ -76,17 +84,40 @@ enum GlassPreferences {
             if defaults.object(forKey: key) != nil {
                 return GlassTransparency(level: defaults.double(forKey: key))
             }
-            // The old four-step setting, mapped onto the slider.
+            // Earlier settings, converted so they look the same as before.
+            if defaults.object(forKey: previousKey) != nil {
+                return GlassTransparency(level: defaults.double(forKey: previousKey) * 2)
+            }
             switch defaults.string(forKey: legacyKey) {
-            case "clear": return GlassTransparency(level: 0.1)
-            case "tinted": return GlassTransparency(level: 0.75)
-            case "opaque": return GlassTransparency(level: 1)
+            case "clear": return GlassTransparency(level: 0.2)
+            case "tinted", "opaque": return GlassTransparency(level: 1)
             default: return .standard
             }
         }
         set {
             AppEnvironment.userDefaults.set(newValue.level, forKey: key)
+            // Glass tints don't animate by themselves, so the new look used
+            // to switch in one frame. Every visible window cross-fades from
+            // its old picture to the new one instead (done by the window
+            // server: smooth even while the views re-render).
+            let windows = NSApp.windows.filter { $0.isVisible && $0.alphaValue > 0 && $0.frame.minX > -10_000 }
+            CATransaction.begin()
+            for window in windows {
+                guard let layer = window.contentView?.layer else { continue }
+                let fade = CATransition()
+                fade.type = .fade
+                fade.duration = 0.4
+                fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                layer.add(fade, forKey: "glassChange")
+            }
             NotificationCenter.default.post(name: changedNotification, object: newValue)
+            // Render the new look now, inside the same transaction, so the
+            // cross-fade has both pictures.
+            for window in windows {
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+            }
+            CATransaction.commit()
         }
     }
 }
@@ -120,12 +151,15 @@ extension EnvironmentValues {
 /// One glass surface for every control: Apple's clear glass, the same as
 /// the type switcher's lens, tinted only as the slider moves towards tinted.
 private struct GlassSurface<S: Shape>: ViewModifier {
-    @Environment(\.glassTransparency) private var transparency
     @Environment(\.glassStandIn) private var standIn
     @Environment(\.colorScheme) private var colorScheme
     let shape: S
     var interactive = false
     var tint: Color?
+    /// Frosted (blurs what's behind) instead of crystal-clear.
+    var frosted = false
+    /// Draws the hairline outline (off when the caller draws its own).
+    var outlined = true
 
     func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
@@ -134,7 +168,11 @@ private struct GlassSurface<S: Shape>: ViewModifier {
                 .background(shape.fill(Color.white.opacity(isDark ? 0.12 : 0.62)))
                 .overlay(shape.stroke(Color.white.opacity(isDark ? 0.16 : 0.85), lineWidth: 0.6))
         } else if #available(macOS 26.0, *) {
-            content.glassEffect(glass(isDark: isDark), in: shape)
+            // A hairline outline keeps every control distinct from the card
+            // it sits on, however frosted that card is.
+            content
+                .glassEffect(glass(isDark: isDark), in: shape)
+                .overlay(shape.stroke(isDark ? Color.white.opacity(0.16) : Color.black.opacity(0.1), lineWidth: 0.75).opacity(outlined ? 1 : 0))
         } else {
             content
                 .background(.ultraThinMaterial, in: shape)
@@ -142,13 +180,11 @@ private struct GlassSurface<S: Shape>: ViewModifier {
         }
     }
 
+    /// Always crystal-clear: the slider frosts cards and records, never the
+    /// controls, so they keep standing out from the cards.
     @available(macOS 26.0, *)
     private func glass(isDark: Bool) -> Glass {
-        var glass = Glass.clear
-        let amount = transparency.controlTint(isDark: isDark)
-        if amount > 0.01 {
-            glass = glass.tint((isDark ? Color.black : Color.white).opacity(amount))
-        }
+        var glass = frosted ? Glass.regular : Glass.clear
         if let tint {
             glass = glass.tint(tint)
         }
@@ -169,9 +205,18 @@ private struct CardGlass: ViewModifier {
             // Glass cards on the tinted window glass, like dark mode: white
             // in light mode, smoked in dark mode so white text keeps contrast.
             let fill = isDark
-                ? Color.black.opacity(transparency.cardTint(isDark: true) + (isHovered ? 0.08 : 0))
-                : Color.white.opacity(transparency.lightCardFill + (isHovered ? 0.1 : 0))
+                ? Color.black.opacity(transparency.cardTint(isDark: true))
+                : Color.white.opacity(transparency.lightCardFill)
+            // Hover is a plain highlight inside the card: re-tinting one
+            // card's glass redrew every card in the container (a flash
+            // down the whole list as the pointer moved).
             content
+                .background {
+                    if isHovered && !isHidden {
+                        shape.fill(Color.white.opacity(isDark ? 0.06 : 0.35))
+                            .transition(.opacity)
+                    }
+                }
                 .glassEffect(isHidden ? .identity : .clear.tint(fill), in: shape)
                 .animation(.easeOut(duration: 0.12), value: isHovered)
         } else {
@@ -181,8 +226,8 @@ private struct CardGlass: ViewModifier {
 }
 
 extension View {
-    func clipShelfGlass<S: Shape>(in shape: S, interactive: Bool = false, tint: Color? = nil) -> some View {
-        modifier(GlassSurface(shape: shape, interactive: interactive, tint: tint))
+    func clipShelfGlass<S: Shape>(in shape: S, interactive: Bool = false, tint: Color? = nil, frosted: Bool = false, outlined: Bool = true) -> some View {
+        modifier(GlassSurface(shape: shape, interactive: interactive, tint: tint, frosted: frosted, outlined: outlined))
     }
 
     /// A card of system Liquid Glass with this view as its content, so the
@@ -224,7 +269,8 @@ extension View {
 
     func clipShelfGlassGroup() -> some View {
         padding(.horizontal, 2)
-            .clipShelfGlass(in: Capsule(), interactive: true)
+            .clipShelfGlass(in: Capsule())
+            .pressGroup()
     }
 
     func clipShelfGlassPanel(cornerRadius: CGFloat = GlassMetrics.panelRadius, isActive: Bool = true) -> some View {
@@ -293,6 +339,7 @@ final class WindowBackdropView: NSView {
             glass = nil
         }
         super.init(frame: .zero)
+        wantsLayer = true
         frosted.material = .underWindowBackground
         frosted.blendingMode = .behindWindow
         frosted.state = .active
@@ -348,6 +395,9 @@ final class WindowBackdropView: NSView {
                 glass.tintColor = NSColor(white: 0.06, alpha: transparency.darkWindowSmoke)
             } else {
                 // Grey, not white: a white tint lets light glass glare.
+                // The base's brightness never changes with the slider (it
+                // used to darken towards "tinted"); only the cards and
+                // controls on it turn from clear to frosted.
                 glass.tintColor = NSColor(
                     white: 0.72 - 0.12 * lightDepth,
                     alpha: min(transparency.lightWindowTint + 0.2 * lightDepth, 0.95)
@@ -376,6 +426,11 @@ final class BackdropContainerView: NSView {
 
     init(content: NSView) {
         super.init(frame: .zero)
+        // Layer-backed, so a change of glass level can cross-fade it.
+        wantsLayer = true
+        // Count the fingers resting on the trackpad (see TrackpadFingers).
+        allowedTouchTypes = [.indirect]
+        wantsRestingTouches = true
         content.wantsLayer = true
         content.layer?.cornerRadius = GlassMetrics.windowRadius
         content.layer?.cornerCurve = .continuous
@@ -398,5 +453,41 @@ final class BackdropContainerView: NSView {
     func apply(_ transparency: GlassTransparency) {
         backdrop.apply(transparency)
     }
+
+    override func touchesBegan(with event: NSEvent) { TrackpadFingers.update(event, in: self) }
+    override func touchesMoved(with event: NSEvent) { TrackpadFingers.update(event, in: self) }
+    override func touchesEnded(with event: NSEvent) { TrackpadFingers.update(event, in: self) }
+    override func touchesCancelled(with event: NSEvent) { TrackpadFingers.update(event, in: self) }
 }
 
+/// How many fingers are on the trackpad right now. A three-finger drag
+/// (an accessibility setting) arrives as an ordinary mouse drag; this tells
+/// it apart, so it can move the window instead of selecting records.
+enum TrackpadFingers {
+    private(set) static var count = 0
+
+    static func update(_ event: NSEvent, in view: NSView) {
+        count = event.touches(matching: .touching, in: view).count
+    }
+}
+
+
+/// An overlay scroller with no track: on hover the system scroller widens
+/// and draws an opaque white track, which showed as a stark white strip
+/// over the glass (and stayed after the pointer left). Only the knob is
+/// drawn here.
+final class GlassScroller: NSScroller {
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
+
+    static func install(in scrollView: NSScrollView) {
+        guard !(scrollView.verticalScroller is GlassScroller) else { return }
+        let scroller = GlassScroller()
+        scroller.controlSize = .regular
+        scrollView.verticalScroller = scroller
+        scrollView.scrollerStyle = .overlay
+        scrollView.autohidesScrollers = true
+        scrollView.flashScrollers()
+    }
+}

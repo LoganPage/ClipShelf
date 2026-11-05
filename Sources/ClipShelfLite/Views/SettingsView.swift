@@ -28,6 +28,11 @@ struct SettingsView: View {
     @State private var showingClearHistoryConfirmation = false
     @FocusState private var historyLimitIsFocused: Bool
 
+    /// The 设置 capsule's height and the ✓ circle's diameter.
+    static let barButtonSize: CGFloat = 40
+    /// Gap between those buttons and the panel's top / bottom edge.
+    static let barInset: CGFloat = 10
+
     private var resolvedColorScheme: ColorScheme {
         appearanceMode == .system ? systemColorScheme : (appearanceMode.colorScheme ?? .light)
     }
@@ -52,7 +57,8 @@ struct SettingsView: View {
                 .padding(.horizontal, 22)
                 // Clears the 设置 capsule (the header inset ends at its bottom edge).
                 .padding(.top, 18)
-                .padding(.bottom, 28)
+                // The last card can scroll clear of the ✓ in the corner.
+                .padding(.bottom, Self.barButtonSize + Self.barInset + 18)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .buttonStyle(LiquidGlassButtonStyle())
                 // All cards' glass in one system container.
@@ -65,31 +71,33 @@ struct SettingsView: View {
                     Text("设置")
                         .font(.system(size: 17, weight: .semibold))
                         .padding(.horizontal, 18)
-                        .frame(height: 40)
+                        .frame(height: Self.barButtonSize)
                         .clipShelfGlass(in: Capsule())
                     Spacer()
-                    DoneGlassButton {
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, Self.barInset)
+                // Frosts what scrolls under the header: exactly from the top
+                // of the panel to the bottom edge of the 设置 capsule.
+                .background { EdgeBlurBand(edge: .top) }
+            }
+            .background(OverlayScrollerConfigurator())
+            // The same pairing at the bottom: ✓ in the corner, and a band
+            // from the bottom edge up to exactly the top of the ✓ circle.
+            .overlay(alignment: .bottom) {
+                HStack {
+                    Spacer()
+                    DoneGlassButton(size: Self.barButtonSize) {
                         commitHistoryLimit()
                         onClose()
                     }
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 10)
-                // Frosts what scrolls under the header: exactly from the top
-                // of the panel to the bottom edge of the 设置 capsule.
-                .background { HeaderBlurBand() }
-            }
-            .background(OverlayScrollerConfigurator())
-            // The same progressive frost along the bottom edge (one band for
-            // the whole panel; a blur on every row re-ran on every scroll frame).
-            .overlay(alignment: .bottom) {
-                HeaderBlurBand()
-                    .rotationEffect(.degrees(180))
-                    .frame(height: 26)
+                .padding(.bottom, Self.barInset)
+                .background { EdgeBlurBand(edge: .bottom) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay { LiquidMenuOverlay() }
         .coordinateSpace(name: SettingsPanelSpace.name)
         .background {
             // On macOS 26 the hosting panel is Liquid Glass; keep it visible.
@@ -112,6 +120,13 @@ struct SettingsView: View {
             Button("取消", role: .cancel) { }
         } message: {
             Text(ClearHistoryConfirmation.message(itemCount: store.items.count))
+        }
+        // The slider and its sample follow the saved level, also when it
+        // changes from elsewhere.
+        .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.changedNotification)) { notification in
+            let value = notification.object as? GlassTransparency ?? GlassPreferences.value
+            glassTransparency = value
+            glassPreview.level = value.level
         }
         .onReceive(NotificationCenter.default.publisher(for: HotKeyDefaults.changedNotification)) { notification in
             hotKey = notification.object as? HotKeyConfiguration ?? HotKeyDefaults.load()
@@ -175,7 +190,7 @@ struct SettingsView: View {
             HStack {
                 Text("滚动效果")
                 Spacer()
-                LiquidSegmentedControl(
+                LiquidMenu(
                     options: ScrollEffectStyle.allCases,
                     selection: Binding(
                         get: { scrollEffect },
@@ -184,9 +199,7 @@ struct SettingsView: View {
                             ScrollEffectPreferences.value = value
                         }
                     ),
-                    title: \.title,
-                    segmentWidth: 76,
-                    height: SettingsControlMetrics.height
+                    title: \.title
                 )
                 .accessibilityLabel("滚动效果")
             }
@@ -196,7 +209,7 @@ struct SettingsView: View {
             HStack {
                 Text("切换动画")
                 Spacer()
-                LiquidSegmentedControl(
+                LiquidMenu(
                     options: ListEntranceStyle.allCases,
                     selection: Binding(
                         get: { listEntrance },
@@ -205,9 +218,7 @@ struct SettingsView: View {
                             ListEntrancePreferences.value = value
                         }
                     ),
-                    title: \.title,
-                    segmentWidth: 84,
-                    height: SettingsControlMetrics.height
+                    title: \.title
                 )
                 .accessibilityLabel("切换动画")
             }
@@ -216,18 +227,28 @@ struct SettingsView: View {
         }
     }
 
+    /// Watched only by the sample, so dragging never re-renders the page.
+    @StateObject private var glassPreview = GlassPreviewModel(level: GlassPreferences.value.level)
+
     private var glassSection: some View {
         settingsSection("玻璃效果") {
+            // Like Apple's appearance preview: while dragging only this
+            // sample is re-rendered; the whole interface follows on release.
+            GlassPreviewSample(model: glassPreview)
+
             GlassLevelSlider(
                 value: Binding(
                     get: { glassTransparency.level },
                     set: { glassTransparency = GlassTransparency(level: $0) }
                 ),
-                onPreview: { SettingsWindowController.shared.previewGlass(GlassTransparency(level: $0)) },
-                onCommit: { GlassPreferences.value = GlassTransparency(level: $0) }
+                onPreview: { glassPreview.level = $0 },
+                onCommit: {
+                    glassPreview.level = $0
+                    GlassPreferences.value = GlassTransparency(level: $0)
+                }
             )
 
-            settingsCaption("往左更清透，往右玻璃着色更重、更易读。拖动时先预览设置面板，松手后主界面再跟上。")
+            settingsCaption("往左更清透，往右玻璃着色更重、更易读。拖动时上方样例实时变化，松手后整个界面再跟上。")
 
         }
     }
@@ -237,26 +258,57 @@ struct SettingsView: View {
             HStack {
                 Text("截图文件夹")
                 Spacer()
-                Text(watcher.folderURL?.path ?? "未选择")
+                Text("\(watcher.folderURLs.count) / \(ScreenshotFolderWatcher.maximumFolders)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            }
+
+            ForEach(Array(watcher.folderURLs.enumerated()), id: \.offset) { index, url in
+                HStack(spacing: 8) {
+                    Text(url.path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(url.path)
+                    Spacer(minLength: 8)
+                    Button("更换") {
+                        watcher.chooseFolder(attachedTo: hostWindow, replacing: index)
+                    }
+                    Button("访达") {
+                        watcher.revealFolder(at: index)
+                    }
+                    Button {
+                        watcher.removeFolder(at: index)
+                    } label: {
+                        Image(systemName: "minus")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    .help("不再监听这个文件夹")
+                    .accessibilityLabel("移除文件夹")
+                }
+            }
+
+            if watcher.folderURLs.isEmpty {
+                Text("未选择")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             HStack {
-                Button("选择文件夹") {
+                Button(watcher.folderURLs.isEmpty ? "选择文件夹" : "添加文件夹") {
                     debugFolderPickerLog("choose folder button clicked")
                     watcher.chooseFolder(attachedTo: hostWindow)
                 }
-
-                Button("在访达中显示") {
-                    watcher.revealFolder()
+                .disabled(!watcher.canAddFolder)
+                if !watcher.canAddFolder {
+                    Text("最多同时监听 \(ScreenshotFolderWatcher.maximumFolders) 个文件夹")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .disabled(watcher.folderURL == nil)
             }
 
-            Text("请把 macOS 截图设置里的保存位置设成同一个文件夹，并关闭右下角浮动缩略图。新截图会保留原文件，同时自动进入剪贴板。")
+            Text("请把 macOS 截图设置里的保存位置设成其中一个文件夹，并关闭右下角浮动缩略图。新截图会保留原文件，同时自动进入剪贴板。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -386,8 +438,32 @@ struct SettingsView: View {
                 )
             }
 
-            settingsCaption("点击快捷键按钮后按新的组合键，按 Esc 取消录入。设置窗口也可以用 ⌘, 或 Esc 打开 / 关闭。")
+            HStack(alignment: .center) {
+                settingsCaption("点击快捷键按钮后按新的组合键，按 Esc 取消录入。设置窗口也可以用 ⌘, 或 Esc 打开 / 关闭。")
+                Spacer(minLength: 12)
+                Button("恢复默认") {
+                    restoreDefaultHotKeys()
+                }
+            }
         }
+    }
+
+    /// Puts every shortcut back to its default; each capsule springs to
+    /// its new width.
+    private func restoreDefaultHotKeys() {
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) {
+            hotKey = .defaultValue
+            clearSelectionHotKey = .defaultClearSelectionValue
+            pinHotKey = .defaultPinValue
+            toggleSearchHotKey = .defaultToggleSearchValue
+            closeSettingsHotKey = .defaultCloseSettingsValue
+        }
+        HotKeyDefaults.save(.defaultValue)
+        HotKeyManager.shared.register(configuration: .defaultValue)
+        ClearSelectionHotKeyDefaults.save(.defaultClearSelectionValue)
+        PinHotKeyDefaults.save(.defaultPinValue)
+        ToggleSearchHotKeyDefaults.save(.defaultToggleSearchValue)
+        CloseSettingsHotKeyDefaults.save(.defaultCloseSettingsValue)
     }
 
     private var oldHistorySection: some View {
@@ -462,9 +538,11 @@ struct SettingsView: View {
         // The title sits inside the frosted card, not on the clear panel
         // glass, so it stays readable whatever is behind the window.
         VStack(alignment: .leading, spacing: 12) {
+            // Larger and bold, in the full label colour, so each card's
+            // title stands out from its rows.
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.primary.opacity(resolvedColorScheme == .dark ? 0.78 : 0.66))
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Color.primary)
 
             content()
         }
@@ -569,6 +647,7 @@ private struct OverlayScrollerConfigurator: NSViewRepresentable {
             scrollView.scrollerStyle = .overlay
             scrollView.autohidesScrollers = true
             scrollView.hasVerticalScroller = true
+            GlassScroller.install(in: scrollView)
         }
         return view
     }
@@ -601,38 +680,33 @@ private struct OverlayScrollerConfigurator: NSViewRepresentable {
 /// Round, tinted Liquid Glass checkmark, like the confirm button on macOS 26
 /// system sheets. Return also triggers it.
 private struct DoneGlassButton: View {
+    let size: CGFloat
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: "checkmark")
-                .font(.system(size: 15, weight: .bold))
-                .frame(width: 22, height: 22)
+                .font(.system(size: 16, weight: .bold))
+                .frame(width: size, height: size)
+                .contentShape(Circle())
         }
+        .buttonStyle(PressFeedbackButtonStyle())
         .keyboardShortcut(.defaultAction)
-        .controlSize(.large)
-        .modifier(CircleButtonShape())
+        // The same clear glass as the 设置 capsule.
+        .clipShelfGlass(in: Circle())
+        // The whole glass circle answers the press, not just the ✓.
+        .pressGroup()
         // Prepare the closing animation while the pointer is on its way to click.
         .onHover { inside in
             if inside {
                 SettingsWindowController.shared.prefetchClosingSnapshot()
             }
         }
-        .clipShelfGlassButtons()
         .help("完成")
         .accessibilityLabel("完成")
     }
 }
 
-private struct CircleButtonShape: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 14.0, *) {
-            content.buttonBorderShape(.circle)
-        } else {
-            content.buttonBorderShape(.roundedRectangle)
-        }
-    }
-}
 
 /// While set, settings rows drop their edge blur. Only for the one-off CPU
 /// render made before settings is first shown (see `SettingsWindowController`);
@@ -642,14 +716,94 @@ final class SettingsSnapshotMode: ObservableObject {
     @Published var isRendering = false
 }
 
+final class GlassPreviewModel: ObservableObject {
+    @Published var level: Double
+    init(level: Double) { self.level = level }
+}
+
+/// A small window-like scene: a landscape behind the base glass tint, with a
+/// record card of real glass on it, at the slider's current level.
+private struct GlassPreviewSample: View {
+    @ObservedObject var model: GlassPreviewModel
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let transparency = GlassTransparency(level: model.level)
+        let isDark = colorScheme == .dark
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        ZStack {
+            Landscape()
+            // The window's base tint over the desktop, as the real base.
+            Rectangle().fill(isDark
+                ? Color(white: 0.06).opacity(transparency.darkWindowSmoke)
+                : Color(white: 0.6).opacity(transparency.lightWindowTint + 0.2))
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(red: 0.98, green: 0.72, blue: 0.4), Color(red: 0.9, green: 0.45, blue: 0.5)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 34, height: 34)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("截屏 2026-10-28 21.43.59.png")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .lineLimit(1)
+                    Text("截图  刚刚")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 52)
+            .cardGlass()
+            .environment(\.glassTransparency, transparency)
+            .padding(.horizontal, 18)
+        }
+        .frame(height: 96)
+        // Eases between drag steps instead of jumping.
+        .animation(.easeOut(duration: 0.14), value: model.level)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .accessibilityHidden(true)
+    }
+}
+
+/// A simple drawn landscape: sky, sun and two rows of hills.
+private struct Landscape: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let w = proxy.size.width, h = proxy.size.height
+            ZStack {
+                LinearGradient(colors: [Color(red: 0.36, green: 0.6, blue: 0.92), Color(red: 0.98, green: 0.78, blue: 0.62)], startPoint: .top, endPoint: .bottom)
+                Circle().fill(Color(red: 1, green: 0.88, blue: 0.55)).frame(width: 30, height: 30).position(x: w * 0.78, y: h * 0.32)
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: h * 0.7))
+                    p.addCurve(to: CGPoint(x: w, y: h * 0.55), control1: CGPoint(x: w * 0.3, y: h * 0.35), control2: CGPoint(x: w * 0.6, y: h * 0.8))
+                    p.addLine(to: CGPoint(x: w, y: h)); p.addLine(to: CGPoint(x: 0, y: h)); p.closeSubpath()
+                }
+                .fill(Color(red: 0.32, green: 0.55, blue: 0.4))
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: h * 0.88))
+                    p.addCurve(to: CGPoint(x: w, y: h * 0.8), control1: CGPoint(x: w * 0.35, y: h * 0.7), control2: CGPoint(x: w * 0.7, y: h * 1.0))
+                    p.addLine(to: CGPoint(x: w, y: h)); p.addLine(to: CGPoint(x: 0, y: h)); p.closeSubpath()
+                }
+                .fill(Color(red: 0.2, green: 0.4, blue: 0.3))
+            }
+        }
+    }
+}
+
 enum SettingsPanelSpace {
     static let name = "ClipShelfSettingsPanel"
 }
 
 /// A progressive frosted band: fully blurred at the top of the panel, fading
 /// to nothing at its bottom edge.
-private struct HeaderBlurBand: View {
+private struct EdgeBlurBand: View {
+    /// Which panel edge the band is fully frosted at.
+    let edge: VerticalEdge
+
     var body: some View {
+        // Drawn upright for both edges and only the fade reversed: a flipped
+        // band also flipped how its glass bends the light.
         Rectangle()
             .fill(.ultraThinMaterial)
             .mask(
@@ -657,10 +811,12 @@ private struct HeaderBlurBand: View {
                     stops: [
                         .init(color: .black, location: 0),
                         .init(color: .black, location: 0.45),
+                        .init(color: .black.opacity(0.55), location: 0.72),
+                        .init(color: .black.opacity(0.18), location: 0.9),
                         .init(color: .black.opacity(0), location: 1)
                     ],
-                    startPoint: .top,
-                    endPoint: .bottom
+                    startPoint: edge == .top ? .top : .bottom,
+                    endPoint: edge == .top ? .bottom : .top
                 )
             )
             .allowsHitTesting(false)

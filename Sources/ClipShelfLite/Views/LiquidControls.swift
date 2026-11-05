@@ -120,9 +120,13 @@ struct GlassLevelSlider: View {
 
     private let knob: CGFloat = 24
     private let detent: Double = 0.5
-    private let detentHalfWidth: Double = 0.035
+    private let detentHalfWidth: Double = 0.055
     private let liftSpring = Animation.spring(response: 0.32, dampingFraction: 0.72)
     private let settleSpring = Animation.spring(response: 0.5, dampingFraction: 0.55)
+    /// Snapping into and out of the middle: a short, bouncy spring.
+    private let detentSpring = Animation.spring(response: 0.26, dampingFraction: 0.5)
+    /// A tap on the track: the thumb glides over and overshoots a little.
+    private let tapSpring = Animation.spring(response: 0.38, dampingFraction: 0.62)
 
     private var shown: Double { dragValue ?? value }
 
@@ -178,20 +182,27 @@ struct GlassLevelSlider: View {
     private func drag(usable: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { drag in
+                // The first touch (a tap, or the start of a drag away from the
+                // thumb) glides the thumb over with a spring, not a jump.
+                let isFirstTouch = !isLifted
                 if !isLifted {
                     withAnimation(liftSpring) { isLifted = true }
                 }
                 let raw = Double((drag.location.x - knob / 2) / usable)
                 var next = min(max(raw, 0), 1)
-                // Detent: hold at the middle for a moment.
+                // Detent: the thumb springs into the middle and holds there,
+                // then springs after the pointer once it is pulled away.
+                var snap: Animation?
                 if abs(next - detent) < detentHalfWidth {
                     next = detent
                     if !detentEntered {
                         detentEntered = true
+                        snap = detentSpring
                         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
                     }
-                } else {
+                } else if detentEntered {
                     detentEntered = false
+                    snap = detentSpring
                 }
                 // Past an end: pull with growing resistance, like iOS.
                 let beyond = raw < 0 ? CGFloat(raw) * usable : (raw > 1 ? CGFloat(raw - 1) * usable : 0)
@@ -199,14 +210,16 @@ struct GlassLevelSlider: View {
                 if (raw < 0 || raw > 1), pull == 0 {
                     NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
                 }
-                var plain = Transaction()
-                plain.disablesAnimations = true
-                withTransaction(plain) {
+                if isFirstTouch { snap = tapSpring }
+                var motion = Transaction(animation: snap)
+                motion.disablesAnimations = snap == nil
+                withTransaction(motion) {
                     pull = resisted
                     dragValue = next
                 }
                 let now = CACurrentMediaTime()
-                if now - lastPreview > 0.05 {
+                // Only the small sample follows, so it can follow every frame.
+                if now - lastPreview > 1.0 / 60.0 {
                     lastPreview = now
                     onPreview(next)
                 }
@@ -215,7 +228,12 @@ struct GlassLevelSlider: View {
                 let final = dragValue ?? value
                 onPreview(final)
                 value = final
-                onCommit(final)
+                // Commit once the thumb has settled: applying the level
+                // redraws every window, which froze the settle animation.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
+                    guard dragValue == nil else { return }
+                    onCommit(final)
+                }
                 dragValue = nil
                 detentEntered = false
                 withAnimation(settleSpring) {
@@ -242,8 +260,11 @@ struct GlassLevelSlider: View {
                 shape.fill(Color.white.opacity(isLifted ? 0.6 : 1))
             }
         }
-        .frame(width: width, height: height)
-        .shadow(color: .black.opacity(isLifted ? 0.12 : 0.22), radius: isLifted ? 8 : 2.5, y: isLifted ? 3 : 1)
+        // A thin rim instead of a shadow: a blurred shadow had to be redrawn
+        // on every frame of the lift.
+        .overlay(shape.strokeBorder(Color.black.opacity(isLifted ? 0.06 : 0.14), lineWidth: 0.5))
+        // Sized frame by frame, so at rest it is a true circle.
+        .modifier(AnimatedSize(width: width, height: height))
     }
 }
 
@@ -253,9 +274,48 @@ struct GlassLevelSlider: View {
 /// glass with the accent colour instead of switching to a flat blue fill.
 struct LiquidGlassButtonStyle: ButtonStyle {
     var isActive = false
+    /// A set width, animated frame by frame (the glass then follows the
+    /// capsule exactly as it grows, instead of morphing on its own).
+    var width: CGFloat?
 
     func makeBody(configuration: Configuration) -> some View {
-        LiquidGlassButtonBody(configuration: configuration, isActive: isActive)
+        LiquidGlassButtonBody(configuration: configuration, isActive: isActive, width: width)
+    }
+}
+
+/// Lays out at each frame's size while animating.
+private struct AnimatedSize: ViewModifier, Animatable {
+    var width: CGFloat
+    var height: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(width, height) }
+        set { width = newValue.first; height = newValue.second }
+    }
+
+    func body(content: Content) -> some View {
+        content.frame(width: width, height: height)
+    }
+}
+
+/// Lays out at each frame's width while animating.
+private struct AnimatedWidth: ViewModifier, Animatable {
+    var width: CGFloat?
+
+    var animatableData: CGFloat {
+        get { width ?? 0 }
+        set { width = width == nil ? nil : newValue }
+    }
+
+    func body(content: Content) -> some View {
+        if let width {
+            // Trailing: the capsule grows out to the left of a right-aligned
+            // control, and the old and new labels cross-fade in place
+            // instead of sliding sideways.
+            content.frame(width: width, alignment: .trailing)
+        } else {
+            content
+        }
     }
 }
 
@@ -267,6 +327,7 @@ enum SettingsControlMetrics {
 private struct LiquidGlassButtonBody: View {
     let configuration: ButtonStyleConfiguration
     let isActive: Bool
+    var width: CGFloat?
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
 
@@ -278,23 +339,25 @@ private struct LiquidGlassButtonBody: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 16)
             .frame(minWidth: SettingsControlMetrics.height, minHeight: SettingsControlMetrics.height)
+            .modifier(AnimatedWidth(width: width))
             .background {
                 // Clear glass, the same as the 设置 capsule and the type
                 // switcher's lens.
                 Color.clear.clipShelfGlass(
                     in: Capsule(),
-                    interactive: true,
+                    // Not the system's interactive glass: its own press glow
+                    // and bounce would differ from the shared press feedback.
+                    interactive: false,
                     tint: isActive ? Color.accentColor.opacity(isDark ? 0.36 : 0.24) : nil
                 )
             }
+            // Always there (only shown while active), so it grows and shrinks
+            // with the capsule instead of appearing at its final size.
             .overlay {
-                if isActive {
-                    BreathingRim()
-                }
+                BreathingRim(isActive: isActive)
             }
             .contentShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.95 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.62), value: configuration.isPressed)
+            .pressFeedback(configuration.isPressed)
             .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isActive)
             .opacity(isEnabled ? 1 : 0.45)
     }
@@ -302,14 +365,22 @@ private struct LiquidGlassButtonBody: View {
 
 /// A softly pulsing accent rim, e.g. while a shortcut is being recorded.
 private struct BreathingRim: View {
+    let isActive: Bool
     @State private var bright = false
 
     var body: some View {
         Capsule()
             .strokeBorder(Color.accentColor.opacity(bright ? 0.95 : 0.35), lineWidth: 1.5)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                    bright = true
+            .opacity(isActive ? 1 : 0)
+            .onChange(of: isActive) { active in
+                if active {
+                    withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                        bright = true
+                    }
+                } else {
+                    var plain = Transaction()
+                    plain.disablesAnimations = true
+                    withTransaction(plain) { bright = false }
                 }
             }
             .allowsHitTesting(false)
@@ -318,9 +389,10 @@ private struct BreathingRim: View {
 
 // MARK: - Pull-down menu
 
-/// A pull-down menu shown as a glass capsule. Its options open in a glass
-/// panel that pours out of the capsule (see `LiquidMenuOverlay`), instead of
-/// a system menu.
+/// A choice shown as a glass capsule with the current option. Clicking it
+/// grows the capsule itself sideways (to the left, like the shortcut
+/// buttons) into a switcher with every option, laid out like the type
+/// switcher; picking one shrinks it back to the capsule.
 struct LiquidMenu<Value: Hashable>: View {
     let options: [Value]
     @Binding var selection: Value
@@ -328,44 +400,156 @@ struct LiquidMenu<Value: Hashable>: View {
     @ObservedObject private var presenter = LiquidMenuPresenter.shared
     @State private var id = UUID()
     @State private var frameBox = FrameBox()
+    /// The capsule has grown to the full switcher width.
+    @State private var isExpanded = false
+    /// The switcher's options are showing (after the growth, before the shrink).
+    @State private var showsOptions = false
+    @State private var clickMonitor: Any?
+    @State private var isCapsulePressed = false
+    @State private var isSwitcherPressed = false
+
+    private let height = SettingsControlMetrics.height
+    private let inset: CGFloat = 4
+    private static var growth: Animation { .spring(response: 0.4, dampingFraction: 0.74) }
 
     var body: some View {
-        let isOpen = presenter.request?.id == id
-        HStack(spacing: 6) {
-            Text(title(selection))
-                .font(.system(size: 13, weight: .medium))
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
+        ZStack(alignment: .trailing) {
+            if showsOptions {
+                LiquidSegmentedControl(
+                    options: options,
+                    selection: Binding(get: { selection }, set: { choose($0) }),
+                    title: title,
+                    segmentWidth: segmentWidth,
+                    height: height,
+                    drawsBackground: false,
+                    onPressChange: { isSwitcherPressed = $0 }
+                )
+                .transition(.opacity)
+            } else {
+                Text(title(selection))
+                    .font(.system(size: 13, weight: .medium))
+                    .fixedSize()
+                    .padding(.horizontal, 16)
+                    // The whole capsule takes the click, not just the text.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .opacity(isExpanded ? 0 : 1)
+                .contentShape(Capsule())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            if !isCapsulePressed { isCapsulePressed = true }
+                        }
+                        .onEnded { value in
+                            isCapsulePressed = false
+                            if abs(value.translation.width) < 12, abs(value.translation.height) < 12 {
+                                open()
+                            }
+                        }
+                )
+                .transition(.opacity)
+            }
         }
-        .padding(.horizontal, 16)
-        .frame(height: SettingsControlMetrics.height)
-        .clipShelfGlass(in: Capsule(), interactive: true)
-        .contentShape(Capsule())
-        // Pressed-in look while its panel is out.
-        .scaleEffect(isOpen ? 0.96 : 1)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isOpen)
+        // One capsule of glass whose width grows frame by frame (trailing
+        // anchored), so it stretches out instead of a panel appearing.
+        .modifier(AnimatedFrameWidth(width: isExpanded ? expandedWidth : collapsedWidth))
+        .frame(height: height)
+        .background {
+            Color.clear.clipShelfGlass(in: Capsule())
+        }
         .fixedSize()
+        // The whole capsule answers a press, closed or open.
+        .pressFeedback(isCapsulePressed || isSwitcherPressed)
         .background(FrameReader(box: frameBox))
-        .onTapGesture { open() }
+        .onChange(of: presenter.openID) { openID in
+            if openID != id, isExpanded { close() }
+        }
+        .onDisappear { removeClickMonitor() }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
     }
 
+    // MARK: Sizes
+
+    private func textWidth(_ text: String, bold: Bool) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 13, weight: bold ? .semibold : .medium)
+        return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    private var collapsedWidth: CGFloat {
+        textWidth(title(selection), bold: false) + 32
+    }
+
+    private var segmentWidth: CGFloat {
+        (options.map { textWidth(title($0), bold: true) }.max() ?? 40) + 28
+    }
+
+    private var expandedWidth: CGFloat {
+        segmentWidth * CGFloat(options.count) + inset * 2
+    }
+
+    // MARK: Opening and closing
+
     private func open() {
-        let titles = options.map(title)
-        let selectedIndex = options.firstIndex(of: selection)
-        let options = options
-        presenter.present(LiquidMenuPresenter.Request(
-            id: id,
-            anchor: frameBox.rect,
-            titles: titles,
-            selectedIndex: selectedIndex,
-            onSelect: { index in
-                guard options.indices.contains(index) else { return }
-                selection = options[index]
+        guard !isExpanded else { return }
+        presenter.didOpen(id) { close() }
+        withAnimation(Self.growth) { isExpanded = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            guard isExpanded else { return }
+            withAnimation(.easeOut(duration: 0.18)) { showsOptions = true }
+        }
+        installClickMonitor()
+    }
+
+    private func choose(_ value: Value) {
+        selection = value
+        // Let the lens land on the choice, then fold back.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { close() }
+    }
+
+    private func close() {
+        guard isExpanded else { return }
+        removeClickMonitor()
+        presenter.didClose(id)
+        withAnimation(.easeOut(duration: 0.12)) { showsOptions = false }
+        withAnimation(Self.growth.delay(0.06)) { isExpanded = false }
+    }
+
+    /// A click anywhere outside the open switcher folds it back, like a menu.
+    private func installClickMonitor() {
+        removeClickMonitor()
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+            if let window = event.window, let content = window.contentView {
+                let point = content.convert(event.locationInWindow, from: nil)
+                // The settings page's coordinate space starts at the content
+                // view's top-left.
+                let flipped = CGPoint(x: point.x, y: content.isFlipped ? point.y : content.bounds.height - point.y)
+                if !frameBox.rect.insetBy(dx: -2, dy: -2).contains(flipped) {
+                    DispatchQueue.main.async { close() }
+                }
             }
-        ))
+            return event
+        }
+    }
+
+    private func removeClickMonitor() {
+        if let clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+            self.clickMonitor = nil
+        }
+    }
+}
+
+/// Lays out at each frame's width while animating (trailing anchored).
+private struct AnimatedFrameWidth: ViewModifier, Animatable {
+    var width: CGFloat
+
+    var animatableData: CGFloat {
+        get { width }
+        set { width = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.frame(width: width, alignment: .trailing)
     }
 }
 
@@ -388,141 +572,38 @@ private struct FrameReader: View {
     }
 }
 
+/// Which pull-down is open (one at a time), so Esc and closing settings can
+/// fold it back.
 final class LiquidMenuPresenter: ObservableObject {
     static let shared = LiquidMenuPresenter()
 
-    struct Request: Identifiable {
-        let id: UUID
-        let anchor: CGRect
-        let titles: [String]
-        let selectedIndex: Int?
-        let onSelect: (Int) -> Void
+    @Published private(set) var openID: UUID?
+    private var closeAction: (() -> Void)?
+
+    var isOpen: Bool { openID != nil }
+
+    func didOpen(_ id: UUID, close: @escaping () -> Void) {
+        if openID != id { closeAction?() }
+        openID = id
+        closeAction = close
     }
 
-    @Published private(set) var request: Request?
-    /// Grown out of the capsule into the full panel.
-    @Published var isExpanded = false
-
-    var isOpen: Bool { request != nil }
-
-    func present(_ request: Request) {
-        self.request = request
-        isExpanded = false
-        DispatchQueue.main.async {
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
-                self.isExpanded = true
-            }
-        }
+    func didClose(_ id: UUID) {
+        guard openID == id else { return }
+        openID = nil
+        closeAction = nil
     }
 
-    /// Shrinks the panel back into its capsule, then removes it.
-    func dismiss(choosing index: Int? = nil) {
-        guard let request else { return }
-        if let index { request.onSelect(index) }
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-            isExpanded = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
-            guard self.request?.id == request.id, !self.isExpanded else { return }
-            self.request = nil
-        }
+    /// Folds the open one back.
+    func dismiss() {
+        closeAction?()
     }
 
-    /// Closes the menu without animation (e.g. when settings closes).
+    /// Closes without waiting (e.g. when settings closes).
     func dismissImmediately() {
-        request = nil
-        isExpanded = false
-    }
-}
-
-/// Draws the open menu above the whole settings page, so it is never
-/// clipped by the scroll view or covered by the rows below it.
-struct LiquidMenuOverlay: View {
-    @ObservedObject private var presenter = LiquidMenuPresenter.shared
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.glassTransparency) private var transparency
-    @State private var hovered: Int?
-
-    private let rowHeight: CGFloat = 30
-    private let inset: CGFloat = 6
-    /// Gap between the capsule and the panel: the same as the panel's inner
-    /// inset, so the two read as one aligned group.
-    private let gap: CGFloat = 6
-
-    var body: some View {
-        GeometryReader { proxy in
-            if let request = presenter.request {
-                let target = panelRect(for: request, in: proxy.size)
-                let rect = presenter.isExpanded ? target : request.anchor
-                let radius = presenter.isExpanded ? 15 : request.anchor.height / 2
-                ZStack(alignment: .topLeading) {
-                    // Clicking anywhere else closes it, like a menu.
-                    Color.black.opacity(0.001)
-                        .onTapGesture { presenter.dismiss() }
-
-                    panel(request, radius: radius, size: target.size)
-                        .frame(width: rect.width, height: rect.height, alignment: .top)
-                        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-                        .offset(x: rect.minX, y: rect.minY)
-                }
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-            }
-        }
-    }
-
-    private func panelRect(for request: Request, in size: CGSize) -> CGRect {
-        let longest = request.titles.map { CGFloat($0.count) * 13.5 }.max() ?? 60
-        let width = max(request.anchor.width, longest + 52)
-        let height = CGFloat(request.titles.count) * rowHeight + inset * 2
-        var y = request.anchor.maxY + gap
-        if y + height > size.height - 8 {
-            y = request.anchor.minY - gap - height
-        }
-        // Trailing edges line up with the capsule.
-        return CGRect(x: request.anchor.maxX - width, y: y, width: width, height: height)
-    }
-
-    private typealias Request = LiquidMenuPresenter.Request
-
-    private func panel(_ request: Request, radius: CGFloat, size: CGSize) -> some View {
-        VStack(spacing: 0) {
-            ForEach(Array(request.titles.enumerated()), id: \.offset) { index, title in
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .opacity(index == request.selectedIndex ? 1 : 0)
-                        .frame(width: 14)
-                    Text(title)
-                        .font(.system(size: 13, weight: index == request.selectedIndex ? .semibold : .medium))
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(Color.primary)
-                .padding(.horizontal, 12)
-                .frame(height: rowHeight)
-                .background {
-                    Capsule()
-                        .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.34 : 0.16))
-                        .opacity(hovered == index ? 1 : 0)
-                }
-                .contentShape(Rectangle())
-                .onHover { inside in
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        hovered = inside ? index : (hovered == index ? nil : hovered)
-                    }
-                }
-                .onTapGesture { presenter.dismiss(choosing: index) }
-            }
-        }
-        .padding(inset)
-        .frame(width: size.width, height: size.height, alignment: .top)
-        // Options appear once the glass has poured out.
-        .opacity(presenter.isExpanded ? 1 : 0)
-        .animation(.easeOut(duration: presenter.isExpanded ? 0.22 : 0.1).delay(presenter.isExpanded ? 0.08 : 0), value: presenter.isExpanded)
-        .background {
-            Color.clear.clipShelfGlass(in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        }
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.35 : 0.14), radius: 14, y: 6)
+        closeAction?()
+        openID = nil
+        closeAction = nil
     }
 }
 
@@ -557,7 +638,106 @@ struct LiquidStepper: View {
                 .frame(width: SettingsControlMetrics.height, height: SettingsControlMetrics.height)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFeedbackButtonStyle())
         .foregroundStyle(Color.primary.opacity(0.75))
+    }
+}
+
+// MARK: - Press feedback
+
+/// The press response shared by every button, as on iOS 26: the control
+/// swells a little while pressed and springs back on release. A quick click
+/// is held for a moment, so it shows just as clearly as a long press.
+struct PressFeedback: ViewModifier {
+    let isPressed: Bool
+    var scale: CGFloat = PressFeedback.defaultScale
+
+    static let defaultScale: CGFloat = 1.06
+    /// The shortest time the pressed look stays, so a click is visible.
+    static let minimumHold: TimeInterval = 0.2
+    static let pressSpring = Animation.spring(response: 0.22, dampingFraction: 0.6)
+    static let releaseSpring = Animation.spring(response: 0.4, dampingFraction: 0.55)
+
+    @Environment(\.isInPressGroup) private var isInPressGroup
+    @State private var isShown = false
+    @State private var pressedAt: CFTimeInterval = 0
+    @State private var pressToken = 0
+
+    func body(content: Content) -> some View {
+        content
+            // Inside a group (a glass capsule of several buttons) the whole
+            // capsule swells instead, so the press reads the same everywhere.
+            .scaleEffect(isShown && !isInPressGroup ? scale : 1)
+            .preference(key: GroupPressKey.self, value: isPressed)
+            .onChange(of: isPressed) { pressed in
+                if pressed {
+                    pressToken += 1
+                    pressedAt = CACurrentMediaTime()
+                    withAnimation(Self.pressSpring) { isShown = true }
+                } else {
+                    let token = pressToken
+                    let wait = max(0, Self.minimumHold - (CACurrentMediaTime() - pressedAt))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                        // A new press in the meantime keeps it up.
+                        guard token == pressToken else { return }
+                        withAnimation(Self.releaseSpring) { isShown = false }
+                    }
+                }
+            }
+    }
+}
+
+/// A press anywhere inside a press group.
+private struct GroupPressKey: PreferenceKey {
+    static var defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
+private struct InPressGroupKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var isInPressGroup: Bool {
+        get { self[InPressGroupKey.self] }
+        set { self[InPressGroupKey.self] = newValue }
+    }
+}
+
+/// Several buttons on one capsule: pressing any of them swells the whole
+/// capsule with the shared press feedback.
+private struct PressGroup: ViewModifier {
+    @State private var isPressed = false
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.isInPressGroup, true)
+            .onPreferenceChange(GroupPressKey.self) { isPressed = $0 }
+            .transformPreference(GroupPressKey.self) { $0 = false }
+            .pressFeedback(isPressed)
+            .environment(\.isInPressGroup, false)
+    }
+}
+
+extension View {
+    /// Makes this capsule swell as a whole when a button on it is pressed.
+    func pressGroup() -> some View {
+        modifier(PressGroup())
+    }
+
+    func pressFeedback(_ isPressed: Bool, scale: CGFloat = PressFeedback.defaultScale) -> some View {
+        modifier(PressFeedback(isPressed: isPressed, scale: scale))
+    }
+}
+
+/// A plain button with the shared press feedback.
+struct PressFeedbackButtonStyle: ButtonStyle {
+    var scale: CGFloat = PressFeedback.defaultScale
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .pressFeedback(configuration.isPressed, scale: scale)
     }
 }

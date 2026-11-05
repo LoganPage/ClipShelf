@@ -40,10 +40,7 @@ final class TextPreviewSession: NSObject, NSSearchFieldDelegate {
         encodingLabel.textColor = .secondaryLabelColor
         encodingLabel.lineBreakMode = .byTruncatingTail
 
-        let toolbar = NSVisualEffectView()
-        toolbar.material = .headerView
-        toolbar.blendingMode = .withinWindow
-        toolbar.state = .active
+        let toolbar = PreviewGlassBar(frame: .zero, cornerRadius: 0)
         let toolbarStack = NSStackView(views: [lineNumberButton, wrapButton, NSView(), encodingLabel])
         toolbarStack.orientation = .horizontal
         toolbarStack.alignment = .centerY
@@ -66,10 +63,7 @@ final class TextPreviewSession: NSObject, NSSearchFieldDelegate {
         matchLabel.alignment = .right
         matchLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        let findBar = NSVisualEffectView()
-        findBar.material = .sidebar
-        findBar.blendingMode = .withinWindow
-        findBar.state = .active
+        let findBar = PreviewGlassBar(frame: .zero, cornerRadius: 0)
         let findStack = NSStackView(views: [findField, matchLabel, previousButton, nextButton, closeButton])
         findStack.orientation = .horizontal
         findStack.alignment = .centerY

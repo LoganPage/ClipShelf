@@ -43,6 +43,7 @@ final class GenieAnimator {
         duration: TimeInterval,
         above parent: NSWindow?,
         crossfade: TimeInterval = 0,
+        level: NSWindow.Level? = nil,
         completion: @escaping () -> Void
     ) -> GenieAnimator {
         let animator = GenieAnimator(
@@ -55,6 +56,7 @@ final class GenieAnimator {
             completion: completion
         )
         animator.crossfade = crossfade
+        if let level { animator.window.level = level }
         running[ObjectIdentifier(animator)] = animator
         animator.start()
         return animator

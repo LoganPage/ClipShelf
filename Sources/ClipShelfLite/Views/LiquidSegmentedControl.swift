@@ -3,71 +3,69 @@ import SwiftUI
 /// A tab-bar style switcher modelled on Apple Music's bottom bar.
 ///
 /// At rest the selection is a soft pill inside a glass capsule. Pressing lifts
-/// it into a larger clear-glass lens. Dragging moves the lens 1:1 with the
-/// pointer, stretching with speed and rubber-banding past the ends; a tap
-/// glides the lifted lens to the tapped option. Either way it then drops back
-/// into the bar with a springy overshoot.
+/// it into a larger clear-glass lens that follows the pointer, stretches with
+/// speed, rubber-bands past the ends, and springs back into place on release.
 struct LiquidSegmentedControl<Value: Hashable>: View {
     let options: [Value]
     @Binding var selection: Value
     let title: (Value) -> String
     var segmentWidth: CGFloat?
-    var height: CGFloat = GlassMetrics.controlHeight
+    var height: CGFloat = 36
+    /// Off when it sits inside a glass capsule that is already there (an
+    /// opened pull-down). The only change from the first version.
+    var drawsBackground = true
+    /// Told when a press starts and ends (after the click hold), e.g. so a
+    /// surrounding capsule can swell with it.
+    var onPressChange: ((Bool) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.glassTransparency) private var transparency
     /// Index the resting pill sits on; animated separately from `selection`
     /// so the list behind the control never animates with it.
     @State private var restingIndex: Int?
-    /// Unclamped centre of the lens while lifted.
-    @State private var lensCenter: CGFloat?
-    @State private var isLifted = false
+    /// Pointer-driven centre of the lens while pressed, before rubber-banding.
+    @State private var dragCenter: CGFloat?
+    @State private var isPressed = false
     @State private var stretch: CGFloat = 1
-    @State private var isTracking = false
-    @State private var didDrag = false
     @State private var lastSample: (x: CGFloat, time: TimeInterval)?
-    /// Invalidates a pending tap "drop" when a new press starts.
-    @State private var interactionToken = 0
+    @State private var pressedAt: CFTimeInterval = 0
+    @State private var pressToken = 0
 
     private let inset: CGFloat = 4
-    // Unhurried, soft springs: the lens should feel like liquid, not a snap.
-    private let liftSpring = Animation.spring(response: 0.32, dampingFraction: 0.72)
-    private let glideSpring = Animation.spring(response: 0.42, dampingFraction: 0.8)
-    private let settleSpring = Animation.spring(response: 0.55, dampingFraction: 0.62)
-    /// Time for a tapped lens to glide over and come to rest before dropping.
-    private let tapHoldDuration: TimeInterval = 0.34
+    private let settleSpring = Animation.spring(response: 0.44, dampingFraction: 0.56)
+    private let pressSpring = Animation.spring(response: 0.26, dampingFraction: 0.62)
+    private let followSpring = Animation.interactiveSpring(response: 0.18, dampingFraction: 0.78)
 
     var body: some View {
         GeometryReader { proxy in
             let layout = Layout(width: proxy.size.width, height: height, inset: inset, count: options.count)
             let resting = restingIndex ?? selectedIndex
-            let center = lensCenter.map(layout.rubberBanded) ?? layout.center(of: resting)
-            let highlighted = lensCenter == nil ? resting : layout.nearestIndex(to: center)
+            let center = dragCenter.map(layout.rubberBanded) ?? layout.center(of: resting)
+            let highlighted = dragCenter == nil ? resting : layout.nearestIndex(to: center)
 
             ZStack(alignment: .topLeading) {
-                Color.clear
-                    .clipShelfGlass(in: Capsule())
+                bar
 
                 restingPill(layout: layout)
                     .position(x: center, y: height / 2)
-                    .opacity(isLifted ? 0 : 1)
+                    .opacity(isPressed ? 0 : 1)
 
                 labels(layout: layout, highlighted: highlighted)
 
-                // Only exists while lifted, so an idle bar never pays for a hidden glass layer.
-                if isLifted {
-                    lens(layout: layout)
-                        .position(x: center, y: height / 2)
-                        .transition(.scale(scale: 0.55).combined(with: .opacity))
-                        .allowsHitTesting(false)
-                }
+                lens(layout: layout)
+                    .position(x: center, y: height / 2)
+                    .opacity(isPressed ? 1 : 0)
+                    .scaleEffect(isPressed ? 1 : 0.6)
+                    .allowsHitTesting(false)
             }
             .contentShape(Capsule())
             .gesture(pressGesture(layout: layout))
+            // Press feedback, as on iOS: the whole bar swells a little
+            // while touched and settles back on release.
+            .pressFeedback(drawsBackground && isPressed)
         }
         .frame(width: segmentWidth.map { $0 * CGFloat(options.count) + inset * 2 }, height: height)
         .onChange(of: selection) { _ in
-            guard !isTracking, lensCenter == nil, restingIndex != selectedIndex else { return }
+            guard dragCenter == nil, restingIndex != selectedIndex else { return }
             withAnimation(settleSpring) {
                 restingIndex = selectedIndex
             }
@@ -92,9 +90,23 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
 
     // MARK: Pieces
 
+    @ViewBuilder
+    private var bar: some View {
+        if !drawsBackground {
+            Color.clear
+        } else if #available(macOS 26.0, *) {
+            Color.clear
+                .glassEffect(.regular, in: Capsule())
+        } else {
+            Capsule()
+                .fill(.regularMaterial)
+                .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+        }
+    }
+
     private func restingPill(layout: Layout) -> some View {
         Capsule()
-            .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.32 : 0.14))
+            .fill(Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.09))
             .frame(width: layout.segment, height: height - inset * 2)
             .scaleEffect(x: stretch, y: 1 / sqrt(stretch))
     }
@@ -104,37 +116,32 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
         let lensShape = Capsule()
         let base = Color.clear
             .frame(width: layout.segment + 16, height: height + 10)
-        Group {
-            if #available(macOS 26.0, *) {
-                // Not `.interactive()`: the lens is animated here, and the
-                // system's own press response would fight that motion.
-                base.glassEffect(.clear, in: lensShape)
-            } else {
-                base
-                    .background(.ultraThinMaterial, in: lensShape)
-                    .overlay(lensShape.stroke(Color.white.opacity(0.5), lineWidth: 0.75))
-                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-            }
+            .scaleEffect(x: stretch, y: 1 / sqrt(stretch))
+        if #available(macOS 26.0, *) {
+            base.glassEffect(.clear.interactive(), in: lensShape)
+        } else {
+            base
+                .background(.ultraThinMaterial, in: lensShape)
+                .overlay(lensShape.stroke(Color.white.opacity(0.5), lineWidth: 0.75))
+                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
         }
-        .scaleEffect(x: stretch, y: 1 / sqrt(stretch))
     }
 
     private func labels(layout: Layout, highlighted: Int) -> some View {
         HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
                 Text(title(option))
-                    .font(.system(size: 13, weight: index == highlighted ? .semibold : .medium))
-                    // Selected text uses the label colour on an accent-tinted pill,
-                    // which stays legible in both light and dark mode.
-                    .foregroundStyle(index == highlighted ? Color.primary : Color.primary.opacity(colorScheme == .dark ? 0.84 : 0.7))
+                    // The same size and colour as the other buttons' labels.
+                    .font(.system(size: 13.5, weight: index == highlighted ? .semibold : .medium))
+                    .foregroundStyle(index == highlighted ? Color.accentColor : Color.primary)
                     .lineLimit(1)
                     .frame(width: layout.segment, height: height)
-                    .scaleEffect(isLifted && index == highlighted ? 1.08 : 1)
+                    .scaleEffect(isPressed && index == highlighted ? 1.08 : 1)
             }
         }
         .padding(.horizontal, inset)
-        .animation(liftSpring, value: highlighted)
-        .animation(liftSpring, value: isLifted)
+        .animation(pressSpring, value: highlighted)
+        .animation(pressSpring, value: isPressed)
         .allowsHitTesting(false)
     }
 
@@ -143,35 +150,15 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
     private func pressGesture(layout: Layout) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
-                let now = value.time.timeIntervalSinceReferenceDate
                 let x = value.location.x
-
-                if !isTracking {
-                    // Press: lift the lens out of the bar where the selection sits.
-                    isTracking = true
-                    didDrag = false
-                    interactionToken &+= 1
-                    let resting = restingIndex ?? selectedIndex
-                    restingIndex = resting
-                    lastSample = (x, now)
-                    withAnimation(liftSpring) {
-                        lensCenter = lensCenter ?? layout.center(of: resting)
-                        isLifted = true
-                    }
+                // A new press (also one that lands while a click's lens is
+                // still held up).
+                if !isPressed || lastSample == nil {
+                    beginPress(at: x, time: value.time.timeIntervalSinceReferenceDate, layout: layout)
                     return
                 }
 
-                if !didDrag {
-                    guard abs(value.translation.width) > 3 else { return }
-                    didDrag = true
-                    // Catch up to the pointer once, then track it 1:1.
-                    withAnimation(.spring(response: 0.18, dampingFraction: 0.8)) {
-                        lensCenter = x
-                    }
-                    lastSample = (x, now)
-                    return
-                }
-
+                let now = value.time.timeIntervalSinceReferenceDate
                 var velocity: CGFloat = 0
                 if let lastSample, now > lastSample.time {
                     velocity = (x - lastSample.x) / CGFloat(now - lastSample.time)
@@ -182,73 +169,66 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
                 let speedStretch = min(abs(velocity) / 2400, 0.34)
                 // Pulling past an end squashes the lens instead of stretching it.
                 let target = max(0.82, 1 + speedStretch - min(overshoot / 220, 0.18))
-                // No animation transaction per event: position follows the pointer
-                // directly and stretch is smoothed by hand, which keeps dragging light.
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    lensCenter = x
-                    stretch += (target - stretch) * 0.35
+                withAnimation(followSpring) {
+                    dragCenter = x
+                    stretch = target
                 }
             }
             .onEnded { value in
-                isTracking = false
+                // A click so quick that no press was seen yet still lifts the lens.
+                if lastSample == nil {
+                    beginPress(at: value.location.x, time: value.time.timeIntervalSinceReferenceDate, layout: layout)
+                }
+                let landing = layout.nearestIndex(to: layout.rubberBanded(value.location.x))
                 lastSample = nil
-                let landing = didDrag
-                    ? layout.nearestIndex(to: layout.rubberBanded(value.location.x))
-                    : layout.nearestIndex(to: value.location.x)
-                let token = interactionToken
-                // Switch first, animate after: whatever the selection drives
-                // (like rebuilding the history list) runs before the lens
-                // moves, so the main thread is free for every frame of the
-                // glide and landing instead of stalling partway through.
                 if options[landing] != selection {
                     selection = options[landing]
                 }
-
-                guard !didDrag else {
-                    DispatchQueue.main.async {
-                        guard token == interactionToken, !isTracking else { return }
-                        drop(at: landing)
-                    }
-                    return
+                // A quick click keeps the lens up for a moment, gliding onto
+                // its choice, so it shows as clearly as a long press.
+                let token = pressToken
+                let wait = max(0, PressFeedback.minimumHold - (CACurrentMediaTime() - pressedAt))
+                withAnimation(followSpring) {
+                    dragCenter = layout.center(of: landing)
                 }
-
-                // Tap: glide the lifted lens to the tapped option, let it
-                // settle, then drop it into the bar.
-                DispatchQueue.main.async {
-                    guard token == interactionToken, !isTracking else { return }
-                    let distance = abs(layout.center(of: landing) - (lensCenter ?? layout.center(of: landing)))
-                    withAnimation(glideSpring) {
-                        lensCenter = layout.center(of: landing)
-                    }
-                    pulseStretch(by: min(distance / max(layout.segment, 1) * 0.1, 0.2))
-                    DispatchQueue.main.asyncAfter(deadline: .now() + tapHoldDuration) {
-                        guard token == interactionToken, !isTracking else { return }
-                        drop(at: landing)
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                    guard token == pressToken else { return }
+                    onPressChange?(false)
+                    withAnimation(settleSpring) {
+                        restingIndex = landing
+                        dragCenter = nil
+                        isPressed = false
+                        stretch = 1
                     }
                 }
             }
     }
 
-    private func drop(at index: Int) {
-        withAnimation(settleSpring) {
-            restingIndex = index
-            lensCenter = nil
-            isLifted = false
-            stretch = 1
+    /// Lifts the lens from the current selection, then glides it to the
+    /// pointer, so a tap elsewhere still visibly travels.
+    private func beginPress(at x: CGFloat, time: TimeInterval, layout: Layout) {
+        restingIndex = restingIndex ?? selectedIndex
+        pressToken += 1
+        pressedAt = CACurrentMediaTime()
+        onPressChange?(true)
+        withAnimation(pressSpring) {
+            isPressed = true
+            dragCenter = x
         }
+        let distance = abs(x - layout.center(of: restingIndex ?? selectedIndex))
+        pulseStretch(by: min(distance / max(layout.segment, 1) * 0.16, 0.32))
+        lastSample = (x, time)
     }
 
     /// Elongates briefly, then wobbles back: the "duang" on every jump.
     private func pulseStretch(by amount: CGFloat) {
         guard amount > 0.01 else { return }
-        withAnimation(.spring(response: 0.22, dampingFraction: 0.9)) {
+        withAnimation(.spring(response: 0.16, dampingFraction: 0.9)) {
             stretch = 1 + amount
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-            guard !isTracking else { return }
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.5)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.13) {
+            guard lastSample == nil || !isPressed else { return }
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.42)) {
                 stretch = 1
             }
         }

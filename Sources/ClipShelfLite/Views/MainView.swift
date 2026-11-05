@@ -52,9 +52,6 @@ struct MainView: View {
     /// While the search glass moves it shows a look-alike placeholder
     /// instead of the native text field, which is costly to animate.
     @State private var isSearchFieldLive = false
-    /// The search field was clicked: only then does it light up like a
-    /// selected record (opening it focuses it without the highlight).
-    @State private var isSearchFieldClicked = false
     @State private var searchMotionGeneration = 0
     @State private var toggleSearchHotKey = ToggleSearchHotKeyDefaults.load()
     @State private var listGeneration = 0
@@ -218,10 +215,9 @@ struct MainView: View {
             scrollEffect = notification.object as? ScrollEffectStyle ?? ScrollEffectPreferences.value
         }
         .onReceive(NotificationCenter.default.publisher(for: GlassPreferences.changedNotification)) { notification in
-            // Settles smoothly once the slider is let go.
-            withAnimation(.easeInOut(duration: 0.45)) {
-                glassTransparency = notification.object as? GlassTransparency ?? GlassPreferences.value
-            }
+            // Applied at once: the window cross-fades to the new look (see
+            // GlassPreferences), which needs the change in the same frame.
+            glassTransparency = notification.object as? GlassTransparency ?? GlassPreferences.value
         }
         // One O(1) change signal instead of re-scanning the history on every render.
         .onChange(of: store.revision) { _ in
@@ -324,6 +320,22 @@ struct MainView: View {
             .mask {
                 VStack(spacing: 0) {
                     Color.black
+                        // Nothing of the list behind the open search field:
+                        // card glass renders above ordinary views, so their
+                        // text showed through the field.
+                        .overlay(alignment: .top) {
+                            Capsule()
+                                .frame(height: GlassMetrics.controlHeight)
+                                .padding(.horizontal, GlassMetrics.edgeInset)
+                                .padding(.top, toolbarHeight + GlassMetrics.stackSpacing)
+                                // Only once the field has poured out: cut
+                                // earlier, the empty full-width hole showed
+                                // as a grey bar ahead of the animation.
+                                .opacity(isSearchExpanded && isSearchFieldLive ? 1 : 0)
+                                .animation(.easeOut(duration: 0.15), value: isSearchFieldLive)
+                                .blendMode(.destinationOut)
+                        }
+                        .compositingGroup()
                     LinearGradient(
                         stops: [
                             .init(color: .black, location: 0),
@@ -340,6 +352,7 @@ struct MainView: View {
             .background(
                 ScrollViewResolver { scrollView in
                     historyScrollView = scrollView
+                    if let scrollView { GlassScroller.install(in: scrollView) }
                 }
             )
             .background(KeyboardCaptureView { event in
@@ -387,7 +400,13 @@ struct MainView: View {
             titleRow
 
             HStack(spacing: 12) {
-                HistoryTypeFilterBar(selection: $kindFilter)
+                LiquidSegmentedControl(
+                    options: ClipKindFilter.allCases,
+                    selection: $kindFilter,
+                    title: \.title,
+                    segmentWidth: 64,
+                    height: GlassMetrics.controlHeight
+                )
 
                 Spacer(minLength: 8)
                 primaryToolbar
@@ -407,17 +426,17 @@ struct MainView: View {
         // underneath; once collapsed, the freed strip is clickable again.
         .contentShape(TopStrip(height: toolbarHitHeight))
         .background(alignment: .top) {
-            // Covers the whole toolbar, so records scrolling underneath never
-            // sit right behind the controls.
-            TitlebarScrollEdge(height: toolbarHeight)
+            // Solid behind the title row only, then a short fade, so the
+            // records' glass shows again as soon as possible.
+            TitlebarScrollEdge(height: titleRowHeight)
         }
     }
 
     /// Lives in the (transparent) titlebar strip, next to the traffic lights.
     private var titleRow: some View {
         HStack(spacing: 8) {
-            Color.clear.frame(width: 62)
-
+            GlassTrafficLights(window: hostWindow)
+                .padding(.trailing, 6)
 
             Text("ClipShelf")
                 .font(.system(size: 17, weight: .semibold))
@@ -494,7 +513,6 @@ struct MainView: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         isSearchFieldLive = true
-                        isSearchFieldClicked = true
                         DispatchQueue.main.async { isSearchFocused = true }
                     }
             }
@@ -512,39 +530,22 @@ struct MainView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.tertiary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressFeedbackButtonStyle())
                 .floatingTooltip("清除搜索")
             }
         }
         .padding(.horizontal, 14)
-        // The text field takes the click itself; notice it on the way.
-        .overlay(ClickWatcher { isSearchFieldClicked = true })
-        .onChange(of: isSearchFocused) { focused in
-            if !focused { isSearchFieldClicked = false }
-        }
         // Contents appear once the glass has poured out.
         .opacity(isSearchExpanded ? 1 : 0)
         .animation(.easeOut(duration: isSearchExpanded ? 0.18 : 0.08).delay(isSearchExpanded ? 0.24 : 0), value: isSearchExpanded)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // As see-through as the toolbar buttons look on their band: it floats
+        // over records, so plain clear glass let their text read through.
         .background {
-            // Clicked: the same tinted glass as a selected record.
-            if isSearchFocused && isSearchFieldClicked {
-                SelectionGlassSlab(
-                    selectionColor: selectionColor,
-                    cornerRadius: GlassMetrics.controlHeight / 2,
-                    verticalInset: 0
-                )
-                .transition(.opacity)
-            } else {
-                Color.clear
-                    .clipShelfGlass(in: Capsule())
-                    .transition(.opacity)
-            }
+            // The same glass as the toolbar buttons. The list is masked out
+            // behind it (see historyList), so no record text shows through.
+            Color.clear.clipShelfGlass(in: Capsule())
         }
-        // It floats over records, so frost what is underneath first (like
-        // Spotlight); otherwise their text showed through the query.
-        .background(Capsule().fill(.regularMaterial))
-        .animation(SelectionRowMotion.animation, value: isSearchFocused && isSearchFieldClicked)
         .clipShape(Capsule())
         // Lifted off the list, like Spotlight.
         .shadow(color: .black.opacity(isSearchExpanded ? 0.22 : 0), radius: 16, y: 8)
@@ -587,7 +588,6 @@ struct MainView: View {
             // Keyboard focus leaves only once the field is gone: resigning it
             // re-renders the window and used to stall the first frames.
             let hadFocus = isSearchFocused
-            isSearchFieldClicked = false
             if !searchText.isEmpty { searchText = "" }
             // No bounce on the way back: it settles into the button.
             withAnimation(.spring(response: 0.4, dampingFraction: 0.92)) {
@@ -635,7 +635,7 @@ struct MainView: View {
             )
 
             HStack(spacing: 0) {
-                toolbarButton("folder", tooltip: "选择截图文件夹") {
+                toolbarButton("folder", tooltip: "添加截图文件夹") {
                     debugFolderPickerLog("choose folder button clicked")
                     watcher.chooseFolder(attachedTo: hostWindow)
                 }
@@ -852,10 +852,7 @@ struct MainView: View {
         case 125:
             moveFocus(delta: 1)
         case 49:
-            let items = previewItems
-            if !items.isEmpty {
-                PreviewController.shared.togglePreview(items, onNavigate: navigatePreview)
-            }
+            togglePreviewOfSelection()
         case 51, 117:
             deleteSelectedOrClear()
         default:
@@ -868,6 +865,18 @@ struct MainView: View {
         commandKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard shouldHandleMainWindowKeyEvent(event) else {
                 return event
+            }
+
+            let isPlainEscape = event.keyCode == 53
+                && event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+            // Settings open: Esc belongs to settings (it closes it).
+            if isPlainEscape, SettingsWindowController.shared.isVisible {
+                return event
+            }
+            // Esc closes an open search field before clearing the selection.
+            if isPlainEscape, isSearchVisible {
+                setSearchVisible(false)
+                return nil
             }
 
             if clearSelectionHotKey.matches(event) {
@@ -894,6 +903,15 @@ struct MainView: View {
                     clearSearchState()
                     return nil
                 }
+            }
+
+            // Space previews, whatever has keyboard focus in the window (the
+            // focus view lost it after settings had been open).
+            if event.keyCode == 49,
+               event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+               !isSearchFocused {
+                togglePreviewOfSelection()
+                return nil
             }
 
             if (event.keyCode == 125 || event.keyCode == 126),
@@ -1270,6 +1288,23 @@ struct MainView: View {
         selectedIDs = Set(bounds.map { filteredItems[$0].id })
     }
 
+    /// Where a record's card is on screen (for the preview to grow from).
+    private func rowRectOnScreen(_ item: ClipItem) -> NSRect? {
+        guard let index = filteredIndexByID[item.id],
+              let scrollView = historyScrollView,
+              let document = scrollView.documentView,
+              let window = scrollView.window else { return nil }
+        let top = historyListVerticalInset + CGFloat(index) * historyRowHeight + rowCardInset
+        let height = historyRowHeight - rowCardInset * 2
+        let width = document.bounds.width - historyListHorizontalInset * 2
+        let y = document.isFlipped ? top : document.bounds.height - top - height
+        let rect = NSRect(x: historyListHorizontalInset, y: y, width: width, height: height)
+        let inWindow = document.convert(rect, to: nil)
+        // Only if the record is actually in view.
+        guard scrollView.convert(scrollView.bounds, to: nil).intersects(inWindow) else { return nil }
+        return window.convertToScreen(inWindow)
+    }
+
     private var previewItems: [ClipItem] {
         let selected = filteredItems.filter { selectedIDs.contains($0.id) }
         if selected.count == 1 {
@@ -1277,7 +1312,9 @@ struct MainView: View {
         }
 
         if selected.count > 1 {
-            return []
+            // Several selected: start at the newest, whichever was clicked
+            // last; ↓ then steps to older ones within the selection.
+            return previewOrder(selected).first.map { [$0] } ?? []
         }
 
         if let focusedItem {
@@ -1287,8 +1324,35 @@ struct MainView: View {
         return []
     }
 
+    /// Newest first.
+    private func previewOrder(_ items: [ClipItem]) -> [ClipItem] {
+        items.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func togglePreviewOfSelection() {
+        let items = previewItems
+        guard let item = items.first else { return }
+        focusedID = item.id
+        PreviewController.shared.togglePreview(items, from: rowRectOnScreen(item), onNavigate: navigatePreview)
+    }
+
     private func navigatePreview(direction: Int) -> Bool {
         guard !filteredItems.isEmpty else { return false }
+
+        // Several selected: step only between them (newest to oldest),
+        // keeping the selection.
+        let selected = previewOrder(filteredItems.filter { selectedIDs.contains($0.id) })
+        if selected.count > 1 {
+            guard let currentID = focusedID,
+                  let position = selected.firstIndex(where: { $0.id == currentID }) else { return false }
+            let next = min(max(position + direction, 0), selected.count - 1)
+            guard next != position else { return false }
+            let item = selected[next]
+            focusedID = item.id
+            revealKeyboardSelectionIfNeeded(item.id, direction: direction)
+            PreviewController.shared.preview([item], from: rowRectOnScreen(item), onNavigate: navigatePreview)
+            return true
+        }
 
         let currentID = focusedID ?? selectedIDs.first
         guard let currentID,
@@ -1302,7 +1366,7 @@ struct MainView: View {
         let item = filteredItems[nextIndex]
         collapseSelection(to: item)
         revealKeyboardSelectionIfNeeded(item.id, direction: direction)
-        PreviewController.shared.preview([item], onNavigate: navigatePreview)
+        PreviewController.shared.preview([item], from: rowRectOnScreen(item), onNavigate: navigatePreview)
         return true
     }
 
@@ -1482,25 +1546,71 @@ private struct ToolbarHeightKey: PreferenceKey {
 
 /// Frosts only the titlebar strip so scrolled rows don't collide with the
 /// title; below it rows stay visible under the glass controls.
-/// Notices mouse-downs over a view without taking them: it is never the
-/// hit view, so the click still reaches what is underneath.
-private struct ClickWatcher: NSViewRepresentable {
-    let onClick: () -> Void
+/// Close / minimise / zoom as tinted Liquid Glass beads, replacing the
+/// system's buttons (hidden in AppDelegate). They keep their colour while
+/// ClipShelf is the active app, also while settings has keyboard focus or
+/// is closing; only when another app is in front do they turn grey.
+private struct GlassTrafficLights: View {
+    let window: NSWindow?
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isAppActive = NSApp.isActive
+    @State private var isHovered = false
 
-    func makeNSView(context: Context) -> WatcherView { WatcherView() }
-    func updateNSView(_ view: WatcherView, context: Context) { view.onClick = onClick }
+    private let size: CGFloat = 14
 
-    final class WatcherView: NSView {
-        var onClick: (() -> Void)?
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            // `point` is in the superview's coordinates, like `frame`.
-            if NSApp.currentEvent?.type == .leftMouseDown, frame.contains(point) {
-                let action = onClick
-                DispatchQueue.main.async { action?() }
-            }
-            return nil
+    var body: some View {
+        HStack(spacing: 8) {
+            light(Color(red: 1, green: 0.37, blue: 0.34), symbol: "xmark") { window?.performClose(nil) }
+            light(Color(red: 1, green: 0.74, blue: 0.18), symbol: "minus") { window?.miniaturize(nil) }
+            light(Color(red: 0.16, green: 0.79, blue: 0.25), symbol: "plus") { window?.zoom(nil) }
         }
+        .onHover { inside in
+            withAnimation(.easeOut(duration: 0.12)) { isHovered = inside }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.2)) { isAppActive = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.2)) { isAppActive = false }
+        }
+    }
+
+    private func light(_ color: Color, symbol: String, action: @escaping () -> Void) -> some View {
+        let isDark = colorScheme == .dark
+        let lit = isAppActive || isHovered
+        let liquid = lit ? color : Color(white: isDark ? 0.42 : 0.78)
+        return Button(action: action) {
+            ZStack {
+                // Flat coloured glass: one even tint, no highlight or gradient.
+                Circle().fill(liquid.opacity(0.88))
+                Image(systemName: symbol)
+                    .font(.system(size: 7.5, weight: .heavy))
+                    .foregroundStyle(Color.black.opacity(0.5))
+                    .opacity(isHovered ? 1 : 0)
+            }
+            .frame(width: size, height: size)
+            // Clear system glass around it: its rim bends what's behind.
+            .modifier(TrafficLightGlass())
+            .contentShape(Circle())
+        }
+        .buttonStyle(TrafficLightPress())
+    }
+}
+
+private struct TrafficLightGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.clear, in: Circle())
+        } else {
+            content
+        }
+    }
+}
+
+private struct TrafficLightPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .pressFeedback(configuration.isPressed)
     }
 }
 
@@ -1522,7 +1632,7 @@ private struct ScopedOpacity: ViewModifier {
 private struct TitlebarScrollEdge: View {
     @Environment(\.colorScheme) private var colorScheme
     let height: CGFloat
-    private let fade: CGFloat = 24
+    private let fade: CGFloat = 40
 
     /// Dark: the deep grey of an inactive titlebar. Light: a soft grey a
     /// little darker than the white controls, so they stand out on it.
@@ -1573,7 +1683,7 @@ private struct WindowDragHandle: NSViewRepresentable {
             if event.clickCount == 2 {
                 window?.performZoom(nil)
             } else {
-                window?.performDrag(with: event)
+                window?.dragWindow(with: event)
             }
         }
     }
@@ -1609,29 +1719,13 @@ private struct GlassToolbarIconButtonBody<Label: View>: View {
             .frame(width: 38, height: GlassMetrics.controlHeight)
             .background(
                 Circle()
-                    .fill(Color.primary.opacity(isPressed ? 0.14 : (isHovered && !isDimmed ? 0.07 : 0)))
+                    .fill(Color.primary.opacity(isHovered && !isDimmed ? 0.07 : 0))
                     .frame(width: 32, height: 32)
             )
             .contentShape(Rectangle())
-            .scaleEffect(isPressed ? 0.92 : 1)
-            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isPressed)
+            .pressFeedback(isPressed)
             .animation(.easeOut(duration: 0.12), value: isHovered)
             .onHover { isHovered = $0 }
-    }
-}
-
-private struct HistoryTypeFilterBar: View {
-    @Binding var selection: ClipKindFilter
-
-    var body: some View {
-        LiquidSegmentedControl(
-            options: ClipKindFilter.allCases,
-            selection: $selection,
-            title: \.title,
-            segmentWidth: 64,
-            height: GlassMetrics.controlHeight
-        )
-        .accessibilityLabel("记录类型")
     }
 }
 
@@ -1779,7 +1873,7 @@ private struct ClipRow: View, Equatable {
 
     private var kindText: String {
         switch item.kind {
-        case .text: "文字"
+        case .text: "文本"
         case .file: item.filePaths.count > 1 ? "\(item.filePaths.count) 个文件" : "文件"
         case .image: item.sourcePath == nil ? "图片" : "截图"
         }
@@ -1904,23 +1998,25 @@ private struct SelectionGlassSlab: View {
     private var surface: some View {
         let isDark = colorScheme == .dark
         // Specular highlight on top, melting into the accent colour below.
+        // Dark mode is kept calmer: a softer rim and tint, so the pane
+        // doesn't glare against the dark cards.
         let rim = LinearGradient(
             colors: [
-                Color.white.opacity(isDark ? 0.5 : 0.95),
-                Color.accentColor.opacity(isDark ? 0.35 : 0.3),
-                Color.accentColor.opacity(isDark ? 0.7 : 0.6)
+                Color.white.opacity(isDark ? 0.3 : 0.95),
+                Color.accentColor.opacity(isDark ? 0.22 : 0.3),
+                Color.accentColor.opacity(isDark ? 0.45 : 0.6)
             ],
             startPoint: .top,
             endPoint: .bottom
         )
-        // A glow that hugs the edge only, so it never greys out the glass.
+        // A thin halo that hugs the edge. Not blurred: a blurred glow had to
+        // be redrawn as the pane moved, which made it stutter.
         let glow = shape
-            .stroke(Color.accentColor.opacity(lightweight ? 0 : (isDark ? 0.45 : 0.35)), lineWidth: 5)
-            .blur(radius: lightweight ? 0 : 6)
+            .stroke(Color.accentColor.opacity(lightweight ? 0 : (isDark ? 0.22 : 0.25)), lineWidth: 3)
         if #available(macOS 26.0, *) {
             Color.clear
                 .glassEffect(
-                    .regular.tint(selectionColor.opacity(isDark ? 0.42 : 0.3)),
+                    .regular.tint(selectionColor.opacity(isDark ? 0.26 : 0.3)),
                     in: shape
                 )
                 // No drop shadow: under translucent glass it shows through and
@@ -1929,7 +2025,7 @@ private struct SelectionGlassSlab: View {
                 .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
         } else {
             shape.fill(.ultraThinMaterial)
-                .overlay(shape.fill(selectionColor.opacity(isDark ? 0.4 : 0.3)))
+                .overlay(shape.fill(selectionColor.opacity(isDark ? 0.26 : 0.3)))
                 .background(glow)
                 .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
         }
@@ -2024,12 +2120,12 @@ private struct RowIconAction: View {
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(tint ?? (isSelected ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary))
             .frame(width: 34, height: 34)
-            .scaleEffect(isPressed ? 0.9 : 1)
             .background(
                 Circle()
-                    .fill(IconButtonAppearance.background(isSelected: isSelected, isPressed: isPressed, isHovered: isHovered))
+                    .fill(IconButtonAppearance.background(isSelected: isSelected, isPressed: false, isHovered: isHovered))
             )
             .contentShape(Circle())
+            .pressFeedback(isPressed)
             .animation(.easeOut(duration: 0.1), value: isHovered)
             .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
             .onHover { inside in
@@ -2444,7 +2540,9 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
                 return event
             }
 
-            guard event.window === NSApp.keyWindow else {
+            // Only the list's own window: a drag in the preview window above
+            // it used to select the records underneath.
+            guard event.window === NSApp.keyWindow, event.window === view?.window else {
                 cancelDrag()
                 return event
             }
@@ -2456,6 +2554,14 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
 
             switch event.type {
             case .leftMouseDown:
+                // A three-finger drag on blank list space moves the window,
+                // like dragging its title bar; on a record it selects as
+                // usual, and on the toolbar's controls it is left to them.
+                if TrackpadFingers.count >= 3, isPointInsideViewport(point), !isOnRecord(event), let window = event.window {
+                    cancelDrag()
+                    window.dragWindow(with: event)
+                    return nil
+                }
                 if isRecoveringPostDragClick {
                     pendingRecoveredClickPoint = isPointInsideViewport(point) ? point : nil
                     if pendingRecoveredClickPoint != nil {
@@ -2652,6 +2758,18 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
             }
 
             return rawIndex
+        }
+
+        /// Whether the pointer is over a record's card.
+        private func isOnRecord(_ event: NSEvent) -> Bool {
+            guard let mouseY = documentY(from: event),
+                  let point = localTopLeftPoint(from: event),
+                  isPointInsideViewport(point),
+                  let viewport = viewportView() else { return false }
+            let index = Int(floor((mouseY - contentTopInset) / rowHeight))
+            return itemIDs.indices.contains(index)
+                && point.x >= contentHorizontalInset
+                && point.x <= viewport.bounds.width - contentHorizontalInset
         }
 
         private func documentY(from event: NSEvent) -> CGFloat? {

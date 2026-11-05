@@ -5,39 +5,58 @@ import ImageIO
 final class ScreenshotFolderWatcher: ObservableObject {
     static let shared = ScreenshotFolderWatcher()
     static let minimumRescanInterval: TimeInterval = 5
+    /// How many folders can be watched at once.
+    static let maximumFolders = 3
 
-    @Published private(set) var folderURL: URL?
+    /// The watched folders, in the order they were added.
+    @Published private(set) var folderURLs: [URL] = []
+    /// The first watched folder.
+    var folderURL: URL? { folderURLs.first }
+    var canAddFolder: Bool { folderURLs.count < Self.maximumFolders }
     @Published private(set) var isRunning = false
     @Published private(set) var statusText = "未选择截图文件夹"
 
+    // The single folder of earlier versions, read once to migrate.
     private let bookmarkKey = "screenshotFolder.bookmark"
     private let pathKey = "screenshotFolder.path"
+    private let bookmarksKey = "screenshotFolders.bookmarks"
+    private let pathsKey = "screenshotFolders.paths"
     private let queue = DispatchQueue(label: "ClipShelf.screenshot-folder", qos: .utility)
-    private var eventSource: DispatchSourceFileSystemObject?
-    private var fileDescriptor: CInt = -1
+    /// One file-system source per watched folder (each closes its own
+    /// descriptor when cancelled).
+    private var eventSources: [DispatchSourceFileSystemObject] = []
+    /// The folders `scan` reads; only touched on `queue`.
+    private var scannedURLs: [URL] = []
     private var timer: DispatchSourceTimer?
     private var pending: [URL: PendingFile] = [:]
     private var seen = Set<String>()
     private var startedAt = Date()
     private var isFolderPanelOpen = false
+    /// A quick follow-up scan is queued for files still being written.
+    private var isFollowUpScheduled = false
 
     private init() {
-        folderURL = loadFolderURL()
+        folderURLs = loadFolderURLs()
     }
 
     func start() {
         stop()
         startedAt = Date()
 
-        guard let folderURL else {
+        let urls = folderURLs
+        guard !urls.isEmpty else {
             updateStatus("未选择截图文件夹", running: false)
             return
         }
 
-        updateStatus("正在监听：\(folderURL.lastPathComponent)", running: true)
-        startEventSource(for: folderURL)
+        let names = urls.map(\.lastPathComponent).joined(separator: "、")
+        updateStatus("正在监听：\(names)", running: true)
+        for url in urls {
+            startEventSource(for: url)
+        }
         startTimer()
         queue.async { [weak self] in
+            self?.scannedURLs = urls
             self?.scan()
         }
     }
@@ -45,13 +64,18 @@ final class ScreenshotFolderWatcher: ObservableObject {
     func stop() {
         timer?.cancel()
         timer = nil
-        eventSource?.cancel()
-        eventSource = nil
-        pending.removeAll()
-        updateStatus(folderURL == nil ? "未选择截图文件夹" : "已暂停", running: false)
+        eventSources.forEach { $0.cancel() }
+        eventSources.removeAll()
+        queue.async { [weak self] in
+            self?.pending.removeAll()
+            self?.scannedURLs = []
+        }
+        updateStatus(folderURLs.isEmpty ? "未选择截图文件夹" : "已暂停", running: false)
     }
 
-    func chooseFolder(attachedTo window: NSWindow? = NSApp.keyWindow) {
+    /// Picks a folder to watch: it replaces the folder at `index`, or is
+    /// added (replacing the last one when all slots are taken).
+    func chooseFolder(attachedTo window: NSWindow? = NSApp.keyWindow, replacing index: Int? = nil) {
         debugFolderPickerLog("open panel start")
         guard !isFolderPanelOpen else {
             debugFolderPickerLog("open panel skipped because one is already open")
@@ -66,7 +90,8 @@ final class ScreenshotFolderWatcher: ObservableObject {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.directoryURL = folderURL ?? systemScreenshotFolder()
+        panel.directoryURL = index.flatMap { folderURLs.indices.contains($0) ? folderURLs[$0] : nil }
+            ?? folderURL ?? systemScreenshotFolder()
 
         if let window = window ?? NSApp.keyWindow {
             debugFolderPickerLog("presentationMode = sheet")
@@ -76,7 +101,7 @@ final class ScreenshotFolderWatcher: ObservableObject {
                 let selectedURL = response == .OK ? panel.url : nil
                 debugFolderPickerLog("selected folder url exists = \(selectedURL != nil)")
                 guard let url = selectedURL else { return }
-                self?.applySelectedFolder(url)
+                self?.applySelectedFolder(url, replacing: index)
             }
         } else {
             debugFolderPickerLog("presentationMode = runModal")
@@ -86,11 +111,11 @@ final class ScreenshotFolderWatcher: ObservableObject {
             let selectedURL = response == .OK ? panel.url : nil
             debugFolderPickerLog("selected folder url exists = \(selectedURL != nil)")
             guard let url = selectedURL else { return }
-            applySelectedFolder(url)
+            applySelectedFolder(url, replacing: index)
         }
     }
 
-    func applySelectedFolder(_ url: URL, completion: (() -> Void)? = nil) {
+    func applySelectedFolder(_ url: URL, replacing index: Int? = nil, completion: (() -> Void)? = nil) {
         debugFolderPickerLog("background folder processing start")
         queue.async { [weak self] in
             let bookmark = try? url.bookmarkData(
@@ -101,22 +126,33 @@ final class ScreenshotFolderWatcher: ObservableObject {
 
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.saveFolder(url, bookmark: bookmark)
+                self.setFolder(url, bookmark: bookmark, replacing: index)
                 self.start()
                 completion?()
             }
         }
     }
 
-    func revealFolder() {
-        guard let folderURL else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([folderURL])
+    /// Stops watching the folder at `index`.
+    func removeFolder(at index: Int) {
+        guard folderURLs.indices.contains(index) else { return }
+        var urls = folderURLs
+        var bookmarks = savedBookmarks()
+        urls.remove(at: index)
+        if bookmarks.indices.contains(index) { bookmarks.remove(at: index) }
+        saveFolders(urls, bookmarks: bookmarks)
+        start()
+    }
+
+    func revealFolder(at index: Int = 0) {
+        guard folderURLs.indices.contains(index) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([folderURLs[index]])
     }
 
     private func startEventSource(for folderURL: URL) {
-        fileDescriptor = open(folderURL.path, O_EVTONLY)
+        let fileDescriptor = open(folderURL.path, O_EVTONLY)
         guard fileDescriptor >= 0 else {
-            updateStatus("无法监听这个文件夹", running: false)
+            updateStatus("无法监听：\(folderURL.lastPathComponent)", running: false)
             return
         }
 
@@ -130,15 +166,11 @@ final class ScreenshotFolderWatcher: ObservableObject {
             self?.scan()
         }
 
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            if self.fileDescriptor >= 0 {
-                close(self.fileDescriptor)
-                self.fileDescriptor = -1
-            }
+        source.setCancelHandler {
+            close(fileDescriptor)
         }
 
-        eventSource = source
+        eventSources.append(source)
         source.resume()
     }
 
@@ -154,16 +186,18 @@ final class ScreenshotFolderWatcher: ObservableObject {
     }
 
     private func scan() {
-        guard let folderURL else { return }
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: folderURL,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            DispatchQueue.main.async {
-                self.updateStatus("无法读取截图文件夹", running: false)
+        guard !scannedURLs.isEmpty else { return }
+        var files: [URL] = []
+        for folderURL in scannedURLs {
+            guard let contents = try? FileManager.default.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                updateStatus("无法读取：\(folderURL.lastPathComponent)", running: false)
+                continue
             }
-            return
+            files += contents
         }
 
         let candidates = files.compactMap { url -> (url: URL, modifiedAt: Date)? in
@@ -184,6 +218,18 @@ final class ScreenshotFolderWatcher: ObservableObject {
         for candidate in candidates {
             importWhenStable(candidate.url)
         }
+        // A screenshot still settling is checked again right away, not on
+        // the next folder event or the 5 s fallback scan: it used to land
+        // seconds late, so the clipboard still held the previous record.
+        // Give up on files that never settle into a valid image.
+        pending = pending.filter { Date().timeIntervalSince($0.value.firstSeenAt) < 10 }
+        if !pending.isEmpty, !isFollowUpScheduled {
+            isFollowUpScheduled = true
+            queue.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.isFollowUpScheduled = false
+                self?.scan()
+            }
+        }
     }
 
     private func importWhenStable(_ url: URL) {
@@ -203,7 +249,7 @@ final class ScreenshotFolderWatcher: ObservableObject {
         pending[url] = item
 
         guard item.stableTicks >= 1,
-              Date().timeIntervalSince(item.firstSeenAt) >= 0.2,
+              Date().timeIntervalSince(item.firstSeenAt) >= 0.15,
               let data = try? Data(contentsOf: url),
               isValidImageData(data) else {
             return
@@ -233,37 +279,76 @@ final class ScreenshotFolderWatcher: ObservableObject {
         return CGImageSourceGetCount(source) > 0
     }
 
-    private func saveFolder(_ url: URL, bookmark: Data? = nil) {
-        folderURL = url
-        AppEnvironment.userDefaults.set(url.path, forKey: pathKey)
-
-        if let data = bookmark {
-            AppEnvironment.userDefaults.set(data, forKey: bookmarkKey)
+    /// Puts `url` at `index`, or adds it (replacing the last folder when
+    /// all slots are taken). A folder already watched is not added twice.
+    private func setFolder(_ url: URL, bookmark: Data?, replacing index: Int?) {
+        var urls = folderURLs
+        var bookmarks = savedBookmarks()
+        // Bookmarks line up with folders; pad any that are missing.
+        while bookmarks.count < urls.count { bookmarks.append(Data()) }
+        let standardized = url.standardizedFileURL.path
+        if let existing = urls.firstIndex(where: { $0.standardizedFileURL.path == standardized }) {
+            // Already watched: only refresh its bookmark.
+            if let bookmark { bookmarks[existing] = bookmark }
+        } else if let index, urls.indices.contains(index) {
+            urls[index] = url
+            bookmarks[index] = bookmark ?? Data()
+        } else if urls.count < Self.maximumFolders {
+            urls.append(url)
+            bookmarks.append(bookmark ?? Data())
+        } else {
+            urls[urls.count - 1] = url
+            bookmarks[urls.count - 1] = bookmark ?? Data()
         }
+        saveFolders(urls, bookmarks: bookmarks)
     }
 
-    private func loadFolderURL() -> URL? {
-        if let data = AppEnvironment.userDefaults.data(forKey: bookmarkKey) {
-            var isStale = false
-            if let url = try? URL(
-                resolvingBookmarkData: data,
-                options: [.withSecurityScope],
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            ) {
-                _ = url.startAccessingSecurityScopedResource()
-                if isStale {
-                    saveFolder(url)
-                }
-                return url
+    private func saveFolders(_ urls: [URL], bookmarks: [Data]) {
+        folderURLs = urls
+        let defaults = AppEnvironment.userDefaults
+        defaults.set(urls.map(\.path), forKey: pathsKey)
+        defaults.set(Array(bookmarks.prefix(urls.count)), forKey: bookmarksKey)
+    }
+
+    private func savedBookmarks() -> [Data] {
+        AppEnvironment.userDefaults.array(forKey: bookmarksKey) as? [Data] ?? []
+    }
+
+    private func resolveBookmark(_ data: Data) -> URL? {
+        guard !data.isEmpty else { return nil }
+        var isStale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: data,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else { return nil }
+        _ = url.startAccessingSecurityScopedResource()
+        return url
+    }
+
+    private func loadFolderURLs() -> [URL] {
+        let defaults = AppEnvironment.userDefaults
+        if let paths = defaults.stringArray(forKey: pathsKey) {
+            let bookmarks = savedBookmarks()
+            return paths.enumerated().map { index, path in
+                (bookmarks.indices.contains(index) ? resolveBookmark(bookmarks[index]) : nil)
+                    ?? URL(fileURLWithPath: path, isDirectory: true)
             }
         }
 
-        if let path = AppEnvironment.userDefaults.string(forKey: pathKey) {
-            return URL(fileURLWithPath: path, isDirectory: true)
+        // Earlier versions kept a single folder.
+        if let data = defaults.data(forKey: bookmarkKey), let url = resolveBookmark(data) {
+            saveFolders([url], bookmarks: [data])
+            return [url]
+        }
+        if let path = defaults.string(forKey: pathKey) {
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+            saveFolders([url], bookmarks: [])
+            return [url]
         }
 
-        return systemScreenshotFolder()
+        return systemScreenshotFolder().map { [$0] } ?? []
     }
 
     private func systemScreenshotFolder() -> URL? {

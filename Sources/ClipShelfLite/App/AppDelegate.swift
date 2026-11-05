@@ -199,6 +199,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // corner radius; match it to the glass so no second outline
             // shows at the corners.
             window.matchSystemCornerRadius(GlassMetrics.windowRadius)
+            // Not moved implicitly: the system treated a three-finger drag
+            // starting on a record's glass as dragging the window. It moves
+            // only from the title row and blank space (see dragWindow).
+            window.isMovable = false
+            // The traffic lights are drawn by the app as glass (see MainView).
+            for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                window.standardWindowButton(button)?.isHidden = true
+            }
             window.center()
             let backdrop = Self.makeVibrantContentView(
                 hosting: ClipShelfHostingView(rootView: MainView(store: store, watcher: watcher))
@@ -424,6 +432,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 /// The main window. It can be placed off screen briefly so it can be rendered
 /// for the reveal animation; AppKit would otherwise pull it back on screen.
 extension NSWindow {
+    /// Moves the window with this mouse-down, even though it isn't movable
+    /// by itself (see ClipShelfMainWindow).
+    func dragWindow(with event: NSEvent) {
+        let wasMovable = isMovable
+        isMovable = true
+        performDrag(with: event)
+        isMovable = wasMovable
+    }
+
     /// Sets the radius the system uses for the window's border and shadow.
     func matchSystemCornerRadius(_ radius: CGFloat) {
         let selector = NSSelectorFromString("_setCornerRadius:")

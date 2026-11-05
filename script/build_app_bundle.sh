@@ -83,7 +83,16 @@ xattr -cr "$APP_BUNDLE" >/dev/null 2>&1 || true
 xattr -d com.apple.FinderInfo "$APP_BUNDLE" >/dev/null 2>&1 || true
 xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_BUNDLE" >/dev/null 2>&1 || true
 xattr -cr "$APP_BUNDLE" >/dev/null 2>&1 || true
-codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
+# A fixed local identity keeps the app's signature the same across builds,
+# so macOS remembers granted permissions (folder access and so on) instead
+# of asking again after every install. Falls back to ad-hoc signing.
+SIGN_IDENTITY="${CLIPSHELF_SIGN_IDENTITY:-ClipShelf Local Signing}"
+if security find-identity -p codesigning 2>/dev/null | grep -q "\"$SIGN_IDENTITY\""; then
+  SIGN_WITH="$SIGN_IDENTITY"
+else
+  SIGN_WITH="-"
+fi
+codesign --force --deep --sign "$SIGN_WITH" "$APP_BUNDLE" >/dev/null
 codesign --verify --deep --strict --verbose=1 "$APP_BUNDLE" >/dev/null
 mkdir -p "$DIST_DIR"
 ditto "$APP_BUNDLE" "$DIST_APP_BUNDLE" >/dev/null 2>&1 || true

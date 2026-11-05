@@ -16,7 +16,16 @@ rm -rf "$INSTALLED_APP"
 rm -rf "$INSTALL_DIR/ClipShelfLite.app"
 ditto "$SOURCE_APP" "$INSTALLED_APP"
 xattr -cr "$INSTALLED_APP" >/dev/null 2>&1 || true
-codesign --force --deep --sign - "$INSTALLED_APP" >/dev/null 2>&1 || true
+# A fixed local identity keeps the app's signature the same across builds,
+# so macOS remembers granted permissions (folder access and so on) instead
+# of asking again after every install. Falls back to ad-hoc signing.
+SIGN_IDENTITY="${CLIPSHELF_SIGN_IDENTITY:-ClipShelf Local Signing}"
+if security find-identity -p codesigning 2>/dev/null | grep -q "\"$SIGN_IDENTITY\""; then
+  SIGN_WITH="$SIGN_IDENTITY"
+else
+  SIGN_WITH="-"
+fi
+codesign --force --deep --sign "$SIGN_WITH" "$INSTALLED_APP" >/dev/null 2>&1 || true
 
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
   -f "$INSTALLED_APP" >/dev/null 2>&1 || true
