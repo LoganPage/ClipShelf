@@ -128,6 +128,19 @@ struct ListEntranceEffect: ViewModifier {
                     progress = 1
                 }
             }
+            // Rows kept across a type switch (the list keeps its identity)
+            // replay the entrance with the new ones.
+            .onChange(of: entrance) { newEntrance in
+                guard let newEntrance, Self.shouldAnimate(newEntrance, index: index) else { return }
+                var reset = Transaction()
+                reset.disablesAnimations = true
+                withTransaction(reset) { progress = 0 }
+                DispatchQueue.main.async {
+                    withAnimation(Self.animation(for: newEntrance.style, index: index)) {
+                        progress = 1
+                    }
+                }
+            }
     }
 
     /// Render-only: moving rows with layout-level modifiers made SwiftUI

@@ -54,7 +54,6 @@ struct MainView: View {
     @State private var isSearchFieldLive = false
     @State private var searchMotionGeneration = 0
     @State private var toggleSearchHotKey = ToggleSearchHotKeyDefaults.load()
-    @State private var listGeneration = 0
     @State private var listEntrance: ListEntrance?
     @State private var listEntranceStyle = ListEntrancePreferences.value
     @State private var lastKindFilter: ClipKindFilter = HistoryFilterPreferences.value
@@ -234,12 +233,13 @@ struct MainView: View {
         .onChange(of: kindFilter) { _ in
             startListEntrance(from: lastKindFilter, to: kindFilter)
             lastKindFilter = kindFilter
+            // Back to the top before the new rows are laid out, so only the
+            // top screenful is built; scrolling afterwards built the rows at
+            // the old position first and then the top ones again.
+            scrollHistoryToTop()
             refreshFilteredItemsIfNeeded()
             clearSelection()
             HistoryFilterPreferences.value = kindFilter
-            DispatchQueue.main.async {
-                scrollHistoryToTop()
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             clearSelection()
@@ -296,14 +296,12 @@ struct MainView: View {
                         .id(item.id)
                     }
                 }
-                // A new identity per type switch, so every row of the new type
-                // is built fresh and can play its entrance.
+                // The stack keeps its identity across type switches: rebuilding
+                // it (and fading the old one out) cost about twice the work of
+                // just swapping the rows; on-screen rows replay their entrance.
                 // No shared GlassEffectContainer around the cards: with one,
                 // every scrolled frame re-resolved all cards' glass together
                 // (6 s of fast scrolling dropped ~70 frames; without, ~5).
-                .id(listGeneration)
-                // The previous type's rows fade out instead of vanishing.
-                .transition(.opacity)
                 .background(alignment: .top) {
                     SelectionGlassLayer(
                         items: filteredItems,
@@ -773,9 +771,6 @@ struct MainView: View {
             lensOffsetX: lensX - listWidth / 2,
             start: Date()
         )
-        withAnimation(.easeInOut(duration: 0.24)) {
-            listGeneration &+= 1
-        }
     }
 
     /// Where the selection glass goes. A single selection keeps one stable
