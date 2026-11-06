@@ -84,8 +84,8 @@ final class ScreenshotFolderWatcher: ObservableObject {
         isFolderPanelOpen = true
 
         let panel = NSOpenPanel()
-        panel.title = "选择截图保存文件夹"
-        panel.message = "把 macOS 截图设置里的保存位置选成同一个文件夹。"
+        panel.title = "选择要监听的文件夹"
+        panel.message = "之后新放进这个文件夹的图片会自动进入历史和剪贴板。"
         panel.prompt = "使用这个文件夹"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -187,33 +187,37 @@ final class ScreenshotFolderWatcher: ObservableObject {
 
     private func scan() {
         guard !scannedURLs.isEmpty else { return }
+        let screenshotFolder = systemScreenshotFolder()?.standardizedFileURL.path
         var files: [URL] = []
         for folderURL in scannedURLs {
             guard let contents = try? FileManager.default.contentsOfDirectory(
                 at: folderURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                includingPropertiesForKeys: Self.fileKeys,
                 options: [.skipsHiddenFiles]
             ) else {
                 updateStatus("无法读取：\(folderURL.lastPathComponent)", running: false)
                 continue
             }
-            files += contents
+            // The system's screenshot folder (the Desktop by default) holds
+            // all sorts of images, so only screenshots count there; any other
+            // folder was added on purpose, so every new image in it counts.
+            let screenshotsOnly = folderURL.standardizedFileURL.path == screenshotFolder
+            files += contents.filter { Self.isImportable($0, screenshotsOnly: screenshotsOnly) }
         }
 
-        let candidates = files.compactMap { url -> (url: URL, modifiedAt: Date)? in
-            guard isLikelyScreenshot(url),
-                  !seen.contains(url.path),
-                  let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+        let candidates = files.compactMap { url -> (url: URL, arrivedAt: Date)? in
+            guard !seen.contains(url.path),
+                  let values = try? url.resourceValues(forKeys: Set(Self.fileKeys)),
                   values.isRegularFile == true,
-                  let modifiedAt = values.contentModificationDate,
-                  modifiedAt >= startedAt.addingTimeInterval(-3),
-                  Date().timeIntervalSince(modifiedAt) < 120 else {
+                  let arrivedAt = Self.arrivalDate(values),
+                  arrivedAt >= startedAt.addingTimeInterval(-3),
+                  Date().timeIntervalSince(arrivedAt) < 120 else {
                 return nil
             }
 
-            return (url, modifiedAt)
+            return (url, arrivedAt)
         }
-        .sorted { $0.modifiedAt < $1.modifiedAt }
+        .sorted { $0.arrivedAt < $1.arrivedAt }
 
         for candidate in candidates {
             importWhenStable(candidate.url)
@@ -260,10 +264,31 @@ final class ScreenshotFolderWatcher: ObservableObject {
         ClipStore.shared.addScreenshot(data: data, sourceURL: url)
     }
 
-    func isLikelyScreenshot(_ url: URL) -> Bool {
-        let ext = url.pathExtension.lowercased()
-        guard ["png", "jpg", "jpeg", "heic", "tiff"].contains(ext) else { return false }
+    private static let fileKeys: [URLResourceKey] = [
+        .isRegularFileKey, .addedToDirectoryDateKey, .creationDateKey, .contentModificationDateKey,
+    ]
+    static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "heic", "heif", "tiff", "tif", "gif", "webp", "bmp",
+    ]
 
+    /// When the file showed up in the folder. A file copied or moved in keeps
+    /// its old modification date, which made it look old and get skipped;
+    /// an old image edited in place keeps its arrival date, so it isn't
+    /// taken again.
+    private static func arrivalDate(_ values: URLResourceValues) -> Date? {
+        values.addedToDirectoryDate ?? values.creationDate ?? values.contentModificationDate
+    }
+
+    static func isImportable(_ url: URL, screenshotsOnly: Bool) -> Bool {
+        guard imageExtensions.contains(url.pathExtension.lowercased()) else { return false }
+        return !screenshotsOnly || hasScreenshotName(url)
+    }
+
+    func isLikelyScreenshot(_ url: URL) -> Bool {
+        Self.isImportable(url, screenshotsOnly: true)
+    }
+
+    private static func hasScreenshotName(_ url: URL) -> Bool {
         let name = url.lastPathComponent.lowercased()
         return name.hasPrefix("截屏")
             || name.hasPrefix("屏幕快照")

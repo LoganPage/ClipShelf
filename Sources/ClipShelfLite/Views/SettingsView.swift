@@ -254,9 +254,9 @@ struct SettingsView: View {
     }
 
     private var screenshotSection: some View {
-        settingsSection("截图") {
+        settingsSection("截图与图片") {
             HStack {
-                Text("截图文件夹")
+                Text("监听的文件夹")
                 Spacer()
                 Text("\(watcher.folderURLs.count) / \(ScreenshotFolderWatcher.maximumFolders)")
                     .font(.caption)
@@ -308,7 +308,7 @@ struct SettingsView: View {
                 }
             }
 
-            Text("请把 macOS 截图设置里的保存位置设成其中一个文件夹，并关闭右下角浮动缩略图。新截图会保留原文件，同时自动进入剪贴板。")
+            Text("新放进这些文件夹的图片会自动进入历史和剪贴板，原文件保留。系统截图的保存位置里只收截图；截图时请关闭右下角浮动缩略图。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

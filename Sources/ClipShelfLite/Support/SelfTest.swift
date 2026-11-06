@@ -1347,6 +1347,18 @@ enum ClipShelfSelfTest {
             failure: "Fallback interval or screenshot eligibility changed"
         ))
 
+        results.append(check(
+            name: "watched folders other than the screenshot folder take any new image",
+            condition: ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png"), screenshotsOnly: false)
+                && ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/IMG_0001.HEIC"), screenshotsOnly: false)
+                && ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/download.webp"), screenshotsOnly: false)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png"), screenshotsOnly: true)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/notes.txt"), screenshotsOnly: false)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png.crdownload"), screenshotsOnly: false),
+            success: "Any image counts in an added folder; only screenshots count in the system screenshot folder",
+            failure: "Folder import rules changed"
+        ))
+
         let fuzzyLiteralResults = [
             SearchMatcher.fuzzyContains("abcd", in: "abcx"),
             SearchMatcher.fuzzyContains("abcd", in: "abxx"),
