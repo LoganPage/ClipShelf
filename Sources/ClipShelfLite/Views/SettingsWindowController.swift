@@ -59,6 +59,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
     /// The whole panel as it last appeared on screen.
     private var liveImage: (image: CGImage, key: LookKey)?
+    /// Set once the page may differ from `liveImage` (something was clicked,
+    /// typed or scrolled in it). Rendering the page takes ~0.1 s on the main
+    /// thread, so it is only redone when needed, and then while idle.
+    private var liveImageIsStale = true
+    private var interactionMonitor: Any?
+    private var idleCapture: DispatchWorkItem?
     /// The page alone, rendered on the CPU, for when there is no `liveImage` yet.
     private var fallbackContent: (image: CGImage, key: LookKey)?
     private var pendingFallbackRender = false
@@ -145,6 +151,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         attach(to: parent)
         isShown = true
         installCloseShortcut()
+        installInteractionMonitor()
+        markLiveImageStale()
     }
 
     /// Called when the pointer reaches the settings button: get the opening
@@ -172,8 +180,59 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func prefetchClosingSnapshot() {
         guard isShown, !isAnimating, let panel else { return }
         let frame = panel.frame
+        if let image = cleanLiveImage(size: frame.size) {
+            prefetchedClose = (image, frame, CACurrentMediaTime())
+            return
+        }
         captureLive(frame: frame) { [weak self] image in
             self?.prefetchedClose = (image, frame, CACurrentMediaTime())
+        }
+    }
+
+    /// `liveImage`, when it still shows the page as it is.
+    private func cleanLiveImage(size: NSSize) -> CGImage? {
+        guard !liveImageIsStale, let liveImage, liveImage.key == lookKey(size: size) else { return nil }
+        return liveImage.image
+    }
+
+    /// The page changed (or may have): render it again once things are
+    /// quiet, so closing can use a ready image instead of freezing to make one.
+    private func markLiveImageStale() {
+        liveImageIsStale = true
+        idleCapture?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isShown, !self.isAnimating, let panel = self.panel else { return }
+            // Not mid-gesture (e.g. dragging the glass slider).
+            guard NSEvent.pressedMouseButtons == 0 else {
+                self.markLiveImageStale()
+                return
+            }
+            self.captureLive(frame: panel.frame) { _ in }
+        }
+        idleCapture = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+    }
+
+    /// Anything done in settings may change what it shows.
+    private func installInteractionMonitor() {
+        guard interactionMonitor == nil else { return }
+        interactionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .rightMouseUp, .keyDown, .scrollWheel]) { [weak self] event in
+            guard let self, self.isShown else { return event }
+            // Keys go to the main window (it keeps focus), but may still edit
+            // a field in settings; clicks and scrolls only count inside it.
+            if event.type == .keyDown || event.window === self.panel || event.window === self.glassWindow {
+                self.markLiveImageStale()
+            }
+            return event
+        }
+    }
+
+    private func removeInteractionMonitor() {
+        idleCapture?.cancel()
+        idleCapture = nil
+        if let interactionMonitor {
+            NSEvent.removeMonitor(interactionMonitor)
+            self.interactionMonitor = nil
         }
     }
 
@@ -202,6 +261,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         guard let parent else { return }
         let key = lookKey(size: frame.size)
         renderFallback()
+        // What was just rendered is the page as it is now.
+        liveImageIsStale = false
+        idleCapture?.cancel()
         let request = request(over: parent, frame: frame, content: fallbackContent?.image)
         snapshotQueue.async { [weak self] in
             guard let image = Self.composeSnapshot(request, backdrop: nil)?.image else { return }
@@ -276,11 +338,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             self.isShown = true
             self.isAnimating = false
             self.installCloseShortcut()
-            // Once the panel has settled, keep its exact on-screen picture
-            // for the next opening and closing.
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.handOverDuration + 0.15) { [weak self] in
-                guard let self, self.isShown, !self.isAnimating, let panel = self.panel else { return }
-                self.captureLive(frame: panel.frame) { _ in }
+            self.installInteractionMonitor()
+            // Without a picture of the page as it is, make one once things
+            // are quiet (not right after opening, which used to stutter).
+            if self.cleanLiveImage(size: frame.size) == nil {
+                self.markLiveImageStale()
             }
         }
 
@@ -334,6 +396,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         isShown = false
         isAnimating = true
         uninstallCloseShortcut()
+        removeInteractionMonitor()
 
         let tidyUp = { [weak self] in
             guard let self else { return }
@@ -365,8 +428,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             GenieAnimator.run(image: snapshot, from: source, to: frame, opening: false, duration: Self.genieDuration, above: parent, completion: tidyUp)
         }
 
-        if let fresh {
-            start(fresh)
+        if let ready = fresh ?? cleanLiveImage(size: frame.size) {
+            start(ready)
             return
         }
         // Without a hover beforehand (Esc, ⌘, or a shortcut): capture the

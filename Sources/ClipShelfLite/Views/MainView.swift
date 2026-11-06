@@ -128,14 +128,16 @@ struct MainView: View {
                         Color.clear.preference(key: ToolbarHeightKey.self, value: proxy.size.height)
                     }
                 )
+                // Read right here, not around the list: there every row took
+                // part in collecting it on each scrolled frame.
+                .onPreferenceChange(ToolbarHeightKey.self) { height in
+                    let rounded = height.rounded()
+                    if abs(rounded - toolbarHeight) > 0.5 {
+                        toolbarHeight = rounded
+                    }
+                }
         }
         .ignoresSafeArea(.container, edges: .top)
-        .onPreferenceChange(ToolbarHeightKey.self) { height in
-            let rounded = height.rounded()
-            if abs(rounded - toolbarHeight) > 0.5 {
-                toolbarHeight = rounded
-            }
-        }
         .overlay(alignment: .bottom) {
             if let copyToast {
                 CopyToastView(count: copyToast.count)
@@ -287,15 +289,18 @@ struct MainView: View {
                         // Rows are a fixed height; saying so stops the lazy
                         // stack from measuring every row on every scroll frame.
                         .modifier(FixedRowHeight(height: historyRowHeight))
-                        .modifier(ListEdgeEffect(style: scrollEffect, topEdge: visibleToolbarHeight))
+                        // No edge blur on the rows themselves: inside the
+                        // former shared glass container it never showed, and
+                        // the list's look is kept as it was.
                         .modifier(ListEntranceEffect(entrance: listEntrance, index: index, rowHeight: historyRowHeight))
                         .id(item.id)
                     }
                 }
                 // A new identity per type switch, so every row of the new type
                 // is built fresh and can play its entrance.
-                // Every card's glass in one system container.
-                .glassGroup()
+                // No shared GlassEffectContainer around the cards: with one,
+                // every scrolled frame re-resolved all cards' glass together
+                // (6 s of fast scrolling dropped ~70 frames; without, ~5).
                 .id(listGeneration)
                 // The previous type's rows fade out instead of vanishing.
                 .transition(.opacity)
@@ -1976,6 +1981,7 @@ private struct SelectionPop: ViewModifier {
 /// A lifted pane of tinted Liquid Glass with a soft specular rim.
 private struct SelectionGlassSlab: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
     @Environment(\.glassTransparency) private var transparency
     let selectionColor: Color
     /// For multi-select: no blurred glow, which is costly with many panes.
@@ -2022,13 +2028,57 @@ private struct SelectionGlassSlab: View {
                 // No drop shadow: under translucent glass it shows through and
                 // turns the whole pane grey.
                 .background(glow)
-                .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
+                .overlay(rimStroke(rim))
         } else {
             shape.fill(.ultraThinMaterial)
                 .overlay(shape.fill(selectionColor.opacity(isDark ? 0.26 : 0.3)))
                 .background(glow)
-                .overlay(shape.strokeBorder(rim, lineWidth: 1.2))
+                .overlay(rimStroke(rim))
         }
+    }
+
+    /// The gradient rim as a ready-made image. Drawn live, SwiftUI painted
+    /// the gradient stroke on the CPU (and, cached on the GPU instead, redrew
+    /// it every frame) while the pane slid, then waited for the render
+    /// server: clicks stuttered. An image only moves.
+    private func rimStroke(_ rim: LinearGradient) -> some View {
+        GeometryReader { proxy in
+            if let image = SelectionRimImage.image(
+                size: proxy.size,
+                cornerRadius: cornerRadius,
+                isDark: colorScheme == .dark,
+                scale: displayScale,
+                rim: rim
+            ) {
+                Image(decorative: image, scale: displayScale)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Rendered rims of the selection pane, by size and look.
+@MainActor
+private enum SelectionRimImage {
+    private static var cache: [String: CGImage] = [:]
+
+    static func image(size: CGSize, cornerRadius: CGFloat, isDark: Bool, scale: CGFloat, rim: LinearGradient) -> CGImage? {
+        guard size.width >= 1, size.height >= 1 else { return nil }
+        let accent = NSColor.controlAccentColor.usingColorSpace(.sRGB)?.description ?? ""
+        let key = "\(Int(size.width.rounded()))x\(Int(size.height.rounded()))-\(cornerRadius)-\(isDark)-\(scale)-\(accent)"
+        if let cached = cache[key] { return cached }
+        let renderer = ImageRenderer(
+            content: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(rim, lineWidth: 1.2)
+                .frame(width: size.width.rounded(), height: size.height.rounded())
+                .environment(\.colorScheme, isDark ? .dark : .light)
+        )
+        renderer.scale = scale
+        guard let image = renderer.cgImage else { return nil }
+        // A handful of sizes at most (window widths, the search field).
+        if cache.count > 24 { cache.removeAll() }
+        cache[key] = image
+        return image
     }
 }
 

@@ -664,26 +664,38 @@ struct PressFeedback: ViewModifier {
     @State private var pressToken = 0
 
     func body(content: Content) -> some View {
-        content
-            // Inside a group (a glass capsule of several buttons) the whole
-            // capsule swells instead, so the press reads the same everywhere.
-            .scaleEffect(isShown && !isInPressGroup ? scale : 1)
-            .preference(key: GroupPressKey.self, value: isPressed)
+        scaled(content)
             .onChange(of: isPressed) { pressed in
-                if pressed {
-                    pressToken += 1
-                    pressedAt = CACurrentMediaTime()
-                    withAnimation(Self.pressSpring) { isShown = true }
-                } else {
-                    let token = pressToken
-                    let wait = max(0, Self.minimumHold - (CACurrentMediaTime() - pressedAt))
-                    DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
-                        // A new press in the meantime keeps it up.
-                        guard token == pressToken else { return }
-                        withAnimation(Self.releaseSpring) { isShown = false }
-                    }
-                }
+                update(pressed: pressed)
             }
+    }
+
+    /// Inside a group (a glass capsule of several buttons) the whole capsule
+    /// swells instead, so the press reads the same everywhere; only there is
+    /// the press reported upwards (rows in the list have no group to tell).
+    @ViewBuilder
+    private func scaled(_ content: Content) -> some View {
+        if isInPressGroup {
+            content.preference(key: GroupPressKey.self, value: isPressed)
+        } else {
+            content.scaleEffect(isShown ? scale : 1)
+        }
+    }
+
+    private func update(pressed: Bool) {
+        if pressed {
+            pressToken += 1
+            pressedAt = CACurrentMediaTime()
+            withAnimation(Self.pressSpring) { isShown = true }
+        } else {
+            let token = pressToken
+            let wait = max(0, Self.minimumHold - (CACurrentMediaTime() - pressedAt))
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                // A new press in the meantime keeps it up.
+                guard token == pressToken else { return }
+                withAnimation(Self.releaseSpring) { isShown = false }
+            }
+        }
     }
 }
 
