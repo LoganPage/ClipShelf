@@ -227,7 +227,15 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
                 return URL(fileURLWithPath: sourcePath)
             }
 
-            guard let imageData = item.imageData else { return nil }
+            if let storedURL = item.imageURL {
+                // A copy under a readable name: the stored file is named by id.
+                let url = temporaryURL(for: item, fallbackName: "剪贴板图片", extension: storedURL.pathExtension)
+                try? FileManager.default.removeItem(at: url)
+                guard (try? FileManager.default.copyItem(at: storedURL, to: url)) != nil else { return nil }
+                temporaryURLs.append(url)
+                return url
+            }
+            guard let imageData = item.legacyImageData else { return nil }
             let url = temporaryURL(for: item, fallbackName: "剪贴板图片", extension: "png")
             try? imageData.write(to: url, options: .atomic)
             temporaryURLs.append(url)
@@ -343,7 +351,10 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
     }
 
     private func image(for item: ClipItem) -> NSImage? {
-        if let imageData = item.imageData, let image = NSImage(data: imageData) {
+        if let url = item.imageURL, let image = NSImage(contentsOf: url) {
+            return image
+        }
+        if let imageData = item.legacyImageData, let image = NSImage(data: imageData) {
             return image
         }
 

@@ -16,6 +16,13 @@ struct MainView: View {
     @State private var focusedID: ClipItem.ID?
     @State private var anchorID: ClipItem.ID?
     @State private var isDragSelecting = false
+    /// The range being drag-selected; read only by DragRangeHighlight (a
+    /// plain reference in @State, so this view doesn't observe it).
+    @State private var dragHighlight = DragHighlightModel()
+    /// Which row the pointer is over: one hover tracker for the whole list
+    /// instead of four per row (each was updated on every scrolled frame).
+    @State private var rowHover = RowHoverModel()
+    @State private var pendingDragSelection: DragSelectionUpdate?
     @State private var dragAnchorID: ClipItem.ID?
     @State private var dragSnapshotItems: [ClipItem]?
     @State private var historyScrollView: NSScrollView?
@@ -115,10 +122,11 @@ struct MainView: View {
                 emptyView
                     .padding(.top, visibleToolbarHeight)
             } else {
+                // Runs to the window's lower edge, where the window's own
+                // rounded clip cuts everything off (glass included). The
+                // list's own clip doesn't stop system glass: ending the list
+                // above the edge left a strip of card glass below it.
                 historyList
-                    // Ends just above the window's lower edge: records fade
-                    // out there instead of running into the rounded corners.
-                    .padding(.bottom, 6)
             }
 
             toolbar
@@ -241,9 +249,7 @@ struct MainView: View {
             clearSelection()
             HistoryFilterPreferences.value = kindFilter
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-            clearSelection()
-        }
+        // The selection stays when the app goes to the background.
         .onReceive(NotificationCenter.default.publisher(for: SelectionColorPreferences.changedNotification)) { _ in
             selectionColor = SelectionColorPreferences.color
             selectionColorPreset = SelectionColorPreferences.selectedPreset
@@ -274,18 +280,22 @@ struct MainView: View {
                     ForEach(filteredItems) { item in
                         let isSelected = selectedIDs.contains(item.id)
                         let index = filteredIndexByID[item.id] ?? 0
-                        ClipRow(
-                            item: item,
-                            store: store,
-                            isFocused: focusedID == item.id,
-                            isSelected: isSelected,
-                            selectionColor: selectionColor,
-                            selectionColorIsPreset: selectionColorPreset != nil,
-                            imageThumbnailCache: imageThumbnailCache,
-                            handleClick: { event in handleRowClick(item, event: event) },
-                            handleCopy: { performCopy(actionItems(for: item)) }
-                        )
-                        .equatable()
+                        let isFocused = focusedID == item.id
+                        RowHoverGate(model: rowHover, id: item.id) { isHovered in
+                            ClipRow(
+                                item: item,
+                                store: store,
+                                isFocused: isFocused,
+                                isSelected: isSelected,
+                                isHovered: isHovered,
+                                selectionColor: selectionColor,
+                                selectionColorIsPreset: selectionColorPreset != nil,
+                                imageThumbnailCache: imageThumbnailCache,
+                                handleClick: { event in handleRowClick(item, event: event) },
+                                handleCopy: { performCopy(actionItems(for: item)) }
+                            )
+                            .equatable()
+                        }
                         // Rows are a fixed height; saying so stops the lazy
                         // stack from measuring every row on every scroll frame.
                         .modifier(FixedRowHeight(height: historyRowHeight))
@@ -310,16 +320,21 @@ struct MainView: View {
                         rowHeight: historyRowHeight,
                         selectionColor: selectionColor,
                         scrollEffect: scrollEffect,
-                        topEdge: visibleToolbarHeight
+                        topEdge: visibleToolbarHeight,
+                        isDragging: isDragSelecting
                     )
+                }
+                .overlay(alignment: .top) {
+                    DragRangeHighlight(model: dragHighlight, rowHeight: historyRowHeight, inset: rowCardInset)
                 }
                 .padding(.horizontal, historyListHorizontalInset)
                 .padding(.top, historyListVerticalInset)
                 .padding(.bottom, historyListBottomPadding)
             }
             .coordinateSpace(name: "historyList")
-            // Records melt away just above the window's lower edge, so their
-            // glass never runs into the rounded bottom corners.
+            // No fade along the bottom: the cards' system glass ignores a
+            // fading mask, so their text and rim faded while the glass body
+            // stayed whole and the two looked split apart.
             .mask {
                 VStack(spacing: 0) {
                     Color.black
@@ -339,23 +354,19 @@ struct MainView: View {
                                 .blendMode(.destinationOut)
                         }
                         .compositingGroup()
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black.opacity(0.6), location: 0.45),
-                            .init(color: .black.opacity(0.15), location: 0.8),
-                            .init(color: .black.opacity(0), location: 1)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 12)
                 }
             }
             .background(
                 ScrollViewResolver { scrollView in
                     historyScrollView = scrollView
                     if let scrollView { GlassScroller.install(in: scrollView) }
+                }
+            )
+            // Hover comes from one AppKit tracking area over the list: it
+            // only does work when the pointer moves, never per scrolled frame.
+            .background(
+                RowHoverTracker(scrollView: historyScrollView) { point in
+                    rowHover.set(point.flatMap { rowID(atViewportPoint: $0) })
                 }
             )
             .background(KeyboardCaptureView { event in
@@ -1375,24 +1386,44 @@ struct MainView: View {
         if dragSnapshotItems == nil {
             dragSnapshotItems = liveFilteredItems
         }
-    }
-
-    private func applyDragSelection(_ update: DragSelectionUpdate) {
+        // The drag picks a new range: the old selection goes now, once.
         var transaction = Transaction()
-        transaction.animation = nil
+        transaction.disablesAnimations = true
         withTransaction(transaction) {
-            isDragSelecting = true
-            selectedIDs = update.selectedIDs
-            focusedID = update.focusedID
-            anchorID = update.anchorID
-            dragAnchorID = update.anchorID
+            selectedIDs = []
         }
     }
 
+    /// While dragging, only the light range highlight follows the pointer
+    /// (its own small model, so the window and its rows don't re-render on
+    /// every row crossed, which dropped a frame each time). The selection
+    /// itself is committed when the drag ends.
+    private func applyDragSelection(_ update: DragSelectionUpdate) {
+        pendingDragSelection = update
+        dragHighlight.show(update.lowerBound...update.upperBound)
+    }
+
+    /// On release the selection is committed the way a Shift-click range
+    /// is: each newly selected record's glass springs up in place, while the
+    /// drag highlight fades out over it.
     private func endDragSelection() {
+        // No longer dragging first, so the new panes play their pop.
         isDragSelecting = false
+        if let update = pendingDragSelection {
+            withAnimation(SelectionRowMotion.animation) {
+                selectedIDs = update.selectedIDs
+                focusedID = update.focusedID
+                anchorID = update.anchorID
+            }
+        }
+        pendingDragSelection = nil
         dragAnchorID = nil
         dragSnapshotItems = nil
+        let highlight = dragHighlight
+        guard highlight.range != nil else { return }
+        let token = highlight.beginFade()
+        withAnimation(.easeOut(duration: 0.25)) { highlight.fadeOut(token) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { highlight.clear(token) }
     }
 
     private func rowID(at location: CGPoint) -> ClipItem.ID? {
@@ -1733,12 +1764,13 @@ private struct GlassToolbarIconButtonBody<Label: View>: View {
 /// changes, not on every store update or unrelated selection change.
 private struct ClipRow: View, Equatable {
     @Environment(\.colorScheme) private var colorScheme
-    @State private var isHovered = false
     let item: ClipItem
     /// Not observed: the parent already re-renders rows whose data changed.
     let store: ClipStore
     let isFocused: Bool
     let isSelected: Bool
+    /// From the list's single hover tracker.
+    let isHovered: Bool
     let selectionColor: Color
     let selectionColorIsPreset: Bool
     let imageThumbnailCache: ImageThumbnailCache
@@ -1755,6 +1787,7 @@ private struct ClipRow: View, Equatable {
             && lhs.item.sourcePath == rhs.item.sourcePath
             && lhs.isFocused == rhs.isFocused
             && lhs.isSelected == rhs.isSelected
+            && lhs.isHovered == rhs.isHovered
             && lhs.selectionColor == rhs.selectionColor
             && lhs.selectionColorIsPreset == rhs.selectionColorIsPreset
             && lhs.imageThumbnailCache === rhs.imageThumbnailCache
@@ -1784,6 +1817,7 @@ private struct ClipRow: View, Equatable {
                 systemImage: item.isPinned ? "pin.fill" : "pin",
                 label: item.isPinned ? "取消置顶" : "置顶",
                 isSelected: isSelected,
+                hoverEnabled: isHovered,
                 // Pinned reads by colour, not by a heavier glyph.
                 tint: item.isPinned ? .orange : nil,
                 tooltip: item.isPinned ? "取消置顶" : "置顶"
@@ -1791,11 +1825,11 @@ private struct ClipRow: View, Equatable {
                 store.togglePinned(item)
             }
 
-            RowIconAction(systemImage: "doc.on.doc", label: "复制", isSelected: isSelected, tooltip: isSelected ? "复制选中的记录" : "复制") {
+            RowIconAction(systemImage: "doc.on.doc", label: "复制", isSelected: isSelected, hoverEnabled: isHovered, tooltip: isSelected ? "复制选中的记录" : "复制") {
                 handleCopy()
             }
 
-            RowIconAction(systemImage: "trash", label: "删除记录", isSelected: isSelected, tooltip: "删除记录") {
+            RowIconAction(systemImage: "trash", label: "删除记录", isSelected: isSelected, hoverEnabled: isHovered, tooltip: "删除记录") {
                 store.remove(item)
             }
         }
@@ -1804,7 +1838,6 @@ private struct ClipRow: View, Equatable {
     var body: some View {
         card
             .contentShape(Rectangle())
-            .onHover { isHovered = $0 }
             .onTapGesture {
                 handleClick(NSApp.currentEvent)
             }
@@ -1898,6 +1931,8 @@ private struct SelectionGlassLayer: View {
     let selectionColor: Color
     let scrollEffect: ScrollEffectStyle
     let topEdge: CGFloat
+    /// Drag-selecting: panes appear at once, without springs or fades.
+    var isDragging = false
     /// Records that were already selected before the latest change; panes
     /// for them don't pop again (e.g. when scrolled back into view).
     @State private var settled = Set<ClipItem.ID>()
@@ -1907,13 +1942,17 @@ private struct SelectionGlassLayer: View {
             if panes.count > 1 {
                 // Many selected: a lazy stack, so only on-screen panes are drawn
                 // (selecting a hundred records used to build a hundred glass panes).
+                let first = panes.first?.index ?? 0
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { _, item in
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         if selectedIDs.contains(item.id) {
-                            SelectionGlassSlab(selectionColor: selectionColor, lightweight: true)
-                                .modifier(SelectionPop(animates: !settled.contains(item.id)))
+                            // The same glass as a single selection (halo included).
+                            SelectionGlassSlab(selectionColor: selectionColor, lightweight: false)
+                                .modifier(SelectionPop(
+                                    animates: !isDragging && !settled.contains(item.id),
+                                    delay: min(Double(max(index - first, 0)) * 0.025, 0.3)
+                                ))
                                 .frame(height: rowHeight)
-                                .modifier(edge)
                                 .transition(.opacity)
                         } else {
                             Color.clear.frame(height: rowHeight)
@@ -1928,10 +1967,7 @@ private struct SelectionGlassLayer: View {
                             .frame(width: proxy.size.width, height: rowHeight)
                             // Grows out of the record itself: scaled before
                             // it is positioned, so it pops in place.
-                            .modifier(SelectionPop(animates: !selectedIDs.isSubset(of: settled)))
-                            // Before positioning, so the edge effect measures this
-                            // pane's own frame rather than the whole list.
-                            .modifier(edge)
+                            .modifier(SelectionPop(animates: !isDragging && !selectedIDs.isSubset(of: settled)))
                             .position(x: proxy.size.width / 2, y: CGFloat(pane.index) * rowHeight + rowHeight / 2)
                             .transition(.opacity)
                     }
@@ -1939,34 +1975,39 @@ private struct SelectionGlassLayer: View {
             }
         }
         // Moves between records slide; deselected panes fade out.
-        .animation(SelectionRowMotion.animation, value: panes)
+        .animation(isDragging ? nil : SelectionRowMotion.animation, value: panes)
         .allowsHitTesting(false)
         .onChange(of: selectedIDs) { settled = $0 }
         .onAppear { settled = selectedIDs }
     }
 
-    private var edge: ListEdgeEffect {
-        ListEdgeEffect(style: scrollEffect, topEdge: topEdge)
-    }
+    // No edge blur on the panes: the rows themselves have none, and any
+    // blur at all turns system glass into a flat grey slab, so a selected
+    // record's glass looked blurred well before its text did.
 }
 
 /// A newly selected record's glass springs up from the record itself.
 private struct SelectionPop: ViewModifier {
     let animates: Bool
+    /// When several pop at once, a short wait each so they ripple down
+    /// instead of all springing in the same frame.
+    var delay: Double = 0
     @State private var shown: Bool
 
-    init(animates: Bool) {
+    init(animates: Bool, delay: Double = 0) {
         self.animates = animates
+        self.delay = delay
         _shown = State(initialValue: !animates)
     }
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(shown ? 1 : 0.86)
+            .scaleEffect(shown ? 1 : 0.94)
             .opacity(shown ? 1 : 0)
             .onAppear {
                 guard !shown else { return }
-                withAnimation(.spring(response: 0.34, dampingFraction: 0.56)) {
+                // Softer and a little slower: a gentle swell, not a snap.
+                withAnimation(.spring(response: 0.46, dampingFraction: 0.74).delay(delay)) {
                     shown = true
                 }
             }
@@ -1990,9 +2031,10 @@ private struct SelectionGlassSlab: View {
     }
 
     var body: some View {
+        // Exactly the card's size (a slight enlargement made the pane
+        // visibly longer than the cards in a wide window).
         surface
             .padding(.vertical, verticalInset)
-            .scaleEffect(1.008)
     }
 
     @ViewBuilder
@@ -2010,26 +2052,41 @@ private struct SelectionGlassSlab: View {
             startPoint: .top,
             endPoint: .bottom
         )
-        // A thin halo that hugs the edge. Not blurred: a blurred glow had to
-        // be redrawn as the pane moved, which made it stutter.
-        let glow = shape
-            .stroke(Color.accentColor.opacity(lightweight ? 0 : (isDark ? 0.22 : 0.25)), lineWidth: 3)
         if #available(macOS 26.0, *) {
             Color.clear
                 .glassEffect(
-                    .regular.tint(selectionColor.opacity(isDark ? 0.26 : 0.3)),
+                    .regular.tint(selectionColor.opacity(isDark ? 0.38 : 0.34)),
                     in: shape
                 )
                 // No drop shadow: under translucent glass it shows through and
                 // turns the whole pane grey.
-                .background(glow)
+                .background(glowImage)
+                // Rim and top sheen, one cached image.
                 .overlay(rimStroke(rim))
         } else {
             shape.fill(.ultraThinMaterial)
-                .overlay(shape.fill(selectionColor.opacity(isDark ? 0.26 : 0.3)))
-                .background(glow)
+                .overlay(shape.fill(selectionColor.opacity(isDark ? 0.38 : 0.34)))
+                .background(glowImage)
                 .overlay(rimStroke(rim))
         }
+    }
+
+    /// The soft accent glow around the pane, blurred once into an image (a
+    /// live blur was redrawn every frame the pane moved and stuttered).
+    private var glowImage: some View {
+        GeometryReader { proxy in
+            let pad = SelectionGlowImage.padding
+            if let image = SelectionGlowImage.image(
+                size: proxy.size,
+                cornerRadius: cornerRadius,
+                isDark: colorScheme == .dark,
+                scale: displayScale
+            ) {
+                Image(decorative: image, scale: displayScale)
+                    .offset(x: -pad, y: -pad)
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     /// The gradient rim as a ready-made image. Drawn live, SwiftUI painted
@@ -2054,6 +2111,31 @@ private struct SelectionGlassSlab: View {
 
 /// Rendered rims of the selection pane, by size and look.
 @MainActor
+private enum SelectionGlowImage {
+    static let padding: CGFloat = 14
+    private static var cache: [String: CGImage] = [:]
+
+    static func image(size: CGSize, cornerRadius: CGFloat, isDark: Bool, scale: CGFloat) -> CGImage? {
+        guard size.width >= 1, size.height >= 1 else { return nil }
+        let accent = NSColor.controlAccentColor.usingColorSpace(.sRGB)?.description ?? ""
+        let key = "\(Int(size.width.rounded()))x\(Int(size.height.rounded()))-\(cornerRadius)-\(isDark)-\(scale)-\(accent)"
+        if let cached = cache[key] { return cached }
+        let renderer = ImageRenderer(
+            content: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.accentColor.opacity(isDark ? 0.5 : 0.4), lineWidth: 5)
+                .blur(radius: 6)
+                .frame(width: size.width.rounded(), height: size.height.rounded())
+                .padding(padding)
+        )
+        renderer.scale = scale
+        guard let image = renderer.cgImage else { return nil }
+        if cache.count > 24 { cache.removeAll() }
+        cache[key] = image
+        return image
+    }
+}
+
+@MainActor
 private enum SelectionRimImage {
     private static var cache: [String: CGImage] = [:]
 
@@ -2062,11 +2144,30 @@ private enum SelectionRimImage {
         let accent = NSColor.controlAccentColor.usingColorSpace(.sRGB)?.description ?? ""
         let key = "\(Int(size.width.rounded()))x\(Int(size.height.rounded()))-\(cornerRadius)-\(isDark)-\(scale)-\(accent)"
         if let cached = cache[key] { return cached }
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let renderer = ImageRenderer(
-            content: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(rim, lineWidth: 1.2)
-                .frame(width: size.width.rounded(), height: size.height.rounded())
-                .environment(\.colorScheme, isDark ? .dark : .light)
+            content: ZStack {
+                // A soft white sheen just inside the top edge: the glass's
+                // thickness.
+                shape
+                    .inset(by: 1.5)
+                    .stroke(
+                        LinearGradient(
+                            stops: [
+                                .init(color: Color.white.opacity(isDark ? 0.28 : 0.6), location: 0),
+                                .init(color: Color.white.opacity(0), location: 0.35)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 2.5
+                    )
+                    .blur(radius: 1)
+                    .clipShape(shape)
+                shape.strokeBorder(rim, lineWidth: 1.2)
+            }
+            .frame(width: size.width.rounded(), height: size.height.rounded())
+            .environment(\.colorScheme, isDark ? .dark : .light)
         )
         renderer.scale = scale
         guard let image = renderer.cgImage else { return nil }
@@ -2112,8 +2213,14 @@ private struct CachedImageThumbnail: View {
                 return
             }
             thumbnail = nil
-            guard let data = item.imageData else { return }
-            let decoded = await cache.thumbnail(for: item.id, data: data)
+            let decoded: CGImage?
+            if let url = item.imageURL {
+                decoded = await cache.thumbnail(for: item.id, url: url)
+            } else if let data = item.legacyImageData {
+                decoded = await cache.thumbnail(for: item.id, data: data)
+            } else {
+                return
+            }
             guard !Task.isCancelled else { return }
             thumbnail = decoded
         }
@@ -2154,6 +2261,9 @@ private struct RowIconAction: View {
     let systemImage: String
     let label: String
     let isSelected: Bool
+    /// Only the row under the pointer tracks hover on its buttons; the
+    /// others carry no hover regions to update while the list scrolls.
+    let hoverEnabled: Bool
     var tint: Color? = nil
     /// Shown on hover. Handled by this view's own hover tracking rather than
     /// a separate tooltip modifier: one hover region per button, not two.
@@ -2173,16 +2283,11 @@ private struct RowIconAction: View {
             .pressFeedback(isPressed)
             .animation(.easeOut(duration: 0.1), value: isHovered)
             .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
-            .onHover { inside in
-                isHovered = inside
-                if !inside { isPressed = false }
-                if let tooltip {
-                    if inside {
-                        FloatingTooltipWindow.shared.scheduleShow(text: tooltip)
-                    } else {
-                        FloatingTooltipWindow.shared.cancelAndHide()
-                    }
-                }
+            .modifier(OptionalHover(isEnabled: hoverEnabled) { inside in
+                setHovered(inside)
+            })
+            .onChange(of: hoverEnabled) { enabled in
+                if !enabled { setHovered(false) }
             }
             .onTapGesture {
                 isPressed = false
@@ -2204,6 +2309,144 @@ private struct RowIconAction: View {
             .accessibilityLabel(label)
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { action() }
+    }
+
+    private func setHovered(_ inside: Bool) {
+        guard inside != isHovered else { return }
+        isHovered = inside
+        if !inside { isPressed = false }
+        if let tooltip {
+            if inside {
+                FloatingTooltipWindow.shared.scheduleShow(text: tooltip)
+            } else {
+                FloatingTooltipWindow.shared.cancelAndHide()
+            }
+        }
+    }
+}
+
+/// `onHover` only while enabled.
+private struct OptionalHover: ViewModifier {
+    let isEnabled: Bool
+    let action: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.onHover(perform: action)
+        } else {
+            content
+        }
+    }
+}
+
+/// Reports the pointer's position over the list (in the list's viewport,
+/// top-left origin), or nil when it leaves. While the list scrolls the hover
+/// is dropped, and picked up again once scrolling settles, so scrolling costs
+/// no hover work at all.
+private struct RowHoverTracker: NSViewRepresentable {
+    let scrollView: NSScrollView?
+    let onMove: (CGPoint?) -> Void
+
+    func makeNSView(context: Context) -> RowHoverTrackingView {
+        let view = RowHoverTrackingView()
+        view.onMove = onMove
+        view.scrollView = scrollView
+        return view
+    }
+
+    func updateNSView(_ view: RowHoverTrackingView, context: Context) {
+        view.onMove = onMove
+        view.scrollView = scrollView
+    }
+}
+
+final class RowHoverTrackingView: NSView {
+    var onMove: ((CGPoint?) -> Void)?
+    weak var scrollView: NSScrollView? {
+        didSet {
+            guard scrollView !== oldValue else { return }
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+            guard let clip = scrollView?.contentView else { return }
+            clip.postsBoundsChangedNotifications = true
+            observer = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.scrolled() }
+            }
+        }
+    }
+    private var observer: NSObjectProtocol?
+    private var trackingArea: NSTrackingArea?
+    private var isScrolling = false
+    private var settleWork: DispatchWorkItem?
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { report(event) }
+    override func mouseMoved(with event: NSEvent) { report(event) }
+    override func mouseExited(with event: NSEvent) { onMove?(nil) }
+
+    private func report(_ event: NSEvent) {
+        guard !isScrolling else { return }
+        onMove?(convert(event.locationInWindow, from: nil))
+    }
+
+    private func scrolled() {
+        if !isScrolling {
+            isScrolling = true
+            onMove?(nil)
+        }
+        settleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.isScrolling = false
+            guard let window = self.window else { return }
+            let point = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if self.bounds.contains(point) { self.onMove?(point) }
+        }
+        settleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+}
+
+/// Which history row the pointer is over.
+@MainActor
+final class RowHoverModel: ObservableObject {
+    @Published private(set) var hoveredID: ClipItem.ID?
+
+    func set(_ id: ClipItem.ID?) {
+        if hoveredID != id { hoveredID = id }
+    }
+}
+
+/// Hands a row whether it is hovered. Only this tiny view observes the
+/// hover model; the row itself is equatable, so moving the pointer to
+/// another row re-renders just the two rows involved.
+private struct RowHoverGate<Content: View>: View {
+    @ObservedObject var model: RowHoverModel
+    let id: ClipItem.ID
+    @ViewBuilder let content: (Bool) -> Content
+
+    var body: some View {
+        content(model.hoveredID == id)
     }
 }
 
@@ -2438,6 +2681,65 @@ private final class KeyCaptureNSView: NSView {
         default:
             super.keyDown(with: event)
         }
+    }
+}
+
+final class DragHighlightModel: ObservableObject {
+    @Published private(set) var range: ClosedRange<Int>?
+    @Published private(set) var opacity: Double = 1
+    /// Invalidates a pending fade when a new drag starts.
+    private var fadeToken = 0
+
+    func show(_ range: ClosedRange<Int>) {
+        fadeToken += 1
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { opacity = 1 }
+        // Rows joining or leaving the range fade in and out.
+        withAnimation(.easeOut(duration: 0.16)) { self.range = range }
+    }
+
+    func beginFade() -> Int { fadeToken }
+
+    func fadeOut(_ token: Int) {
+        guard token == fadeToken else { return }
+        opacity = 0
+    }
+
+    func clear(_ token: Int) {
+        guard token == fadeToken else { return }
+        range = nil
+        opacity = 1
+    }
+}
+
+/// The rows being drag-selected, as light accent-coloured cards over the
+/// list (like Finder's selection): one shape, however many rows.
+private struct DragRangeHighlight: View {
+    @ObservedObject var model: DragHighlightModel
+    let rowHeight: CGFloat
+    let inset: CGFloat
+
+    var body: some View {
+        // One shape per row, so each row's highlight fades in softly as the
+        // drag reaches it (one shape for the whole range jumped a row at a
+        // time). Plain shapes, not glass: cheap to animate while dragging.
+        ZStack(alignment: .top) {
+            if let range = model.range {
+                ForEach(Array(range), id: \.self) { index in
+                    let shape = RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
+                    shape
+                        .fill(Color.accentColor.opacity(0.16))
+                        .overlay(shape.strokeBorder(Color.accentColor.opacity(0.6), lineWidth: 1.2))
+                        .frame(height: rowHeight - inset * 2)
+                        .offset(y: CGFloat(index) * rowHeight + inset)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+        .opacity(model.opacity)
+        .allowsHitTesting(false)
     }
 }
 
@@ -2706,13 +3008,21 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
             if let enclosing = view?.enclosingScrollView {
                 return enclosing
             }
+            // Found once and remembered: walking the whole window's view
+            // tree on every mouse event made drag-selecting stutter.
+            if let cachedScrollView, cachedScrollView.window != nil, cachedScrollView.window === view?.window {
+                return cachedScrollView
+            }
 
             guard let contentView = view?.window?.contentView else {
                 return nil
             }
 
-            return firstScrollView(in: contentView)
+            cachedScrollView = firstScrollView(in: contentView)
+            return cachedScrollView
         }
+
+        private weak var cachedScrollView: NSScrollView?
 
         private func firstScrollView(in view: NSView) -> NSScrollView? {
             if let scrollView = view as? NSScrollView {

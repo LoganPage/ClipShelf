@@ -12,7 +12,14 @@ struct ClipItem: Identifiable, Codable, Hashable {
     var title: String
     var text: String?
     var filePaths: [String]
-    var imageData: Data?
+    /// The picture's file name in `ImageStore` (image records).
+    var imageFile: String?
+    /// SHA-256 of the picture, to spot the same image copied twice without
+    /// reading both files.
+    var imageHash: String?
+    /// A picture saved inside history.json by earlier versions; moved into
+    /// its own file when the history loads, and never written back.
+    var legacyImageData: Data?
     var sourcePath: String?
     var createdAt: Date
     var isPinned: Bool
@@ -23,6 +30,8 @@ struct ClipItem: Identifiable, Codable, Hashable {
         case title
         case text
         case filePaths
+        case imageFile
+        case imageHash
         case imageData
         case sourcePath
         case createdAt
@@ -35,7 +44,9 @@ struct ClipItem: Identifiable, Codable, Hashable {
         title: String,
         text: String? = nil,
         filePaths: [String] = [],
-        imageData: Data? = nil,
+        imageFile: String? = nil,
+        imageHash: String? = nil,
+        legacyImageData: Data? = nil,
         sourcePath: String? = nil,
         createdAt: Date = Date(),
         isPinned: Bool = false
@@ -45,7 +56,9 @@ struct ClipItem: Identifiable, Codable, Hashable {
         self.title = title
         self.text = text
         self.filePaths = filePaths
-        self.imageData = imageData
+        self.imageFile = imageFile
+        self.imageHash = imageHash
+        self.legacyImageData = legacyImageData
         self.sourcePath = sourcePath
         self.createdAt = createdAt
         self.isPinned = isPinned
@@ -58,9 +71,38 @@ struct ClipItem: Identifiable, Codable, Hashable {
         title = try container.decode(String.self, forKey: .title)
         text = try container.decodeIfPresent(String.self, forKey: .text)
         filePaths = try container.decode([String].self, forKey: .filePaths)
-        imageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
+        imageFile = try container.decodeIfPresent(String.self, forKey: .imageFile)
+        imageHash = try container.decodeIfPresent(String.self, forKey: .imageHash)
+        legacyImageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
         sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(title, forKey: .title)
+        try container.encodeIfPresent(text, forKey: .text)
+        try container.encode(filePaths, forKey: .filePaths)
+        try container.encodeIfPresent(imageFile, forKey: .imageFile)
+        try container.encodeIfPresent(imageHash, forKey: .imageHash)
+        // Only for a picture that could not be moved into its own file.
+        try container.encodeIfPresent(legacyImageData, forKey: .imageData)
+        try container.encodeIfPresent(sourcePath, forKey: .sourcePath)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(isPinned, forKey: .isPinned)
+    }
+
+    /// Where the picture is on disk.
+    var imageURL: URL? {
+        imageFile.map { ImageStore.shared.url(for: $0) }
+    }
+
+    /// The picture's bytes, read from its file. Reads the disk: use it for
+    /// copying and previews, not on every render.
+    var imageData: Data? {
+        legacyImageData ?? imageFile.flatMap { ImageStore.shared.data(for: $0) }
     }
 }

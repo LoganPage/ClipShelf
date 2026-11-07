@@ -1200,10 +1200,11 @@ enum ClipShelfSelfTest {
         ))
 
         let reuseIndexCache = ClipSearchIndexCache(maximumEntryCount: 2)
-        let reuseItem = ClipItem(kind: .image, title: "索引复用", imageData: Data([1, 2, 3]))
+        let reuseItem = ClipItem(kind: .image, title: "索引复用", imageFile: "a.png", imageHash: "a")
         let firstReuseIndex = reuseIndexCache.index(for: reuseItem)
         var imageOnlyChange = reuseItem
-        imageOnlyChange.imageData = Data([9, 8, 7, 6])
+        imageOnlyChange.imageFile = "b.png"
+        imageOnlyChange.imageHash = "b"
         let secondReuseIndex = reuseIndexCache.index(for: imageOnlyChange)
         results.append(check(
             name: "search index is reused across queries for the same record",
@@ -1234,6 +1235,42 @@ enum ClipShelfSelfTest {
             condition: boundedIndexCache.count == 3 && boundedIndexCache.buildCount == 8,
             success: "Least-recently-used eviction keeps the index cache at its configured limit",
             failure: "Index cache count was \(boundedIndexCache.count) instead of 3"
+        ))
+
+        // Pictures live in their own files; history.json only names them.
+        let imageStore = ImageStore(directory: temporaryRoot.appendingPathComponent("image-store", isDirectory: true))
+        let pngPixel = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==") ?? Data()
+        let keptID = UUID()
+        let droppedID = UUID()
+        let keptImage = try? imageStore.store(pngPixel, id: keptID)
+        let droppedImage = try? imageStore.store(pngPixel, id: droppedID)
+        imageStore.removeUnreferenced(keeping: Set([keptImage?.fileName].compactMap { $0 }), minimumAge: 0)
+        let keptExists = keptImage.map { FileManager.default.fileExists(atPath: imageStore.url(for: $0.fileName).path) } ?? false
+        let droppedGone = droppedImage.map { !FileManager.default.fileExists(atPath: imageStore.url(for: $0.fileName).path) } ?? false
+        results.append(check(
+            name: "image store keeps pictures in their own files and drops unused ones",
+            condition: keptImage?.fileName == "\(keptID.uuidString).png"
+                && keptImage?.hash == ImageStore.hash(pngPixel)
+                && keptImage?.hash == droppedImage?.hash
+                && keptExists && droppedGone,
+            success: "A PNG is stored as <id>.png with its hash, and only unreferenced files are removed",
+            failure: "Image store naming, hashing or cleanup changed"
+        ))
+
+        let legacyJSON = #"[{"id":"\#(UUID().uuidString)","kind":"image","title":"旧图片","filePaths":[],"imageData":"AQID","createdAt":0,"isPinned":false}]"#
+        let legacyItems = try? JSONDecoder().decode([ClipItem].self, from: Data(legacyJSON.utf8))
+        var migratedItem = legacyItems?.first
+        migratedItem?.imageFile = "x.png"
+        migratedItem?.imageHash = "h"
+        migratedItem?.legacyImageData = nil
+        let migratedJSON = migratedItem.flatMap { try? JSONEncoder().encode([$0]) }.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        results.append(check(
+            name: "history written after migration names pictures instead of embedding them",
+            condition: legacyItems?.first?.legacyImageData == Data([1, 2, 3])
+                && migratedJSON.contains("\"imageFile\":\"x.png\"")
+                && !migratedJSON.contains("imageData"),
+            success: "Embedded pictures of older histories are read, and saved records only name their file",
+            failure: "Legacy pictures were not read, or pictures are still embedded in history.json"
         ))
 
         let writerURL = temporaryRoot.appendingPathComponent("writer/coalesced-history.json")
@@ -1348,14 +1385,21 @@ enum ClipShelfSelfTest {
         ))
 
         results.append(check(
-            name: "watched folders other than the screenshot folder take any new image",
-            condition: ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png"), screenshotsOnly: false)
-                && ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/IMG_0001.HEIC"), screenshotsOnly: false)
-                && ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/download.webp"), screenshotsOnly: false)
-                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png"), screenshotsOnly: true)
-                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/notes.txt"), screenshotsOnly: false)
-                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png.crdownload"), screenshotsOnly: false),
-            success: "Any image counts in an added folder; only screenshots count in the system screenshot folder",
+            name: "watched folders take what their rule says, never unfinished downloads",
+            condition: ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png"), content: .images)
+                && ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/IMG_0001.HEIC"), content: .images)
+                && ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/download.webp"), content: .images)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png"), content: .screenshots)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/notes.txt"), content: .images)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/photo.png.crdownload"), content: .images)
+                && ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/notes.txt"), content: .files)
+                && ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/report.pdf"), content: .files)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/report.pdf.crdownload"), content: .files)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/movie.mp4.part"), content: .files)
+                && !ScreenshotFolderWatcher.isImportable(URL(fileURLWithPath: "/tmp/~$report.docx"), content: .files)
+                && WatchedFolderRule.standard(isScreenshotFolder: true) == WatchedFolderRule(content: .screenshots, copiesToClipboard: true)
+                && WatchedFolderRule.standard(isScreenshotFolder: false) == WatchedFolderRule(content: .images, copiesToClipboard: false),
+            success: "Each folder takes screenshots, images or all finished files as its rule says",
             failure: "Folder import rules changed"
         ))
 

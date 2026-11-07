@@ -1,6 +1,8 @@
 import AppKit
 import Combine
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 final class ClipStore: ObservableObject {
     static let shared = ClipStore()
@@ -36,7 +38,7 @@ final class ClipStore: ObservableObject {
         changeCount = pasteboard.changeCount
         isClipboardHistoryEnabled = AppEnvironment.userDefaults.object(forKey: Self.historyEnabledKey) as? Bool ?? true
         storageURL = AppEnvironment.historyURL
-        historyWriter = HistoryWriter(destinationURL: storageURL)
+        historyWriter = HistoryWriter(destinationURL: storageURL, imageStore: .shared)
 
         load()
         if HistoryTrimmer.trim(&items, maxItems: maxItems) {
@@ -61,16 +63,54 @@ final class ClipStore: ObservableObject {
         writeToPasteboard(items)
     }
 
-    func addScreenshot(data: Data, sourceURL: URL) {
+    /// A new image in a watched folder.
+    func addWatchedImage(data: Data, sourceURL: URL, copyToClipboard: Bool) {
+        addImage(data, title: sourceURL.lastPathComponent, sourcePath: sourceURL.path, copyToPasteboard: copyToClipboard)
+    }
+
+    /// Any other new file in a watched folder: the record points at the file,
+    /// and copying it puts the file itself on the clipboard.
+    func addWatchedFile(_ url: URL, copyToClipboard: Bool) {
         runOnMain {
-            let item = ClipItem(
-                kind: .image,
-                title: sourceURL.lastPathComponent,
-                imageData: data,
-                sourcePath: sourceURL.path
-            )
+            let item = ClipItem(kind: .file, title: url.lastPathComponent, filePaths: [url.path])
             self.add(item)
-            self.writeToPasteboard(item)
+            if copyToClipboard {
+                self.writeToPasteboard(item)
+            }
+        }
+    }
+
+    /// Saves the picture to its own file off the main thread, then adds the
+    /// record.
+    private func addImage(
+        _ data: Data,
+        title: String,
+        sourcePath: String? = nil,
+        createdAt: Date = Date(),
+        copyToPasteboard: Bool = false
+    ) {
+        let id = UUID()
+        imageEncodingQueue.async { [weak self] in
+            guard let stored = try? ImageStore.shared.store(data, id: id) else {
+                NSLog("ClipShelf could not save an image record")
+                return
+            }
+            let item = ClipItem(
+                id: id,
+                kind: .image,
+                title: title,
+                imageFile: stored.fileName,
+                imageHash: stored.hash,
+                sourcePath: sourcePath,
+                createdAt: createdAt
+            )
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.add(item)
+                if copyToPasteboard {
+                    self.writeToPasteboard(item, imageData: data)
+                }
+            }
         }
     }
 
@@ -193,21 +233,14 @@ final class ClipStore: ObservableObject {
         }
 
         if let imageCapture = currentImageCapture() {
+            let capturedAt = Date()
             switch imageCapture {
             case .png(let data):
-                add(ClipItem(kind: .image, title: "剪贴板图片", imageData: data))
+                addImage(data, title: "剪贴板图片", createdAt: capturedAt)
             case .tiff(let data):
-                let capturedAt = Date()
                 imageEncodingQueue.async { [weak self] in
                     guard let png = ImageCaptureEncoder.pngData(fromTIFF: data) else { return }
-                    DispatchQueue.main.async {
-                        self?.add(ClipItem(
-                            kind: .image,
-                            title: "剪贴板图片",
-                            imageData: png,
-                            createdAt: capturedAt
-                        ))
-                    }
+                    self?.addImage(png, title: "剪贴板图片", createdAt: capturedAt)
                 }
             }
         }
@@ -246,6 +279,13 @@ final class ClipStore: ObservableObject {
 
     private func writeToPasteboard(_ item: ClipItem) {
         writeToPasteboard([item])
+    }
+
+    /// For a record just added: its picture is already in memory.
+    private func writeToPasteboard(_ item: ClipItem, imageData: Data) {
+        pasteboard.clearContents()
+        pasteboard.writeObjects([Self.imagePasteboardItem(imageData)])
+        changeCount = pasteboard.changeCount
     }
 
     private func writeToPasteboard(_ items: [ClipItem]) {
@@ -290,7 +330,7 @@ final class ClipStore: ObservableObject {
             pasteboard.writeObjects(urls)
         case .image:
             if let imageData = item.imageData {
-                pasteboard.writeObjects([Self.imagePasteboardItem(png: imageData)])
+                pasteboard.writeObjects([Self.imagePasteboardItem(imageData)])
             }
         }
 
@@ -308,16 +348,24 @@ final class ClipStore: ObservableObject {
             return NSURL(fileURLWithPath: firstPath)
         case .image:
             guard let imageData = item.imageData else { return nil }
-            return Self.imagePasteboardItem(png: imageData)
+            return Self.imagePasteboardItem(imageData)
         }
     }
 
-    /// PNG is written immediately; TIFF is only promised and converted when a
-    /// receiving app actually asks for it, so copying never decodes on main.
-    private static func imagePasteboardItem(png: Data) -> NSPasteboardItem {
+    /// The picture goes on as its own format (PNG, JPEG, HEIC…); PNG and TIFF
+    /// are only promised and converted when a receiving app asks for them, so
+    /// copying never decodes on main. Pictures from watched folders can be any
+    /// format; they used to be labelled PNG whatever they were.
+    private static func imagePasteboardItem(_ data: Data) -> NSPasteboardItem {
         let pasteboardItem = NSPasteboardItem()
-        pasteboardItem.setData(png, forType: .png)
-        pasteboardItem.setDataProvider(LazyTIFFProvider(png: png), forTypes: [.tiff])
+        let source = CGImageSourceCreateWithData(data as CFData, nil)
+        let typeIdentifier = source.flatMap { CGImageSourceGetType($0) as String? } ?? UTType.png.identifier
+        let ownType = NSPasteboard.PasteboardType(typeIdentifier)
+        pasteboardItem.setData(data, forType: ownType)
+        let promised = [NSPasteboard.PasteboardType.png, .tiff].filter { $0 != ownType }
+        if !promised.isEmpty {
+            pasteboardItem.setDataProvider(LazyImageProvider(data: data), forTypes: promised)
+        }
         return pasteboardItem
     }
 
@@ -413,7 +461,10 @@ final class ClipStore: ObservableObject {
             if let leftPath = lhs.sourcePath, let rightPath = rhs.sourcePath {
                 return leftPath == rightPath
             }
-            return lhs.imageData == rhs.imageData
+            if let leftHash = lhs.imageHash, let rightHash = rhs.imageHash {
+                return leftHash == rightHash
+            }
+            return lhs.legacyImageData != nil && lhs.legacyImageData == rhs.legacyImageData
         }
     }
 
@@ -424,11 +475,50 @@ final class ClipStore: ObservableObject {
             sortItems()
         } catch {
             items = []
+            return
         }
+        migrateLegacyImages()
+    }
+
+    /// Moves pictures that earlier versions kept inside history.json into
+    /// their own files, once. The old history.json is kept as a backup first;
+    /// a picture that can't be written stays inside the history.
+    private func migrateLegacyImages() {
+        guard items.contains(where: { $0.legacyImageData != nil }) else { return }
+        let backupURL = storageURL.deletingLastPathComponent()
+            .appendingPathComponent("history-before-image-files.json")
+        if !FileManager.default.fileExists(atPath: backupURL.path) {
+            do {
+                try FileManager.default.copyItem(at: storageURL, to: backupURL)
+            } catch {
+                NSLog("ClipShelf kept images inside the history: backup failed: \(error.localizedDescription)")
+                return
+            }
+        }
+        for index in items.indices {
+            guard let data = items[index].legacyImageData,
+                  let stored = try? ImageStore.shared.store(data, id: items[index].id) else { continue }
+            items[index].imageFile = stored.fileName
+            items[index].imageHash = stored.hash
+            items[index].legacyImageData = nil
+        }
+        save()
+        historyWriter.flush()
     }
 
     private func save() {
-        historyWriter.schedule(items)
+        historyWriter.schedule(items, imageFilesInUse: imageFilesInUse())
+    }
+
+    /// Pictures of the records and of deletions that can still be undone.
+    private func imageFilesInUse() -> Set<String> {
+        var fileNames = Set(items.compactMap(\.imageFile))
+        for batch in deletionUndoStack.batches {
+            for entry in batch {
+                if let fileName = entry.item.imageFile { fileNames.insert(fileName) }
+            }
+        }
+        return fileNames
     }
 
     private func updateUndoAvailability() {
@@ -449,17 +539,24 @@ final class ClipStore: ObservableObject {
     }
 }
 
-private final class LazyTIFFProvider: NSObject, NSPasteboardItemDataProvider {
-    private let png: Data
+private final class LazyImageProvider: NSObject, NSPasteboardItemDataProvider {
+    private let data: Data
 
-    init(png: Data) {
-        self.png = png
+    init(data: Data) {
+        self.data = data
     }
 
     func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        guard type == .tiff,
-              let image = NSImage(data: png),
-              let tiff = image.tiffRepresentation else { return }
-        item.setData(tiff, forType: .tiff)
+        switch type {
+        case .tiff:
+            guard let image = NSImage(data: data), let tiff = image.tiffRepresentation else { return }
+            item.setData(tiff, forType: .tiff)
+        case .png:
+            // Reads any image format, not only TIFF.
+            guard let png = ImageCaptureEncoder.pngData(fromTIFF: data) else { return }
+            item.setData(png, forType: .png)
+        default:
+            return
+        }
     }
 }

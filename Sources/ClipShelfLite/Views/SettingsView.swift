@@ -264,29 +264,40 @@ struct SettingsView: View {
             }
 
             ForEach(Array(watcher.folderURLs.enumerated()), id: \.offset) { index, url in
-                HStack(spacing: 8) {
-                    Text(url.path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(FileManager.default.displayName(atPath: url.path))
+                            Text(url.path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                         .help(url.path)
-                    Spacer(minLength: 8)
-                    Button("更换") {
-                        watcher.chooseFolder(attachedTo: hostWindow, replacing: index)
+                        Spacer(minLength: 8)
+                        Button("更换") {
+                            watcher.chooseFolder(attachedTo: hostWindow, replacing: index)
+                        }
+                        Button("访达") {
+                            watcher.revealFolder(at: index)
+                        }
+                        Button {
+                            watcher.removeFolder(at: index)
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .help("不再监听这个文件夹")
+                        .accessibilityLabel("移除文件夹")
                     }
-                    Button("访达") {
-                        watcher.revealFolder(at: index)
-                    }
-                    Button {
-                        watcher.removeFolder(at: index)
-                    } label: {
-                        Image(systemName: "minus")
-                            .font(.system(size: 11, weight: .bold))
-                    }
-                    .help("不再监听这个文件夹")
-                    .accessibilityLabel("移除文件夹")
+                    folderRuleRows(for: url)
                 }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.primary.opacity(0.05))
+                )
             }
 
             if watcher.folderURLs.isEmpty {
@@ -308,10 +319,40 @@ struct SettingsView: View {
                 }
             }
 
-            Text("新放进这些文件夹的图片会自动进入历史和剪贴板，原文件保留。系统截图的保存位置里只收截图；截图时请关闭右下角浮动缩略图。")
+            Text("每个文件夹可以分别设置收什么、要不要自动复制。原文件都会保留；正在下载的文件等下载完才收。截图时请关闭右下角浮动缩略图。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder
+    private func folderRuleRows(for url: URL) -> some View {
+        let rule = watcher.rule(for: url)
+        HStack {
+            Text("收进来")
+            Spacer()
+            LiquidMenu(
+                options: WatchedFolderRule.Content.allCases,
+                selection: Binding(
+                    get: { rule.content },
+                    set: { content in
+                        var updated = watcher.rule(for: url)
+                        updated.content = content
+                        watcher.setRule(updated, for: url)
+                    }
+                ),
+                title: \.title
+            )
+            .accessibilityLabel("收进来的内容")
+        }
+        settingsToggle("自动复制到剪贴板", isOn: Binding(
+            get: { rule.copiesToClipboard },
+            set: { copies in
+                var updated = watcher.rule(for: url)
+                updated.copiesToClipboard = copies
+                watcher.setRule(updated, for: url)
+            }
+        ))
     }
 
     private var historySection: some View {

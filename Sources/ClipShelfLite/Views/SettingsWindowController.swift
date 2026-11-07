@@ -598,6 +598,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         glass.collectionBehavior = [.transient, .ignoresCycle]
         glass.contentView = makeBackdropView()
         glassWindow = glass
+        // While parked, keep both windows parked: entering full screen moved
+        // the parked glass onto the screen, where it stayed as a stray pane.
+        for window in [panel, glass] as [NSWindow] {
+            NotificationCenter.default.addObserver(self, selector: #selector(parkedWindowMoved(_:)), name: NSWindow.didMoveNotification, object: window)
+            NotificationCenter.default.addObserver(self, selector: #selector(parkedWindowMoved(_:)), name: NSWindow.didChangeScreenNotification, object: window)
+        }
         // The system's border and shadow follow the glass's corners.
         panel.matchSystemCornerRadius(GlassMetrics.panelRadius)
         glass.matchSystemCornerRadius(GlassMetrics.panelRadius)
@@ -706,6 +712,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.applyAppearance()
             self?.scheduleFallbackRender()
+        }
+    }
+
+    @objc private func parkedWindowMoved(_ notification: Notification) {
+        guard !isShown, !isAnimating, let window = notification.object as? NSWindow,
+              window.frame.origin != Self.parkingOrigin else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isShown, !self.isAnimating else { return }
+            self.panel?.setFrameOrigin(Self.parkingOrigin)
+            self.glassWindow?.setFrameOrigin(Self.parkingOrigin)
         }
     }
 

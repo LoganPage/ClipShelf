@@ -2,6 +2,39 @@ import AppKit
 import Foundation
 import ImageIO
 
+/// What a watched folder takes in, and what happens to it.
+struct WatchedFolderRule: Codable, Equatable {
+    enum Content: String, Codable, CaseIterable {
+        /// Screenshot-named images only (the Desktop holds much else).
+        case screenshots
+        /// Any image.
+        case images
+        /// Any file: images become image records, the rest file records.
+        case files
+
+        var title: String {
+            switch self {
+            case .screenshots: "截图"
+            case .images: "图片"
+            case .files: "所有文件"
+            }
+        }
+    }
+
+    var content: Content
+    /// Also put each new record on the clipboard, as screenshots do.
+    var copiesToClipboard: Bool
+
+    /// The screenshot folder keeps the original behaviour; a folder added on
+    /// purpose (often Downloads) takes images without taking over the
+    /// clipboard.
+    static func standard(isScreenshotFolder: Bool) -> WatchedFolderRule {
+        isScreenshotFolder
+            ? WatchedFolderRule(content: .screenshots, copiesToClipboard: true)
+            : WatchedFolderRule(content: .images, copiesToClipboard: false)
+    }
+}
+
 final class ScreenshotFolderWatcher: ObservableObject {
     static let shared = ScreenshotFolderWatcher()
     static let minimumRescanInterval: TimeInterval = 5
@@ -13,6 +46,8 @@ final class ScreenshotFolderWatcher: ObservableObject {
     /// The first watched folder.
     var folderURL: URL? { folderURLs.first }
     var canAddFolder: Bool { folderURLs.count < Self.maximumFolders }
+    /// Each folder's rule, by path; a folder without one uses the standard rule.
+    @Published private(set) var rules: [String: WatchedFolderRule] = [:]
     @Published private(set) var isRunning = false
     @Published private(set) var statusText = "未选择截图文件夹"
 
@@ -21,12 +56,13 @@ final class ScreenshotFolderWatcher: ObservableObject {
     private let pathKey = "screenshotFolder.path"
     private let bookmarksKey = "screenshotFolders.bookmarks"
     private let pathsKey = "screenshotFolders.paths"
+    private let rulesKey = "screenshotFolders.rules"
     private let queue = DispatchQueue(label: "ClipShelf.screenshot-folder", qos: .utility)
     /// One file-system source per watched folder (each closes its own
     /// descriptor when cancelled).
     private var eventSources: [DispatchSourceFileSystemObject] = []
-    /// The folders `scan` reads; only touched on `queue`.
-    private var scannedURLs: [URL] = []
+    /// The folders `scan` reads, with their rules; only touched on `queue`.
+    private var scannedFolders: [(url: URL, rule: WatchedFolderRule)] = []
     private var timer: DispatchSourceTimer?
     private var pending: [URL: PendingFile] = [:]
     private var seen = Set<String>()
@@ -37,6 +73,29 @@ final class ScreenshotFolderWatcher: ObservableObject {
 
     private init() {
         folderURLs = loadFolderURLs()
+        rules = loadRules()
+    }
+
+    func rule(for url: URL) -> WatchedFolderRule {
+        rules[Self.key(for: url)] ?? .standard(isScreenshotFolder: isScreenshotFolder(url))
+    }
+
+    func setRule(_ rule: WatchedFolderRule, for url: URL) {
+        rules[Self.key(for: url)] = rule
+        saveRules()
+        let folders = folderURLs.map { (url: $0, rule: self.rule(for: $0)) }
+        queue.async { [weak self] in
+            self?.scannedFolders = folders
+        }
+    }
+
+    func isScreenshotFolder(_ url: URL) -> Bool {
+        guard let screenshotFolder = systemScreenshotFolder() else { return false }
+        return Self.key(for: url) == Self.key(for: screenshotFolder)
+    }
+
+    private static func key(for url: URL) -> String {
+        url.standardizedFileURL.path
     }
 
     func start() {
@@ -55,8 +114,9 @@ final class ScreenshotFolderWatcher: ObservableObject {
             startEventSource(for: url)
         }
         startTimer()
+        let folders = urls.map { (url: $0, rule: rule(for: $0)) }
         queue.async { [weak self] in
-            self?.scannedURLs = urls
+            self?.scannedFolders = folders
             self?.scan()
         }
     }
@@ -68,7 +128,7 @@ final class ScreenshotFolderWatcher: ObservableObject {
         eventSources.removeAll()
         queue.async { [weak self] in
             self?.pending.removeAll()
-            self?.scannedURLs = []
+            self?.scannedFolders = []
         }
         updateStatus(folderURLs.isEmpty ? "未选择截图文件夹" : "已暂停", running: false)
     }
@@ -85,7 +145,7 @@ final class ScreenshotFolderWatcher: ObservableObject {
 
         let panel = NSOpenPanel()
         panel.title = "选择要监听的文件夹"
-        panel.message = "之后新放进这个文件夹的图片会自动进入历史和剪贴板。"
+        panel.message = "之后新放进这个文件夹的图片或文件会自动进入历史，收什么可以在设置里改。"
         panel.prompt = "使用这个文件夹"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -138,9 +198,11 @@ final class ScreenshotFolderWatcher: ObservableObject {
         guard folderURLs.indices.contains(index) else { return }
         var urls = folderURLs
         var bookmarks = savedBookmarks()
-        urls.remove(at: index)
+        let removed = urls.remove(at: index)
         if bookmarks.indices.contains(index) { bookmarks.remove(at: index) }
         saveFolders(urls, bookmarks: bookmarks)
+        rules.removeValue(forKey: Self.key(for: removed))
+        saveRules()
         start()
     }
 
@@ -186,26 +248,24 @@ final class ScreenshotFolderWatcher: ObservableObject {
     }
 
     private func scan() {
-        guard !scannedURLs.isEmpty else { return }
-        let screenshotFolder = systemScreenshotFolder()?.standardizedFileURL.path
-        var files: [URL] = []
-        for folderURL in scannedURLs {
+        guard !scannedFolders.isEmpty else { return }
+        var files: [(url: URL, rule: WatchedFolderRule)] = []
+        for folder in scannedFolders {
             guard let contents = try? FileManager.default.contentsOfDirectory(
-                at: folderURL,
+                at: folder.url,
                 includingPropertiesForKeys: Self.fileKeys,
                 options: [.skipsHiddenFiles]
             ) else {
-                updateStatus("无法读取：\(folderURL.lastPathComponent)", running: false)
+                updateStatus("无法读取：\(folder.url.lastPathComponent)", running: false)
                 continue
             }
-            // The system's screenshot folder (the Desktop by default) holds
-            // all sorts of images, so only screenshots count there; any other
-            // folder was added on purpose, so every new image in it counts.
-            let screenshotsOnly = folderURL.standardizedFileURL.path == screenshotFolder
-            files += contents.filter { Self.isImportable($0, screenshotsOnly: screenshotsOnly) }
+            files += contents
+                .filter { Self.isImportable($0, content: folder.rule.content) }
+                .map { (url: $0, rule: folder.rule) }
         }
 
-        let candidates = files.compactMap { url -> (url: URL, arrivedAt: Date)? in
+        let candidates = files.compactMap { file -> (url: URL, rule: WatchedFolderRule, arrivedAt: Date)? in
+            let url = file.url
             guard !seen.contains(url.path),
                   let values = try? url.resourceValues(forKeys: Set(Self.fileKeys)),
                   values.isRegularFile == true,
@@ -215,12 +275,12 @@ final class ScreenshotFolderWatcher: ObservableObject {
                 return nil
             }
 
-            return (url, arrivedAt)
+            return (url, file.rule, arrivedAt)
         }
         .sorted { $0.arrivedAt < $1.arrivedAt }
 
         for candidate in candidates {
-            importWhenStable(candidate.url)
+            importWhenStable(candidate.url, rule: candidate.rule)
         }
         // A screenshot still settling is checked again right away, not on
         // the next folder event or the 5 s fallback scan: it used to land
@@ -236,10 +296,9 @@ final class ScreenshotFolderWatcher: ObservableObject {
         }
     }
 
-    private func importWhenStable(_ url: URL) {
+    private func importWhenStable(_ url: URL, rule: WatchedFolderRule) {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let size = attributes[.size] as? UInt64,
-              size > 0 else {
+              let size = attributes[.size] as? UInt64 else {
             return
         }
 
@@ -250,18 +309,28 @@ final class ScreenshotFolderWatcher: ObservableObject {
             item.lastSize = size
             item.stableTicks = 0
         }
+        // Kept pending while still empty: writing into a file raises no
+        // folder event, so without the quick re-check a file first seen at
+        // 0 bytes waited for the 5 s fallback scan.
         pending[url] = item
 
-        guard item.stableTicks >= 1,
-              Date().timeIntervalSince(item.firstSeenAt) >= 0.15,
-              let data = try? Data(contentsOf: url),
-              isValidImageData(data) else {
+        guard size > 0,
+              item.stableTicks >= 1,
+              Date().timeIntervalSince(item.firstSeenAt) >= 0.15 else {
             return
         }
 
-        seen.insert(url.path)
-        pending.removeValue(forKey: url)
-        ClipStore.shared.addScreenshot(data: data, sourceURL: url)
+        if Self.isImage(url) {
+            // An image that doesn't decode yet is still being written.
+            guard let data = try? Data(contentsOf: url), isValidImageData(data) else { return }
+            seen.insert(url.path)
+            pending.removeValue(forKey: url)
+            ClipStore.shared.addWatchedImage(data: data, sourceURL: url, copyToClipboard: rule.copiesToClipboard)
+        } else {
+            seen.insert(url.path)
+            pending.removeValue(forKey: url)
+            ClipStore.shared.addWatchedFile(url, copyToClipboard: rule.copiesToClipboard)
+        }
     }
 
     private static let fileKeys: [URLResourceKey] = [
@@ -279,13 +348,31 @@ final class ScreenshotFolderWatcher: ObservableObject {
         values.addedToDirectoryDate ?? values.creationDate ?? values.contentModificationDate
     }
 
-    static func isImportable(_ url: URL, screenshotsOnly: Bool) -> Bool {
-        guard imageExtensions.contains(url.pathExtension.lowercased()) else { return false }
-        return !screenshotsOnly || hasScreenshotName(url)
+    /// Names browsers and downloaders give files still on their way; the
+    /// finished file turns up under its own name.
+    static let unfinishedExtensions: Set<String> = [
+        "crdownload", "download", "part", "partial", "tmp", "opdownload", "filepart", "aria2", "!ut",
+    ]
+
+    static func isImage(_ url: URL) -> Bool {
+        imageExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    static func isImportable(_ url: URL, content: WatchedFolderRule.Content) -> Bool {
+        switch content {
+        case .screenshots:
+            return isImage(url) && hasScreenshotName(url)
+        case .images:
+            return isImage(url)
+        case .files:
+            // Not Office's "~$" lock files either.
+            return !unfinishedExtensions.contains(url.pathExtension.lowercased())
+                && !url.lastPathComponent.hasPrefix("~$")
+        }
     }
 
     func isLikelyScreenshot(_ url: URL) -> Bool {
-        Self.isImportable(url, screenshotsOnly: true)
+        Self.isImportable(url, content: .screenshots)
     }
 
     private static func hasScreenshotName(_ url: URL) -> Bool {
@@ -333,6 +420,19 @@ final class ScreenshotFolderWatcher: ObservableObject {
         let defaults = AppEnvironment.userDefaults
         defaults.set(urls.map(\.path), forKey: pathsKey)
         defaults.set(Array(bookmarks.prefix(urls.count)), forKey: bookmarksKey)
+    }
+
+    private func loadRules() -> [String: WatchedFolderRule] {
+        guard let data = AppEnvironment.userDefaults.data(forKey: rulesKey),
+              let rules = try? JSONDecoder().decode([String: WatchedFolderRule].self, from: data) else {
+            return [:]
+        }
+        return rules
+    }
+
+    private func saveRules() {
+        guard let data = try? JSONEncoder().encode(rules) else { return }
+        AppEnvironment.userDefaults.set(data, forKey: rulesKey)
     }
 
     private func savedBookmarks() -> [Data] {

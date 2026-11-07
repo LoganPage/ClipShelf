@@ -42,7 +42,25 @@ final class ImageThumbnailCache: @unchecked Sendable {
         }
     }
 
+    /// Decodes straight from the picture's file: only what the thumbnail
+    /// needs is read, not the whole image.
+    func thumbnail(for id: ClipItem.ID, url: URL) async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            thumbnail(for: id, source: { CGImageSourceCreateWithURL(url as CFURL, nil) }) { image in
+                continuation.resume(returning: image)
+            }
+        }
+    }
+
     func thumbnail(for id: ClipItem.ID, data: Data, completion: @escaping (CGImage?) -> Void) {
+        thumbnail(for: id, source: { CGImageSourceCreateWithData(data as CFData, nil) }, completion: completion)
+    }
+
+    private func thumbnail(
+        for id: ClipItem.ID,
+        source makeSource: @escaping () -> CGImageSource?,
+        completion: @escaping (CGImage?) -> Void
+    ) {
         if let cached = lock.withThumbnailLock({ cachedImage(for: id) }) {
             completion(cached)
             return
@@ -58,7 +76,7 @@ final class ImageThumbnailCache: @unchecked Sendable {
                 return
             }
 
-            let thumbnail = Self.makeThumbnail(from: data)
+            let thumbnail = makeSource().flatMap(Self.makeThumbnail(from:))
             if let thumbnail {
                 self.store(thumbnail, for: id)
             }
@@ -76,7 +94,8 @@ final class ImageThumbnailCache: @unchecked Sendable {
         if let cached = lock.withThumbnailLock({ cachedImage(for: id) }) {
             return cached
         }
-        guard let thumbnail = Self.makeThumbnail(from: data) else { return nil }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let thumbnail = Self.makeThumbnail(from: source) else { return nil }
         store(thumbnail, for: id)
         return thumbnail
     }
@@ -105,9 +124,8 @@ final class ImageThumbnailCache: @unchecked Sendable {
         }
     }
 
-    private static func makeThumbnail(from data: Data) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let sourceImage = CGImageSourceCreateThumbnailAtIndex(
+    private static func makeThumbnail(from source: CGImageSource) -> CGImage? {
+        guard let sourceImage = CGImageSourceCreateThumbnailAtIndex(
                 source,
                 0,
                 [
