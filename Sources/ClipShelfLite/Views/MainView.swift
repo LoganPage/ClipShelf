@@ -462,7 +462,7 @@ struct MainView: View {
         .background(alignment: .top) {
             // Solid behind the title row only, then a short fade, so the
             // records' glass shows again as soon as possible.
-            TitlebarScrollEdge(height: titleRowHeight)
+            TitlebarScrollEdge(height: titleRowHeight, toolbarHeight: toolbarHeight)
         }
     }
 
@@ -578,6 +578,9 @@ struct MainView: View {
         // Applied to the field itself, not as a background: inside the
         // toolbar's glass container a background glass is drawn over the
         // text and bends it into ghost copies.
+        // Clipped first, so while the glass is still growing or shrinking
+        // the text never spills out past it.
+        .clipShape(Capsule())
         .contentShape(Capsule())
         .clipShelfGlass(in: Capsule())
         // Lifted off the list, like Spotlight.
@@ -1687,7 +1690,10 @@ private struct ScopedOpacity: ViewModifier {
 
 private struct TitlebarScrollEdge: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityLook) private var look
     let height: CGFloat
+    /// The whole toolbar, title row and controls.
+    var toolbarHeight: CGFloat = 0
     private let fade: CGFloat = 40
 
     /// Dark: the deep grey of an inactive titlebar. Light: a soft grey a
@@ -1699,10 +1705,34 @@ private struct TitlebarScrollEdge: View {
     }
 
     var body: some View {
+        if look.reduceTransparency {
+            // Reduce Transparency: the whole toolbar band is solid, so no
+            // record shows between the controls, with only a short fade.
+            let solidHeight = max(toolbarHeight, height)
+            SolidSurface.window(isDark: colorScheme == .dark)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: solidHeight / (solidHeight + 8)),
+                            .init(color: .black.opacity(0), location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(height: solidHeight + 8)
+                .allowsHitTesting(false)
+        } else {
+            glassEdge
+        }
+    }
+
+    private var glassEdge: some View {
         let total = max(height + fade, 1)
         let solid = Double(height / total)
         let tail = 1 - solid
-        ZStack {
+        return ZStack {
             Rectangle().fill(.bar)
             Rectangle().fill(shade.opacity(0.9))
         }

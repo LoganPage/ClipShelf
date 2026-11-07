@@ -224,8 +224,8 @@ struct PressRipple: View {
                     .fill(RadialGradient(
                         stops: [
                             .init(color: Color.white.opacity(0), location: 0),
-                            .init(color: Color.white.opacity(isDark ? 0.1 : 0.28), location: 0.7),
-                            .init(color: Color.white.opacity(isDark ? 0.18 : 0.5), location: 0.96),
+                            .init(color: Color.white.opacity(isDark ? 0.18 : 0.28), location: 0.7),
+                            .init(color: Color.white.opacity(isDark ? 0.34 : 0.5), location: 0.96),
                             .init(color: Color.white.opacity(0), location: 1)
                         ],
                         center: .center,
@@ -234,7 +234,7 @@ struct PressRipple: View {
                     ))
                 // A faint edge so the wave also shows on a white card.
                 Circle()
-                    .stroke(Color.primary.opacity(isDark ? 0.12 : 0.08), lineWidth: 1)
+                    .stroke(Color.primary.opacity(isDark ? 0.22 : 0.08), lineWidth: 1)
             }
             .frame(width: radius * 2, height: radius * 2)
             .position(seed.origin)
