@@ -70,6 +70,28 @@ enum ClipShelfSelfTest {
             failure: "Excluded clipboard changes would be processed repeatedly"
         ))
 
+        let forcedLook = AccessibilityLook.read(environment: [
+            "CLIPSHELF_REDUCE_TRANSPARENCY": "1",
+            "CLIPSHELF_INCREASE_CONTRAST": "1",
+            "CLIPSHELF_REDUCE_MOTION": "1"
+        ])
+        results.append(check(
+            name: "accessibility look can be forced for testing",
+            condition: forcedLook.reduceTransparency && forcedLook.increaseContrast && forcedLook.reduceMotion,
+            success: "Environment overrides switch on all three accessibility looks",
+            failure: "Environment overrides were ignored: \(forcedLook)"
+        ))
+        let systemLook = AccessibilityLook.read(environment: [:])
+        let workspace = NSWorkspace.shared
+        results.append(check(
+            name: "accessibility look follows the system",
+            condition: systemLook.reduceTransparency == workspace.accessibilityDisplayShouldReduceTransparency
+                && systemLook.increaseContrast == workspace.accessibilityDisplayShouldIncreaseContrast
+                && systemLook.reduceMotion == workspace.accessibilityDisplayShouldReduceMotion,
+            success: "Without overrides the look matches System Settings",
+            failure: "The look differs from System Settings: \(systemLook)"
+        ))
+
         var transientChangeCount = 20
         let transientShouldCapture = ClipboardHistoryPolicy.shouldCapture(
             historyEnabled: true,

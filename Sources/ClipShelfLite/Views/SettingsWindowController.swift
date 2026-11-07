@@ -775,6 +775,7 @@ private struct SettingsWindowRoot: View {
         SettingsView(store: store, watcher: watcher, onClose: onClose)
             .environment(\.glassTransparency, glassTransparency)
             .environment(\.glassStandIn, snapshotMode.isRendering)
+            .clipShelfAccessibilityLook()
             .scrollIndicators(snapshotMode.isRendering ? .hidden : .automatic)
             // The hidden titlebar shouldn't push the content down.
             .ignoresSafeArea()

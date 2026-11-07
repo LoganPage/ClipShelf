@@ -56,6 +56,8 @@ struct MainView: View {
     /// The search glass has poured out of its button to full width.
     @State private var isSearchExpanded = false
     @State private var searchButtonFrame: CGRect = .zero
+    /// Width of the toolbar row, which the search field spans when open.
+    @State private var toolbarRowWidth: CGFloat = 0
     /// While the search glass moves it shows a look-alike placeholder
     /// instead of the native text field, which is costly to animate.
     @State private var isSearchFieldLive = false
@@ -151,16 +153,19 @@ struct MainView: View {
                     .padding(.bottom, 24)
                     .id(copyToast.id)
                     .transition(
-                        .asymmetric(
-                            insertion: .move(edge: .bottom).combined(with: .scale(scale: 0.85)).combined(with: .opacity),
-                            removal: .opacity.combined(with: .scale(scale: 0.95))
-                        )
+                        AccessibilityLook.current.reduceMotion
+                            ? .opacity
+                            : .asymmetric(
+                                insertion: .move(edge: .bottom).combined(with: .scale(scale: 0.85)).combined(with: .opacity),
+                                removal: .opacity.combined(with: .scale(scale: 0.95))
+                            )
                     )
                     .allowsHitTesting(false)
             }
         }
         .frame(minWidth: 680, minHeight: 552)
         .environment(\.glassTransparency, glassTransparency)
+        .clipShelfAccessibilityLook()
         .preferredColorScheme(resolvedColorScheme)
         .background(WindowReader { window in
             hostWindow = window
@@ -414,6 +419,7 @@ struct MainView: View {
             titleRow
 
             HStack(spacing: 12) {
+                // Outside any glass container: its lens is its own glass.
                 LiquidSegmentedControl(
                     options: ClipKindFilter.allCases,
                     selection: $kindFilter,
@@ -423,16 +429,30 @@ struct MainView: View {
                 )
 
                 Spacer(minLength: 8)
-                primaryToolbar
+                // The toolbar buttons and the search field are one body of
+                // glass: the field melts out of its button and back into it.
+                mergingGlass {
+                    primaryToolbarButtons
+                        // The search field floats below the toolbar as its
+                        // own glass layer, over the list, like Spotlight:
+                        // records stay where they are. It spans the whole
+                        // toolbar row, out to the left of the buttons.
+                        .overlay(alignment: .bottomTrailing) {
+                            if isSearchVisible {
+                                searchRow
+                                    .frame(width: max(toolbarRowWidth, 1))
+                                    .offset(y: searchRowDistance)
+                            }
+                        }
+                }
             }
-        }
-        // The search field floats below the toolbar as its own glass layer,
-        // over the list, like Spotlight: records stay where they are.
-        .overlay(alignment: .bottom) {
-            if isSearchVisible {
-                searchRow
-                    .offset(y: searchRowDistance)
-            }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { toolbarRowWidth = proxy.size.width }
+                        .onChange(of: proxy.size.width) { toolbarRowWidth = $0 }
+                }
+            )
         }
         .coordinateSpace(name: ToolbarSpace.name)
         .padding(.horizontal, GlassMetrics.edgeInset)
@@ -553,14 +573,13 @@ struct MainView: View {
         .opacity(isSearchExpanded ? 1 : 0)
         .animation(.easeOut(duration: isSearchExpanded ? 0.18 : 0.08).delay(isSearchExpanded ? 0.24 : 0), value: isSearchExpanded)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // As see-through as the toolbar buttons look on their band: it floats
-        // over records, so plain clear glass let their text read through.
-        .background {
-            // The same glass as the toolbar buttons. The list is masked out
-            // behind it (see historyList), so no record text shows through.
-            Color.clear.clipShelfGlass(in: Capsule())
-        }
-        .clipShape(Capsule())
+        // The same glass as the toolbar buttons. The list is masked out
+        // behind it (see historyList), so no record text shows through.
+        // Applied to the field itself, not as a background: inside the
+        // toolbar's glass container a background glass is drawn over the
+        // text and bends it into ghost copies.
+        .contentShape(Capsule())
+        .clipShelfGlass(in: Capsule())
         // Lifted off the list, like Spotlight.
         .shadow(color: .black.opacity(isSearchExpanded ? 0.22 : 0), radius: 16, y: 8)
     }
@@ -579,7 +598,7 @@ struct MainView: View {
         let generation = searchMotionGeneration
         var plain = Transaction()
         plain.disablesAnimations = true
-        let motion = Animation.spring(response: 0.46, dampingFraction: 0.8)
+        let motion = Animation.clipShelf(.spring(response: 0.46, dampingFraction: 0.8))
         if visible {
             withTransaction(plain) {
                 isSearchFieldLive = false
@@ -604,7 +623,7 @@ struct MainView: View {
             let hadFocus = isSearchFocused
             if !searchText.isEmpty { searchText = "" }
             // No bounce on the way back: it settles into the button.
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.92)) {
+            withAnimation(.clipShelf(.spring(response: 0.4, dampingFraction: 0.92))) {
                 isSearchExpanded = false
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -621,14 +640,15 @@ struct MainView: View {
         }
     }
 
+    /// Glass shapes inside melt together when they come within 8pt of each
+    /// other (the toolbar groups sit 10pt apart, the open search field 10pt
+    /// below its button, so at rest they stay apart).
     @ViewBuilder
-    private var primaryToolbar: some View {
+    private func mergingGlass<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) {
-                primaryToolbarButtons
-            }
+            GlassEffectContainer(spacing: 8) { content() }
         } else {
-            primaryToolbarButtons
+            content()
         }
     }
 
@@ -765,7 +785,8 @@ struct MainView: View {
     }
 
     private func startListEntrance(from old: ClipKindFilter, to new: ClipKindFilter) {
-        guard listEntranceStyle != .off, old != new else {
+        // Reduce Motion: the new list simply appears.
+        guard listEntranceStyle != .off, old != new, !AccessibilityLook.current.reduceMotion else {
             listEntrance = nil
             return
         }
@@ -1030,7 +1051,7 @@ struct MainView: View {
         guard !items.isEmpty else { return }
         store.copy(items)
         let toast = CopyToast(count: items.count)
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+        withAnimation(.clipShelf(.spring(response: 0.42, dampingFraction: 0.72))) {
             copyToast = toast
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
@@ -1629,8 +1650,12 @@ private struct GlassTrafficLights: View {
 }
 
 private struct TrafficLightGlass: ViewModifier {
+    @Environment(\.accessibilityLook) private var look
+
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
+        if look.reduceTransparency {
+            content
+        } else if #available(macOS 26.0, *) {
             content.glassEffect(.clear, in: Circle())
         } else {
             content
@@ -1764,6 +1789,9 @@ private struct GlassToolbarIconButtonBody<Label: View>: View {
 /// changes, not on every store update or unrelated selection change.
 private struct ClipRow: View, Equatable {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityLook) private var look
+    /// The light spreading from the last click (see `PressRipple`).
+    @State private var ripple: PressRippleSeed?
     let item: ClipItem
     /// Not observed: the parent already re-renders rows whose data changed.
     let store: ClipStore
@@ -1838,8 +1866,9 @@ private struct ClipRow: View, Equatable {
     var body: some View {
         card
             .contentShape(Rectangle())
-            .onTapGesture {
+            .onTapGesture(coordinateSpace: .local) { location in
                 handleClick(NSApp.currentEvent)
+                startRipple(at: location)
             }
             .contextMenu {
                 ForEach(ClipRowMenu.orderedActions, id: \.self) { action in
@@ -1879,7 +1908,24 @@ private struct ClipRow: View, Equatable {
                 ) > 0
             )
             .animation(SelectionRowMotion.animation, value: isSelected)
+            .overlay {
+                if let ripple {
+                    PressRipple(seed: ripple)
+                        .id(ripple.id)
+                        .clipShape(RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous))
+                }
+            }
             .padding(.vertical, 3)
+    }
+
+    /// `location` is in the row's space, which has 3pt above the card.
+    private func startRipple(at location: CGPoint) {
+        guard !look.reduceMotion else { return }
+        let seed = PressRippleSeed(origin: CGPoint(x: location.x, y: location.y - 3))
+        ripple = seed
+        DispatchQueue.main.asyncAfter(deadline: .now() + PressRipple.duration + 0.05) {
+            if ripple == seed { ripple = nil }
+        }
     }
 
     private var selectedTextColor: Color {
@@ -2002,12 +2048,12 @@ private struct SelectionPop: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(shown ? 1 : 0.94)
+            .scaleEffect(shown || AccessibilityLook.current.reduceMotion ? 1 : 0.94)
             .opacity(shown ? 1 : 0)
             .onAppear {
                 guard !shown else { return }
                 // Softer and a little slower: a gentle swell, not a snap.
-                withAnimation(.spring(response: 0.46, dampingFraction: 0.74).delay(delay)) {
+                withAnimation(.clipShelf(.spring(response: 0.46, dampingFraction: 0.74)).delay(delay)) {
                     shown = true
                 }
             }
@@ -2019,6 +2065,7 @@ private struct SelectionGlassSlab: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
     @Environment(\.glassTransparency) private var transparency
+    @Environment(\.accessibilityLook) private var look
     let selectionColor: Color
     /// For multi-select: no blurred glow, which is costly with many panes.
     var lightweight = false
@@ -2052,7 +2099,12 @@ private struct SelectionGlassSlab: View {
             startPoint: .top,
             endPoint: .bottom
         )
-        if #available(macOS 26.0, *) {
+        if look.reduceTransparency {
+            // Solid: the card colour with the selection colour over it.
+            shape.fill(SolidSurface.card(isDark: isDark))
+                .overlay(shape.fill(selectionColor.opacity(isDark ? 0.45 : 0.3)))
+                .overlay(shape.strokeBorder(selectionColor.opacity(look.increaseContrast ? 1 : 0.7), lineWidth: look.increaseContrast ? 2 : 1.2))
+        } else if #available(macOS 26.0, *) {
             Color.clear
                 .glassEffect(
                     .regular.tint(selectionColor.opacity(isDark ? 0.38 : 0.34)),
@@ -2063,6 +2115,12 @@ private struct SelectionGlassSlab: View {
                 .background(glowImage)
                 // Rim and top sheen, one cached image.
                 .overlay(rimStroke(rim))
+                // Increase Contrast: a clear outline in the selection colour.
+                .overlay {
+                    if look.increaseContrast {
+                        shape.strokeBorder(selectionColor, lineWidth: 2)
+                    }
+                }
         } else {
             shape.fill(.ultraThinMaterial)
                 .overlay(shape.fill(selectionColor.opacity(isDark ? 0.38 : 0.34)))
@@ -2282,7 +2340,7 @@ private struct RowIconAction: View {
             .contentShape(Circle())
             .pressFeedback(isPressed)
             .animation(.easeOut(duration: 0.1), value: isHovered)
-            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
+            .animation(.clipShelf(.spring(response: 0.2, dampingFraction: 0.7)), value: isPressed)
             .modifier(OptionalHover(isEnabled: hoverEnabled) { inside in
                 setHovered(inside)
             })
@@ -2733,7 +2791,7 @@ private struct DragRangeHighlight: View {
                         .overlay(shape.strokeBorder(Color.accentColor.opacity(0.6), lineWidth: 1.2))
                         .frame(height: rowHeight - inset * 2)
                         .offset(y: CGFloat(index) * rowHeight + inset)
-                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                        .transition(AccessibilityLook.current.reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.97)))
                 }
             }
         }

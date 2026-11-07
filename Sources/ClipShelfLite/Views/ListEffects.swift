@@ -185,3 +185,64 @@ struct ListEntranceEffect: ViewModifier {
         }
     }
 }
+
+// MARK: - Press ripple
+
+/// One click on a card: where it landed, and a fresh id so a second click
+/// starts a new ripple instead of continuing the old one.
+struct PressRippleSeed: Equatable {
+    let id = UUID()
+    let origin: CGPoint
+}
+
+/// A soft wave of light that spreads out from where a card was clicked and
+/// fades as it goes, like touching liquid glass. Clipped to the card by the
+/// caller; never takes clicks.
+struct PressRipple: View {
+    let seed: PressRippleSeed
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var progress: CGFloat = 0
+
+    static let duration: TimeInterval = 0.6
+
+    var body: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            // Far enough to reach the card's farthest corner.
+            let reach = [
+                CGPoint(x: 0, y: 0), CGPoint(x: size.width, y: 0),
+                CGPoint(x: 0, y: size.height), CGPoint(x: size.width, y: size.height)
+            ]
+            .map { hypot($0.x - seed.origin.x, $0.y - seed.origin.y) }
+            .max() ?? 0
+            let radius = max(reach * progress, 1)
+            let isDark = colorScheme == .dark
+            ZStack {
+                // The light itself: brightest at the wave's front, so it
+                // reads as a ring of light moving outwards.
+                Circle()
+                    .fill(RadialGradient(
+                        stops: [
+                            .init(color: Color.white.opacity(0), location: 0),
+                            .init(color: Color.white.opacity(isDark ? 0.1 : 0.28), location: 0.7),
+                            .init(color: Color.white.opacity(isDark ? 0.18 : 0.5), location: 0.96),
+                            .init(color: Color.white.opacity(0), location: 1)
+                        ],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: radius
+                    ))
+                // A faint edge so the wave also shows on a white card.
+                Circle()
+                    .stroke(Color.primary.opacity(isDark ? 0.12 : 0.08), lineWidth: 1)
+            }
+            .frame(width: radius * 2, height: radius * 2)
+            .position(seed.origin)
+            .opacity(Double(1 - progress))
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            withAnimation(.easeOut(duration: Self.duration)) { progress = 1 }
+        }
+    }
+}

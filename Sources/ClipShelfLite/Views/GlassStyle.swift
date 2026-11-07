@@ -148,11 +148,65 @@ extension EnvironmentValues {
 
 // MARK: - Surfaces
 
+/// The inner rim that gives a card its thickness: light along the top,
+/// clear through the middle, shade along the bottom.
+enum CardDepth {
+    static func gradient(isDark: Bool) -> LinearGradient {
+        LinearGradient(
+            stops: isDark
+                ? [
+                    .init(color: Color.white.opacity(0.16), location: 0),
+                    .init(color: Color.white.opacity(0), location: 0.3),
+                    .init(color: Color.black.opacity(0), location: 0.7),
+                    .init(color: Color.black.opacity(0.32), location: 1)
+                ]
+                : [
+                    .init(color: Color.white.opacity(0.9), location: 0),
+                    .init(color: Color.white.opacity(0), location: 0.3),
+                    .init(color: Color.black.opacity(0), location: 0.7),
+                    .init(color: Color.black.opacity(0.09), location: 1)
+                ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
+/// A glass edge lit from above: bright where it faces the light, shaded
+/// across the lower side, with a faint glint along the bottom — instead of
+/// one even line all round.
+enum LitEdge {
+    static func gradient(isDark: Bool) -> LinearGradient {
+        LinearGradient(
+            stops: isDark
+                ? [
+                    .init(color: Color.white.opacity(0.42), location: 0),
+                    .init(color: Color.white.opacity(0.14), location: 0.35),
+                    .init(color: Color.black.opacity(0.28), location: 0.62),
+                    .init(color: Color.black.opacity(0.22), location: 0.85),
+                    .init(color: Color.white.opacity(0.2), location: 1)
+                ]
+                : [
+                    .init(color: Color.white.opacity(0.95), location: 0),
+                    .init(color: Color.white.opacity(0.45), location: 0.3),
+                    .init(color: Color.black.opacity(0.13), location: 0.6),
+                    .init(color: Color.black.opacity(0.11), location: 0.85),
+                    .init(color: Color.white.opacity(0.6), location: 1)
+                ],
+            // Top to bottom: on a wide capsule a diagonal would light the
+            // left end and shade the right instead of the top and bottom.
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
 /// One glass surface for every control: Apple's clear glass, the same as
 /// the type switcher's lens, tinted only as the slider moves towards tinted.
 private struct GlassSurface<S: Shape>: ViewModifier {
     @Environment(\.glassStandIn) private var standIn
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityLook) private var look
     let shape: S
     var interactive = false
     var tint: Color?
@@ -163,16 +217,35 @@ private struct GlassSurface<S: Shape>: ViewModifier {
 
     func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
-        if standIn {
+        let edge = shape.stroke(SurfaceEdge.color(isDark: isDark, look: look), lineWidth: SurfaceEdge.width(look: look))
+        if look.reduceTransparency {
+            // Solid, so nothing behind shows through; a tint (an "on"
+            // toggle, an active button) is laid over it at full strength.
+            content
+                .background {
+                    ZStack {
+                        shape.fill(SolidSurface.control(isDark: isDark))
+                        if let tint { shape.fill(tint) }
+                    }
+                }
+                .overlay(edge.opacity(outlined || look.increaseContrast ? 1 : 0))
+        } else if standIn {
             content
                 .background(shape.fill(Color.white.opacity(isDark ? 0.12 : 0.62)))
                 .overlay(shape.stroke(Color.white.opacity(isDark ? 0.16 : 0.85), lineWidth: 0.6))
         } else if #available(macOS 26.0, *) {
-            // A hairline outline keeps every control distinct from the card
-            // it sits on, however frosted that card is.
+            // An outline keeps every control distinct from the card it sits
+            // on, however frosted that card is. It is lit like glass rather
+            // than one even line; Increase Contrast keeps a plain strong line.
             content
                 .glassEffect(glass(isDark: isDark), in: shape)
-                .overlay(shape.stroke(isDark ? Color.white.opacity(0.16) : Color.black.opacity(0.1), lineWidth: 0.75).opacity(outlined ? 1 : 0))
+                .overlay {
+                    if look.increaseContrast {
+                        edge
+                    } else if outlined {
+                        shape.stroke(LitEdge.gradient(isDark: isDark), lineWidth: 0.75)
+                    }
+                }
         } else {
             content
                 .background(.ultraThinMaterial, in: shape)
@@ -195,18 +268,39 @@ private struct GlassSurface<S: Shape>: ViewModifier {
 private struct CardGlass: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.glassTransparency) private var transparency
+    @Environment(\.accessibilityLook) private var look
     let isHovered: Bool
     let isHidden: Bool
 
     func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
         let shape = RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
-        if #available(macOS 26.0, *) {
+        if look.reduceTransparency {
+            content
+                .background {
+                    if !isHidden {
+                        ZStack {
+                            shape.fill(SolidSurface.card(isDark: isDark))
+                            if isHovered {
+                                shape.fill(isDark ? Color.white.opacity(0.07) : Color.black.opacity(0.04))
+                            }
+                        }
+                    }
+                }
+                .overlay {
+                    if look.increaseContrast && !isHidden {
+                        shape.strokeBorder(SurfaceEdge.color(isDark: isDark, look: look), lineWidth: SurfaceEdge.width(look: look))
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: isHovered)
+        } else if #available(macOS 26.0, *) {
             // Glass cards on the tinted window glass, like dark mode: white
             // in light mode, smoked in dark mode so white text keeps contrast.
+            // Increase Contrast keeps the glass but frosts it far more, so
+            // text stays legible over any wallpaper, and outlines the card.
             let fill = isDark
-                ? Color.black.opacity(transparency.cardTint(isDark: true))
-                : Color.white.opacity(transparency.lightCardFill)
+                ? Color.black.opacity(look.increaseContrast ? max(transparency.cardTint(isDark: true), 0.6) : transparency.cardTint(isDark: true))
+                : Color.white.opacity(look.increaseContrast ? max(transparency.lightCardFill, 0.75) : transparency.lightCardFill)
             // Hover is a plain highlight inside the card: re-tinting one
             // card's glass redrew every card in the container (a flash
             // down the whole list as the pointer moved).
@@ -218,6 +312,18 @@ private struct CardGlass: ViewModifier {
                     }
                 }
                 .glassEffect(isHidden ? .identity : .clear.tint(fill), in: shape)
+                .overlay {
+                    if look.increaseContrast && !isHidden {
+                        shape.strokeBorder(SurfaceEdge.color(isDark: isDark, look: look), lineWidth: SurfaceEdge.width(look: look))
+                    } else if !isHidden {
+                        // Volume: a little light just inside the top edge
+                        // and a little shade inside the bottom, so the card
+                        // reads as a slab of glass even on a white backdrop.
+                        // A plain gradient line, no blur, so scrolling stays
+                        // cheap (a drop shadow would show through the glass).
+                        shape.strokeBorder(CardDepth.gradient(isDark: isDark), lineWidth: 1.5)
+                    }
+                }
                 .animation(.easeOut(duration: 0.12), value: isHovered)
         } else {
             content.background(shape.fill(.regularMaterial).opacity(isHidden ? 0 : 1))
@@ -360,10 +466,20 @@ final class WindowBackdropView: NSView {
                 view.bottomAnchor.constraint(equalTo: bottomAnchor)
             ])
         }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(accessibilityLookChanged),
+            name: AccessibilityLookMonitor.changedNotification,
+            object: nil
+        )
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func accessibilityLookChanged() {
+        set(level: shownLevel ?? GlassPreferences.value.level)
+    }
 
     private var isDark: Bool {
         effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -386,6 +502,13 @@ final class WindowBackdropView: NSView {
 
     private func set(level: Double) {
         shownLevel = level
+        if AccessibilityLook.current.reduceTransparency {
+            // Reduce Transparency: an opaque base, no desktop showing through.
+            glass?.isHidden = true
+            frosted.isHidden = true
+            tint.layer?.backgroundColor = SolidSurface.windowColor(isDark: isDark).cgColor
+            return
+        }
         let transparency = GlassTransparency(level: level)
         let useGlass = glass != nil
         glass?.isHidden = !useGlass

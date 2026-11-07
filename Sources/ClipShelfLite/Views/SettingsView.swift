@@ -492,7 +492,7 @@ struct SettingsView: View {
     /// Puts every shortcut back to its default; each capsule springs to
     /// its new width.
     private func restoreDefaultHotKeys() {
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) {
+        withAnimation(.clipShelf(.spring(response: 0.42, dampingFraction: 0.6))) {
             hotKey = .defaultValue
             clearSelectionHotKey = .defaultClearSelectionValue
             pinHotKey = .defaultPinValue

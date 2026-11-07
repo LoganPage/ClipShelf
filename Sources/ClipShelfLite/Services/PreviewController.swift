@@ -1178,7 +1178,16 @@ final class PreviewGlassBar: NSView {
         super.init(frame: frame)
         wantsLayer = true
         let background: NSView
-        if #available(macOS 26.0, *) {
+        if AccessibilityLook.current.reduceTransparency {
+            // Reduce Transparency: a solid bar.
+            let solid = NSView()
+            solid.wantsLayer = true
+            let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            solid.layer?.backgroundColor = SolidSurface.controlColor(isDark: isDark).cgColor
+            solid.layer?.cornerRadius = cornerRadius
+            solid.layer?.cornerCurve = .continuous
+            background = solid
+        } else if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.style = .clear
             glass.cornerRadius = cornerRadius

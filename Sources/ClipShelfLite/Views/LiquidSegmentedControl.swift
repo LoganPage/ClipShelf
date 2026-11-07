@@ -19,6 +19,7 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
     var onPressChange: ((Bool) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityLook) private var look
     /// Index the resting pill sits on; animated separately from `selection`
     /// so the list behind the control never animates with it.
     @State private var restingIndex: Int?
@@ -31,15 +32,24 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
     @State private var pressToken = 0
 
     private let inset: CGFloat = 4
-    private let settleSpring = Animation.spring(response: 0.44, dampingFraction: 0.56)
-    private let pressSpring = Animation.spring(response: 0.26, dampingFraction: 0.62)
-    private let followSpring = Animation.interactiveSpring(response: 0.18, dampingFraction: 0.78)
+    private var settleSpring: Animation { .clipShelf(.spring(response: 0.44, dampingFraction: 0.56)) }
+    private var pressSpring: Animation { .clipShelf(.spring(response: 0.26, dampingFraction: 0.62)) }
+    private var followSpring: Animation {
+        look.reduceMotion ? .linear(duration: 0.08) : .interactiveSpring(response: 0.18, dampingFraction: 0.78)
+    }
+    /// The glass lens that lifts out of the pill while pressed. With Reduce
+    /// Motion or Reduce Transparency the pill itself just slides instead.
+    private var showsLens: Bool {
+        isPressed && !look.reduceMotion && !look.reduceTransparency
+    }
 
     var body: some View {
         GeometryReader { proxy in
             let layout = Layout(width: proxy.size.width, height: height, inset: inset, count: options.count)
             let resting = restingIndex ?? selectedIndex
-            let center = dragCenter.map(layout.rubberBanded) ?? layout.center(of: resting)
+            // Reduce Motion: no rubber band past the ends, the pill just stops.
+            let center = dragCenter.map { look.reduceMotion ? layout.clamped($0) : layout.rubberBanded($0) }
+                ?? layout.center(of: resting)
             let highlighted = dragCenter == nil ? resting : layout.nearestIndex(to: center)
 
             ZStack(alignment: .topLeading) {
@@ -47,14 +57,14 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
 
                 restingPill(layout: layout)
                     .position(x: center, y: height / 2)
-                    .opacity(isPressed ? 0 : 1)
+                    .opacity(showsLens ? 0 : 1)
 
                 labels(layout: layout, highlighted: highlighted)
 
                 lens(layout: layout)
                     .position(x: center, y: height / 2)
-                    .opacity(isPressed ? 1 : 0)
-                    .scaleEffect(isPressed ? 1 : 0.6)
+                    .opacity(showsLens ? 1 : 0)
+                    .scaleEffect(showsLens ? 1 : 0.6)
                     .allowsHitTesting(false)
             }
             .contentShape(Capsule())
@@ -94,9 +104,18 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
     private var bar: some View {
         if !drawsBackground {
             Color.clear
+        } else if look.reduceTransparency {
+            Capsule()
+                .fill(SolidSurface.control(isDark: colorScheme == .dark))
+                .overlay(Capsule().stroke(SurfaceEdge.color(isDark: colorScheme == .dark, look: look), lineWidth: SurfaceEdge.width(look: look)))
         } else if #available(macOS 26.0, *) {
             Color.clear
                 .glassEffect(.regular, in: Capsule())
+                .overlay {
+                    if look.increaseContrast {
+                        Capsule().stroke(SurfaceEdge.color(isDark: colorScheme == .dark, look: look), lineWidth: SurfaceEdge.width(look: look))
+                    }
+                }
         } else {
             Capsule()
                 .fill(.regularMaterial)
@@ -106,7 +125,7 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
 
     private func restingPill(layout: Layout) -> some View {
         Capsule()
-            .fill(Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.09))
+            .fill(Color.primary.opacity(look.increaseContrast ? (colorScheme == .dark ? 0.32 : 0.2) : (colorScheme == .dark ? 0.16 : 0.09)))
             .frame(width: layout.segment, height: height - inset * 2)
             .scaleEffect(x: stretch, y: 1 / sqrt(stretch))
     }
@@ -171,7 +190,7 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
                 let target = max(0.82, 1 + speedStretch - min(overshoot / 220, 0.18))
                 withAnimation(followSpring) {
                     dragCenter = x
-                    stretch = target
+                    stretch = look.reduceMotion ? 1 : target
                 }
             }
             .onEnded { value in
@@ -222,7 +241,7 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
 
     /// Elongates briefly, then wobbles back: the "duang" on every jump.
     private func pulseStretch(by amount: CGFloat) {
-        guard amount > 0.01 else { return }
+        guard amount > 0.01, !look.reduceMotion else { return }
         withAnimation(.spring(response: 0.16, dampingFraction: 0.9)) {
             stretch = 1 + amount
         }
@@ -271,6 +290,11 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
             if x < minCenter { return minCenter - resist(minCenter - x) }
             if x > maxCenter { return maxCenter + resist(x - maxCenter) }
             return x
+        }
+
+        /// Follows the pointer inside the bar and stops at either end.
+        func clamped(_ x: CGFloat) -> CGFloat {
+            min(max(x, minCenter), maxCenter)
         }
     }
 }

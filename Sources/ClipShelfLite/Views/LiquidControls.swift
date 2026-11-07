@@ -11,6 +11,7 @@ struct LiquidToggle: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.glassTransparency) private var transparency
+    @Environment(\.accessibilityLook) private var look
     @State private var isPressed = false
     @State private var stretch: CGFloat = 1
 
@@ -34,7 +35,7 @@ struct LiquidToggle: View {
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in
                     guard !isPressed else { return }
-                    withAnimation(.spring(response: 0.26, dampingFraction: 0.7)) { isPressed = true }
+                    withAnimation(.clipShelf(.spring(response: 0.26, dampingFraction: 0.7))) { isPressed = true }
                 }
                 .onEnded { value in
                     let target: Bool
@@ -44,12 +45,12 @@ struct LiquidToggle: View {
                         target = !isOn
                     }
                     if target != isOn {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) { isOn = target }
+                        withAnimation(.clipShelf(.spring(response: 0.4, dampingFraction: 0.72))) { isOn = target }
                         pulseStretch()
                     }
                     // Hold the lens a moment while it travels, then drop it.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-                        withAnimation(.spring(response: 0.36, dampingFraction: 0.62)) { isPressed = false }
+                        withAnimation(.clipShelf(.spring(response: 0.36, dampingFraction: 0.62))) { isPressed = false }
                     }
                 }
         )
@@ -59,7 +60,10 @@ struct LiquidToggle: View {
         .accessibilityAction { isOn.toggle() }
     }
 
-    private var thumbWidth: CGFloat { isPressed ? knob * 1.55 : knob }
+    /// The knob lifts into a wider lens while pressed (not with Reduce Motion).
+    private var isLifted: Bool { isPressed && !look.reduceMotion }
+
+    private var thumbWidth: CGFloat { isLifted ? knob * 1.55 : knob }
 
     private var thumbCenter: CGFloat {
         isOn ? width - 2 - thumbWidth / 2 : 2 + thumbWidth / 2
@@ -69,24 +73,32 @@ struct LiquidToggle: View {
     private var thumb: some View {
         let shape = Capsule()
         let lensWidth = thumbWidth * stretch
-        let lensHeight = isPressed ? knob * 1.3 : knob
+        let lensHeight = isLifted ? knob * 1.3 : knob
         Group {
-            if #available(macOS 26.0, *) {
+            if look.reduceTransparency {
+                shape.fill(Color.white)
+            } else if #available(macOS 26.0, *) {
                 Color.clear
                     .glassEffect(.clear, in: shape)
                     // Solid at rest; nearly clear while lifted, so the lens
                     // shows the track through it.
-                    .background(shape.fill(Color.white.opacity(isPressed ? 0.12 : 0.95)))
+                    .background(shape.fill(Color.white.opacity(isLifted ? 0.12 : 0.95)))
             } else {
                 shape.fill(Color.white)
             }
         }
+        .overlay {
+            if look.increaseContrast {
+                shape.strokeBorder(Color.black.opacity(0.45), lineWidth: 1)
+            }
+        }
         .frame(width: lensWidth, height: lensHeight / sqrt(stretch))
-        .shadow(color: .black.opacity(isPressed ? 0.12 : 0.22), radius: isPressed ? 6 : 2, y: isPressed ? 2 : 1)
+        .shadow(color: .black.opacity(isLifted ? 0.12 : 0.22), radius: isLifted ? 6 : 2, y: isLifted ? 2 : 1)
     }
 
     /// The "duang": a quick stretch along the direction of travel.
     private func pulseStretch() {
+        guard !look.reduceMotion else { return }
         withAnimation(.spring(response: 0.18, dampingFraction: 0.9)) { stretch = 1.22 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.55)) { stretch = 1 }
@@ -111,6 +123,7 @@ struct GlassLevelSlider: View {
     let onPreview: (Double) -> Void
     let onCommit: (Double) -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityLook) private var look
     @State private var dragValue: Double?
     @State private var isLifted = false
     /// Signed pull past an end, after resistance (points).
@@ -121,12 +134,12 @@ struct GlassLevelSlider: View {
     private let knob: CGFloat = 24
     private let detent: Double = 0.5
     private let detentHalfWidth: Double = 0.055
-    private let liftSpring = Animation.spring(response: 0.32, dampingFraction: 0.72)
-    private let settleSpring = Animation.spring(response: 0.5, dampingFraction: 0.55)
+    private var liftSpring: Animation { .clipShelf(.spring(response: 0.32, dampingFraction: 0.72)) }
+    private var settleSpring: Animation { .clipShelf(.spring(response: 0.5, dampingFraction: 0.55)) }
     /// Snapping into and out of the middle: a short, bouncy spring.
-    private let detentSpring = Animation.spring(response: 0.26, dampingFraction: 0.5)
+    private var detentSpring: Animation { .clipShelf(.spring(response: 0.26, dampingFraction: 0.5)) }
     /// A tap on the track: the thumb glides over and overshoots a little.
-    private let tapSpring = Animation.spring(response: 0.38, dampingFraction: 0.62)
+    private var tapSpring: Animation { .clipShelf(.spring(response: 0.38, dampingFraction: 0.62)) }
 
     private var shown: Double { dragValue ?? value }
 
@@ -206,7 +219,8 @@ struct GlassLevelSlider: View {
                 }
                 // Past an end: pull with growing resistance, like iOS.
                 let beyond = raw < 0 ? CGFloat(raw) * usable : (raw > 1 ? CGFloat(raw - 1) * usable : 0)
-                let resisted = beyond / (1 + abs(beyond) / 70) * 0.75
+                // Reduce Motion: the thumb simply stops at the end.
+                let resisted = look.reduceMotion ? 0 : beyond / (1 + abs(beyond) / 70) * 0.75
                 if (raw < 0 || raw > 1), pull == 0 {
                     NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
                 }
@@ -247,22 +261,29 @@ struct GlassLevelSlider: View {
     private var thumb: some View {
         let shape = Capsule()
         let stretch = 1 + min(abs(pull) / 45, 0.7)
-        let width = (isLifted ? knob * 1.9 : knob) * stretch
-        let height = (isLifted ? knob * 1.45 : knob) / sqrt(stretch)
+        // The knob lifts into a lens while held (not with Reduce Motion).
+        let lens = isLifted && !look.reduceMotion
+        let width = (lens ? knob * 1.9 : knob) * stretch
+        let height = (lens ? knob * 1.45 : knob) / sqrt(stretch)
         Group {
-            if #available(macOS 26.0, *) {
+            if look.reduceTransparency {
+                shape.fill(Color.white)
+            } else if #available(macOS 26.0, *) {
                 // Not interactive glass: the lens is animated here, and the
                 // system's own press response would fight that motion.
                 Color.clear
                     .glassEffect(.clear, in: shape)
-                    .background(shape.fill(Color.white.opacity(isLifted ? 0.06 : 0.97)))
+                    .background(shape.fill(Color.white.opacity(lens ? 0.06 : 0.97)))
             } else {
-                shape.fill(Color.white.opacity(isLifted ? 0.6 : 1))
+                shape.fill(Color.white.opacity(lens ? 0.6 : 1))
             }
         }
         // A thin rim instead of a shadow: a blurred shadow had to be redrawn
         // on every frame of the lift.
-        .overlay(shape.strokeBorder(Color.black.opacity(isLifted ? 0.06 : 0.14), lineWidth: 0.5))
+        .overlay(shape.strokeBorder(
+            Color.black.opacity(look.increaseContrast ? 0.45 : (lens ? 0.06 : 0.14)),
+            lineWidth: look.increaseContrast ? 1 : 0.5
+        ))
         // Sized frame by frame, so at rest it is a true circle.
         .modifier(AnimatedSize(width: width, height: height))
     }
@@ -358,7 +379,7 @@ private struct LiquidGlassButtonBody: View {
             }
             .contentShape(Capsule())
             .pressFeedback(configuration.isPressed)
-            .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isActive)
+            .animation(.clipShelf(.spring(response: 0.35, dampingFraction: 0.75)), value: isActive)
             .opacity(isEnabled ? 1 : 0.45)
     }
 }
@@ -366,6 +387,7 @@ private struct LiquidGlassButtonBody: View {
 /// A softly pulsing accent rim, e.g. while a shortcut is being recorded.
 private struct BreathingRim: View {
     let isActive: Bool
+    @Environment(\.accessibilityLook) private var look
     @State private var bright = false
 
     var body: some View {
@@ -373,7 +395,10 @@ private struct BreathingRim: View {
             .strokeBorder(Color.accentColor.opacity(bright ? 0.95 : 0.35), lineWidth: 1.5)
             .opacity(isActive ? 1 : 0)
             .onChange(of: isActive) { active in
-                if active {
+                if active && look.reduceMotion {
+                    // Reduce Motion: a steady rim instead of a pulse.
+                    bright = true
+                } else if active {
                     withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
                         bright = true
                     }
@@ -410,7 +435,7 @@ struct LiquidMenu<Value: Hashable>: View {
 
     private let height = SettingsControlMetrics.height
     private let inset: CGFloat = 4
-    private static var growth: Animation { .spring(response: 0.4, dampingFraction: 0.74) }
+    private static var growth: Animation { .clipShelf(.spring(response: 0.4, dampingFraction: 0.74)) }
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -655,10 +680,11 @@ struct PressFeedback: ViewModifier {
     static let defaultScale: CGFloat = 1.06
     /// The shortest time the pressed look stays, so a click is visible.
     static let minimumHold: TimeInterval = 0.2
-    static let pressSpring = Animation.spring(response: 0.22, dampingFraction: 0.6)
-    static let releaseSpring = Animation.spring(response: 0.4, dampingFraction: 0.55)
+    static var pressSpring: Animation { .clipShelf(.spring(response: 0.22, dampingFraction: 0.6)) }
+    static var releaseSpring: Animation { .clipShelf(.spring(response: 0.4, dampingFraction: 0.55)) }
 
     @Environment(\.isInPressGroup) private var isInPressGroup
+    @Environment(\.accessibilityLook) private var look
     @State private var isShown = false
     @State private var pressedAt: CFTimeInterval = 0
     @State private var pressToken = 0
@@ -677,6 +703,9 @@ struct PressFeedback: ViewModifier {
     private func scaled(_ content: Content) -> some View {
         if isInPressGroup {
             content.preference(key: GroupPressKey.self, value: isPressed)
+        } else if look.reduceMotion {
+            // Reduce Motion: the control dims while pressed instead of swelling.
+            content.opacity(isShown ? 0.6 : 1)
         } else {
             content.scaleEffect(isShown ? scale : 1)
         }

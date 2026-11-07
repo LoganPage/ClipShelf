@@ -25,6 +25,8 @@ final class GenieAnimator {
     /// When > 0, the snapshot fades out over this long after the motion ends,
     /// dissolving into the real window underneath instead of switching.
     private var crossfade: TimeInterval = 0
+    /// Reduce Motion: the snapshot stays in place and only fades.
+    private var fadesOnly = false
     private var startTime: CFTimeInterval = 0
     private let stripCount = 120
     private let lead: CGFloat = 0.6
@@ -46,15 +48,19 @@ final class GenieAnimator {
         level: NSWindow.Level? = nil,
         completion: @escaping () -> Void
     ) -> GenieAnimator {
+        // Reduce Motion: no pouring out of the button; the window fades in
+        // (or out) where it stands.
+        let fadesOnly = AccessibilityLook.current.reduceMotion
         let animator = GenieAnimator(
             image: image,
-            source: source,
+            source: fadesOnly ? target : source,
             target: target,
             opening: opening,
-            duration: duration,
+            duration: fadesOnly ? min(duration, 0.2) : duration,
             parent: parent,
             completion: completion
         )
+        animator.fadesOnly = fadesOnly
         animator.crossfade = crossfade
         if let level { animator.window.level = level }
         running[ObjectIdentifier(animator)] = animator
@@ -115,7 +121,12 @@ final class GenieAnimator {
     }
 
     private func start() {
-        layout(progress: opening ? 0 : 1)
+        if fadesOnly {
+            layout(progress: 1)
+            window.alphaValue = opening ? 0 : 1
+        } else {
+            layout(progress: opening ? 0 : 1)
+        }
         window.orderFront(nil)
         startTime = CACurrentMediaTime()
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
@@ -128,7 +139,11 @@ final class GenieAnimator {
     private func tick() {
         let elapsed = CACurrentMediaTime() - startTime
         let linear = min(max(elapsed / duration, 0), 1)
-        layout(progress: CGFloat(opening ? linear : 1 - linear))
+        if fadesOnly {
+            window.alphaValue = CGFloat(opening ? linear : 1 - linear)
+        } else {
+            layout(progress: CGFloat(opening ? linear : 1 - linear))
+        }
         if linear >= 1 {
             finish()
         }
