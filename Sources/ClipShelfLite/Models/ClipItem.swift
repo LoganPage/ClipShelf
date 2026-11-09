@@ -20,6 +20,9 @@ struct ClipItem: Identifiable, Codable, Hashable {
     /// A picture saved inside history.json by earlier versions; moved into
     /// its own file when the history loads, and never written back.
     var legacyImageData: Data?
+    /// Size plus a hash of the start and end of a file from a watched
+    /// folder, so the same file downloaded again isn't kept twice.
+    var fileFingerprint: String?
     var sourcePath: String?
     var createdAt: Date
     var isPinned: Bool
@@ -33,6 +36,7 @@ struct ClipItem: Identifiable, Codable, Hashable {
         case imageFile
         case imageHash
         case imageData
+        case fileFingerprint
         case sourcePath
         case createdAt
         case isPinned
@@ -47,6 +51,7 @@ struct ClipItem: Identifiable, Codable, Hashable {
         imageFile: String? = nil,
         imageHash: String? = nil,
         legacyImageData: Data? = nil,
+        fileFingerprint: String? = nil,
         sourcePath: String? = nil,
         createdAt: Date = Date(),
         isPinned: Bool = false
@@ -59,6 +64,7 @@ struct ClipItem: Identifiable, Codable, Hashable {
         self.imageFile = imageFile
         self.imageHash = imageHash
         self.legacyImageData = legacyImageData
+        self.fileFingerprint = fileFingerprint
         self.sourcePath = sourcePath
         self.createdAt = createdAt
         self.isPinned = isPinned
@@ -74,6 +80,7 @@ struct ClipItem: Identifiable, Codable, Hashable {
         imageFile = try container.decodeIfPresent(String.self, forKey: .imageFile)
         imageHash = try container.decodeIfPresent(String.self, forKey: .imageHash)
         legacyImageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
+        fileFingerprint = try container.decodeIfPresent(String.self, forKey: .fileFingerprint)
         sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
@@ -90,6 +97,7 @@ struct ClipItem: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(imageHash, forKey: .imageHash)
         // Only for a picture that could not be moved into its own file.
         try container.encodeIfPresent(legacyImageData, forKey: .imageData)
+        try container.encodeIfPresent(fileFingerprint, forKey: .fileFingerprint)
         try container.encodeIfPresent(sourcePath, forKey: .sourcePath)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(isPinned, forKey: .isPinned)

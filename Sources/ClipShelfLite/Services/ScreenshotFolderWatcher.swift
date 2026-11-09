@@ -1,4 +1,6 @@
 import AppKit
+import CoreServices
+import CryptoKit
 import Foundation
 import ImageIO
 
@@ -24,6 +26,26 @@ struct WatchedFolderRule: Codable, Equatable {
     var content: Content
     /// Also put each new record on the clipboard, as screenshots do.
     var copiesToClipboard: Bool
+    /// Also take files that land in folders inside this one.
+    var includesSubfolders = false
+
+    init(content: Content, copiesToClipboard: Bool, includesSubfolders: Bool = false) {
+        self.content = content
+        self.copiesToClipboard = copiesToClipboard
+        self.includesSubfolders = includesSubfolders
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        content = try container.decode(Content.self, forKey: .content)
+        copiesToClipboard = try container.decode(Bool.self, forKey: .copiesToClipboard)
+        // Rules saved before subfolders were an option.
+        includesSubfolders = try container.decodeIfPresent(Bool.self, forKey: .includesSubfolders) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case content, copiesToClipboard, includesSubfolders
+    }
 
     /// The screenshot folder keeps the original behaviour; a folder added on
     /// purpose (often Downloads) takes images without taking over the
@@ -35,11 +57,30 @@ struct WatchedFolderRule: Codable, Equatable {
     }
 }
 
+/// Whether a watched folder can be watched right now.
+enum WatchedFolderStatus: Equatable {
+    case watching
+    /// Deleted, moved, or on a disk that isn't connected.
+    case missing
+    /// There, but macOS doesn't let ClipShelf read it.
+    case unreadable
+
+    var problem: String? {
+        switch self {
+        case .watching: nil
+        case .missing: "找不到这个文件夹：可能已删除、移走，或所在的磁盘没有连接"
+        case .unreadable: "无法读取这个文件夹：请在「系统设置 › 隐私与安全性 › 文件与文件夹」里允许 ClipShelf 访问"
+        }
+    }
+}
+
 final class ScreenshotFolderWatcher: ObservableObject {
     static let shared = ScreenshotFolderWatcher()
-    static let minimumRescanInterval: TimeInterval = 5
+    /// How often each folder is checked for still being there (a cheap
+    /// look at the folder itself, not a listing of its files).
+    static let statusCheckInterval: TimeInterval = 10
     /// How many folders can be watched at once.
-    static let maximumFolders = 3
+    static let maximumFolders = 8
 
     /// The watched folders, in the order they were added.
     @Published private(set) var folderURLs: [URL] = []
@@ -48,8 +89,8 @@ final class ScreenshotFolderWatcher: ObservableObject {
     var canAddFolder: Bool { folderURLs.count < Self.maximumFolders }
     /// Each folder's rule, by path; a folder without one uses the standard rule.
     @Published private(set) var rules: [String: WatchedFolderRule] = [:]
-    @Published private(set) var isRunning = false
-    @Published private(set) var statusText = "未选择截图文件夹"
+    /// Each folder's status, by path.
+    @Published private(set) var statuses: [String: WatchedFolderStatus] = [:]
 
     // The single folder of earlier versions, read once to migrate.
     private let bookmarkKey = "screenshotFolder.bookmark"
@@ -58,12 +99,13 @@ final class ScreenshotFolderWatcher: ObservableObject {
     private let pathsKey = "screenshotFolders.paths"
     private let rulesKey = "screenshotFolders.rules"
     private let queue = DispatchQueue(label: "ClipShelf.screenshot-folder", qos: .utility)
-    /// One file-system source per watched folder (each closes its own
-    /// descriptor when cancelled).
-    private var eventSources: [DispatchSourceFileSystemObject] = []
-    /// The folders `scan` reads, with their rules; only touched on `queue`.
-    private var scannedFolders: [(url: URL, rule: WatchedFolderRule)] = []
-    private var timer: DispatchSourceTimer?
+    /// One FSEvents stream for all folders: it names each file that changed,
+    /// so nothing has to list a whole folder (thousands of files in
+    /// Downloads) to find the new one.
+    private var stream: FSEventStreamRef?
+    private var statusTimer: DispatchSourceTimer?
+    /// The watched folders with their rules; only touched on `queue`.
+    private var watchedFolders: [WatchedFolder] = []
     private var pending: [URL: PendingFile] = [:]
     private var seen = Set<String>()
     private var startedAt = Date()
@@ -83,9 +125,19 @@ final class ScreenshotFolderWatcher: ObservableObject {
     func setRule(_ rule: WatchedFolderRule, for url: URL) {
         rules[Self.key(for: url)] = rule
         saveRules()
-        let folders = folderURLs.map { (url: $0, rule: self.rule(for: $0)) }
+        let folders = currentWatchedFolders()
         queue.async { [weak self] in
-            self?.scannedFolders = folders
+            self?.watchedFolders = folders
+        }
+    }
+
+    func status(for url: URL) -> WatchedFolderStatus {
+        statuses[Self.key(for: url)] ?? .watching
+    }
+
+    private func currentWatchedFolders() -> [WatchedFolder] {
+        folderURLs.map { url in
+            WatchedFolder(url: url, root: Self.realPath(of: url), rule: rule(for: url))
         }
     }
 
@@ -94,43 +146,56 @@ final class ScreenshotFolderWatcher: ObservableObject {
         return Self.key(for: url) == Self.key(for: screenshotFolder)
     }
 
+    /// Plain path, no resolving: `standardizedFileURL` only shortens
+    /// /private/tmp to /tmp while the folder exists, so a deleted folder
+    /// lost its status and rule.
     private static func key(for url: URL) -> String {
-        url.standardizedFileURL.path
+        let path = url.path
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    }
+
+    /// The path as FSEvents reports it. Not `resolvingSymlinksInPath`, which
+    /// shortens /private/tmp to /tmp so event paths never matched.
+    private static func realPath(of url: URL) -> String {
+        guard let resolved = realpath(url.path, nil) else { return url.path }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     func start() {
         stop()
         startedAt = Date()
 
-        let urls = folderURLs
-        guard !urls.isEmpty else {
-            updateStatus("未选择截图文件夹", running: false)
+        let folders = currentWatchedFolders()
+        guard !folders.isEmpty else {
+            DispatchQueue.main.async { self.statuses = [:] }
             return
         }
 
-        let names = urls.map(\.lastPathComponent).joined(separator: "、")
-        updateStatus("正在监听：\(names)", running: true)
-        for url in urls {
-            startEventSource(for: url)
-        }
-        startTimer()
-        let folders = urls.map { (url: $0, rule: rule(for: $0)) }
+        startStream(roots: folders.map(\.root))
+        startStatusTimer()
         queue.async { [weak self] in
-            self?.scannedFolders = folders
-            self?.scan()
+            guard let self else { return }
+            self.watchedFolders = folders
+            self.refreshStatuses()
+            // Anything that landed just before watching began.
+            folders.forEach(self.scan)
         }
     }
 
     func stop() {
-        timer?.cancel()
-        timer = nil
-        eventSources.forEach { $0.cancel() }
-        eventSources.removeAll()
+        statusTimer?.cancel()
+        statusTimer = nil
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            self.stream = nil
+        }
         queue.async { [weak self] in
             self?.pending.removeAll()
-            self?.scannedFolders = []
+            self?.watchedFolders = []
         }
-        updateStatus(folderURLs.isEmpty ? "未选择截图文件夹" : "已暂停", running: false)
     }
 
     /// Picks a folder to watch: it replaces the folder at `index`, or is
@@ -211,98 +276,170 @@ final class ScreenshotFolderWatcher: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([folderURLs[index]])
     }
 
-    private func startEventSource(for folderURL: URL) {
-        let fileDescriptor = open(folderURL.path, O_EVTONLY)
-        guard fileDescriptor >= 0 else {
-            updateStatus("无法监听：\(folderURL.lastPathComponent)", running: false)
+    private func startStream(roots: [String]) {
+        var context = FSEventStreamContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+        let callback: FSEventStreamCallback = { _, info, count, eventPaths, eventFlags, _ in
+            guard let info else { return }
+            let watcher = Unmanaged<ScreenshotFolderWatcher>.fromOpaque(info).takeUnretainedValue()
+            let paths = (unsafeBitCast(eventPaths, to: NSArray.self) as? [String]) ?? []
+            let flags = Array(UnsafeBufferPointer(start: eventFlags, count: count))
+            watcher.handle(paths: paths, flags: flags)
+        }
+        let createFlags = FSEventStreamCreateFlags(
+            kFSEventStreamCreateFlagUseCFTypes
+                | kFSEventStreamCreateFlagFileEvents
+                | kFSEventStreamCreateFlagNoDefer
+                | kFSEventStreamCreateFlagWatchRoot
+        )
+        guard let stream = FSEventStreamCreate(
+            nil,
+            callback,
+            &context,
+            roots as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.05,
+            createFlags
+        ) else {
+            NSLog("ClipShelf could not start watching folders")
             return
         }
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
-            eventMask: [.write, .extend, .attrib, .rename],
-            queue: queue
-        )
-
-        source.setEventHandler { [weak self] in
-            self?.scan()
-        }
-
-        source.setCancelHandler {
-            close(fileDescriptor)
-        }
-
-        eventSources.append(source)
-        source.resume()
+        FSEventStreamSetDispatchQueue(stream, queue)
+        FSEventStreamStart(stream)
+        self.stream = stream
     }
 
-    private func startTimer() {
+    private func startStatusTimer() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        let interval = DispatchTimeInterval.milliseconds(Int(Self.minimumRescanInterval * 1_000))
+        let interval = DispatchTimeInterval.milliseconds(Int(Self.statusCheckInterval * 1_000))
         timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { [weak self] in
-            self?.scan()
+            self?.refreshStatuses()
         }
-        self.timer = timer
+        statusTimer = timer
         timer.resume()
     }
 
-    private func scan() {
-        guard !scannedFolders.isEmpty else { return }
-        var files: [(url: URL, rule: WatchedFolderRule)] = []
-        for folder in scannedFolders {
-            guard let contents = try? FileManager.default.contentsOfDirectory(
-                at: folder.url,
-                includingPropertiesForKeys: Self.fileKeys,
-                options: [.skipsHiddenFiles]
-            ) else {
-                updateStatus("无法读取：\(folder.url.lastPathComponent)", running: false)
+    /// On `queue`.
+    private func handle(paths: [String], flags: [FSEventStreamEventFlags]) {
+        var foldersToScan = Set<String>()
+        for (path, flag) in zip(paths, flags) {
+            let flag = Int(flag)
+            if flag & (kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagMount | kFSEventStreamEventFlagUnmount) != 0 {
+                refreshStatuses()
                 continue
             }
-            files += contents
-                .filter { Self.isImportable($0, content: folder.rule.content) }
-                .map { (url: $0, rule: folder.rule) }
-        }
-
-        let candidates = files.compactMap { file -> (url: URL, rule: WatchedFolderRule, arrivedAt: Date)? in
-            let url = file.url
-            guard !seen.contains(url.path),
-                  let values = try? url.resourceValues(forKeys: Set(Self.fileKeys)),
-                  values.isRegularFile == true,
-                  let arrivedAt = Self.arrivalDate(values),
-                  arrivedAt >= startedAt.addingTimeInterval(-3),
-                  Date().timeIntervalSince(arrivedAt) < 120 else {
-                return nil
+            guard let folder = watchedFolders.first(where: { path == $0.root || path.hasPrefix($0.root + "/") }) else {
+                continue
             }
-
-            return (url, file.rule, arrivedAt)
+            // Events were dropped or merged: look through the folder itself.
+            if flag & (kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0 {
+                foldersToScan.insert(folder.root)
+                continue
+            }
+            guard flag & kFSEventStreamEventFlagItemIsFile != 0, path != folder.root else { continue }
+            let relative = path.dropFirst(folder.root.count + 1)
+            guard folder.rule.includesSubfolders || !relative.contains("/") else { continue }
+            // Nothing inside hidden folders or app bundles.
+            guard !relative.split(separator: "/").contains(where: { $0.hasPrefix(".") }) else { continue }
+            consider(URL(fileURLWithPath: path), rule: folder.rule)
         }
-        .sorted { $0.arrivedAt < $1.arrivedAt }
-
-        for candidate in candidates {
-            importWhenStable(candidate.url, rule: candidate.rule)
+        for folder in watchedFolders where foldersToScan.contains(folder.root) {
+            scan(folder)
         }
-        // A screenshot still settling is checked again right away, not on
-        // the next folder event or the 5 s fallback scan: it used to land
-        // seconds late, so the clipboard still held the previous record.
-        // Give up on files that never settle into a valid image.
+        scheduleFollowUpIfNeeded()
+    }
+
+    /// Lists a whole folder. Only when starting and when FSEvents says it
+    /// lost track; normally each changed file is named by its event.
+    private func scan(_ folder: WatchedFolder) {
+        let keys = Self.fileKeys
+        let files: [URL]
+        if folder.rule.includesSubfolders {
+            let enumerator = FileManager.default.enumerator(
+                at: folder.url,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            )
+            files = (enumerator?.allObjects as? [URL]) ?? []
+        } else {
+            files = (try? FileManager.default.contentsOfDirectory(
+                at: folder.url,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        }
+        for url in files {
+            consider(url, rule: folder.rule)
+        }
+        scheduleFollowUpIfNeeded()
+    }
+
+    /// Takes the file in if it is new and the folder's rule wants it.
+    private func consider(_ url: URL, rule: WatchedFolderRule) {
+        guard !seen.contains(url.path),
+              Self.isImportable(url, content: rule.content),
+              let values = try? url.resourceValues(forKeys: Set(Self.fileKeys)),
+              values.isRegularFile == true,
+              let arrivedAt = Self.arrivalDate(values),
+              arrivedAt >= startedAt.addingTimeInterval(-3),
+              Date().timeIntervalSince(arrivedAt) < 120 else {
+            return
+        }
+        importWhenStable(url, rule: rule)
+    }
+
+    /// A file still being written is checked again right away rather than
+    /// waiting for another event: writing into a file raises none for the
+    /// folder, and a screenshot used to land seconds late. Files that never
+    /// settle are given up after 10 s.
+    private func scheduleFollowUpIfNeeded() {
         pending = pending.filter { Date().timeIntervalSince($0.value.firstSeenAt) < 10 }
-        if !pending.isEmpty, !isFollowUpScheduled {
-            isFollowUpScheduled = true
-            queue.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                self?.isFollowUpScheduled = false
-                self?.scan()
+        guard !pending.isEmpty, !isFollowUpScheduled else { return }
+        isFollowUpScheduled = true
+        queue.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self else { return }
+            self.isFollowUpScheduled = false
+            for (url, file) in self.pending {
+                self.importWhenStable(url, rule: file.rule)
             }
+            self.scheduleFollowUpIfNeeded()
+        }
+    }
+
+    /// On `queue`.
+    private func refreshStatuses() {
+        var updated = [String: WatchedFolderStatus]()
+        for folder in watchedFolders {
+            var isDirectory: ObjCBool = false
+            let status: WatchedFolderStatus
+            if !FileManager.default.fileExists(atPath: folder.url.path, isDirectory: &isDirectory) || !isDirectory.boolValue {
+                status = .missing
+            } else if !FileManager.default.isReadableFile(atPath: folder.url.path) {
+                status = .unreadable
+            } else {
+                status = .watching
+            }
+            updated[Self.key(for: folder.url)] = status
+        }
+        DispatchQueue.main.async {
+            if self.statuses != updated { self.statuses = updated }
         }
     }
 
     private func importWhenStable(_ url: URL, rule: WatchedFolderRule) {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attributes[.size] as? UInt64 else {
+            pending.removeValue(forKey: url)
             return
         }
 
-        var item = pending[url] ?? PendingFile(lastSize: size)
+        var item = pending[url] ?? PendingFile(lastSize: size, rule: rule)
         if item.lastSize == size {
             item.stableTicks += 1
         } else {
@@ -310,8 +447,7 @@ final class ScreenshotFolderWatcher: ObservableObject {
             item.stableTicks = 0
         }
         // Kept pending while still empty: writing into a file raises no
-        // folder event, so without the quick re-check a file first seen at
-        // 0 bytes waited for the 5 s fallback scan.
+        // folder event, so a file first seen at 0 bytes needs the re-check.
         pending[url] = item
 
         guard size > 0,
@@ -329,8 +465,29 @@ final class ScreenshotFolderWatcher: ObservableObject {
         } else {
             seen.insert(url.path)
             pending.removeValue(forKey: url)
-            ClipStore.shared.addWatchedFile(url, copyToClipboard: rule.copiesToClipboard)
+            ClipStore.shared.addWatchedFile(
+                url,
+                fingerprint: Self.fingerprint(of: url, size: size),
+                copyToClipboard: rule.copiesToClipboard
+            )
         }
+    }
+
+    /// Tells copies of one file apart from different files without reading
+    /// all of a large one: its size and the first and last 64 KB.
+    static func fingerprint(of url: URL, size: UInt64) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let chunk = 64 * 1024
+        var hasher = SHA256()
+        guard let head = try? handle.read(upToCount: chunk) else { return nil }
+        hasher.update(data: head)
+        if size > UInt64(chunk * 2) {
+            try? handle.seek(toOffset: size - UInt64(chunk))
+            if let tail = try? handle.read(upToCount: chunk) { hasher.update(data: tail) }
+        }
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return "\(size)-\(digest)"
     }
 
     private static let fileKeys: [URLResourceKey] = [
@@ -485,15 +642,16 @@ final class ScreenshotFolderWatcher: ObservableObject {
         return FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
     }
 
-    private func updateStatus(_ text: String, running: Bool) {
-        DispatchQueue.main.async {
-            self.statusText = text
-            self.isRunning = running
-        }
+    private struct WatchedFolder {
+        let url: URL
+        /// The folder's real path, as FSEvents reports paths in it.
+        let root: String
+        let rule: WatchedFolderRule
     }
 
     private struct PendingFile {
         var lastSize: UInt64
+        let rule: WatchedFolderRule
         var stableTicks = 0
         var firstSeenAt = Date()
     }

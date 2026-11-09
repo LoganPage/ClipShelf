@@ -70,9 +70,14 @@ final class ClipStore: ObservableObject {
 
     /// Any other new file in a watched folder: the record points at the file,
     /// and copying it puts the file itself on the clipboard.
-    func addWatchedFile(_ url: URL, copyToClipboard: Bool) {
+    func addWatchedFile(_ url: URL, fingerprint: String?, copyToClipboard: Bool) {
         runOnMain {
-            let item = ClipItem(kind: .file, title: url.lastPathComponent, filePaths: [url.path])
+            let item = ClipItem(
+                kind: .file,
+                title: url.lastPathComponent,
+                filePaths: [url.path],
+                fileFingerprint: fingerprint
+            )
             self.add(item)
             if copyToClipboard {
                 self.writeToPasteboard(item)
@@ -456,13 +461,18 @@ final class ClipStore: ObservableObject {
         case .text:
             return lhs.text == rhs.text
         case .file:
+            // The same file again under another name ("report (1).pdf").
+            if let left = lhs.fileFingerprint, let right = rhs.fileFingerprint, left == right {
+                return true
+            }
             return FileHistoryBatchPlanner.sharesPath(lhs, rhs)
         case .image:
+            // The same picture, wherever it came from.
+            if let leftHash = lhs.imageHash, let rightHash = rhs.imageHash, leftHash == rightHash {
+                return true
+            }
             if let leftPath = lhs.sourcePath, let rightPath = rhs.sourcePath {
                 return leftPath == rightPath
-            }
-            if let leftHash = lhs.imageHash, let rightHash = rhs.imageHash {
-                return leftHash == rightHash
             }
             return lhs.legacyImageData != nil && lhs.legacyImageData == rhs.legacyImageData
         }

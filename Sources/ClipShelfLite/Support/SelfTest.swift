@@ -1396,14 +1396,15 @@ enum ClipShelfSelfTest {
 
         let screenshotWatcher = ScreenshotFolderWatcher.shared
         results.append(check(
-            name: "screenshot folder watcher rescans on a slow fallback interval",
-            condition: ScreenshotFolderWatcher.minimumRescanInterval >= 5
+            name: "screenshot folder watcher keeps its screenshot name rules and only a slow status check",
+            condition: ScreenshotFolderWatcher.statusCheckInterval >= 5
+                && ScreenshotFolderWatcher.maximumFolders == 8
                 && screenshotWatcher.isLikelyScreenshot(URL(fileURLWithPath: "/tmp/截屏 2026-10-02.png"))
                 && screenshotWatcher.isLikelyScreenshot(URL(fileURLWithPath: "/tmp/Screenshot 2026-10-02.HEIC"))
                 && !screenshotWatcher.isLikelyScreenshot(URL(fileURLWithPath: "/tmp/photo.png"))
                 && !screenshotWatcher.isLikelyScreenshot(URL(fileURLWithPath: "/tmp/截屏 2026-10-02.txt")),
-            success: "Event monitoring keeps a five-second fallback while screenshot name and extension rules stay intact",
-            failure: "Fallback interval or screenshot eligibility changed"
+            success: "FSEvents names each changed file; folders are only re-checked for existence every few seconds, and screenshot rules stay intact",
+            failure: "Status interval, folder limit or screenshot eligibility changed"
         ))
 
         results.append(check(
@@ -1423,6 +1424,32 @@ enum ClipShelfSelfTest {
                 && WatchedFolderRule.standard(isScreenshotFolder: false) == WatchedFolderRule(content: .images, copiesToClipboard: false),
             success: "Each folder takes screenshots, images or all finished files as its rule says",
             failure: "Folder import rules changed"
+        ))
+
+        let fingerprintDirectory = temporaryRoot.appendingPathComponent("fingerprints", isDirectory: true)
+        try? FileManager.default.createDirectory(at: fingerprintDirectory, withIntermediateDirectories: true)
+        let bigPayload = Data((0..<300_000).map { UInt8($0 % 251) })
+        var changedEnd = bigPayload
+        changedEnd[bigPayload.count - 10] ^= 0xFF
+        func fingerprint(_ data: Data, _ name: String) -> String? {
+            let url = fingerprintDirectory.appendingPathComponent(name)
+            try? data.write(to: url)
+            return ScreenshotFolderWatcher.fingerprint(of: url, size: UInt64(data.count))
+        }
+        let originalPrint = fingerprint(bigPayload, "report.pdf")
+        let legacyRule = try? JSONDecoder().decode(
+            WatchedFolderRule.self,
+            from: Data(#"{"content":"files","copiesToClipboard":true}"#.utf8)
+        )
+        results.append(check(
+            name: "watched files are recognised by content, and older folder rules still load",
+            condition: originalPrint != nil
+                && originalPrint == fingerprint(bigPayload, "report (1).pdf")
+                && originalPrint != fingerprint(changedEnd, "edited.pdf")
+                && originalPrint != fingerprint(Data(bigPayload.prefix(299_999)), "shorter.pdf")
+                && legacyRule == WatchedFolderRule(content: .files, copiesToClipboard: true, includesSubfolders: false),
+            success: "A renamed copy shares its fingerprint, an edited or shorter file does not, and rules without the subfolder option decode",
+            failure: "File fingerprints or rule decoding changed"
         ))
 
         let fuzzyLiteralResults = [

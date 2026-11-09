@@ -319,7 +319,7 @@ struct SettingsView: View {
                 }
             }
 
-            Text("每个文件夹可以分别设置收什么、要不要自动复制。原文件都会保留；正在下载的文件等下载完才收。截图时请关闭右下角浮动缩略图。")
+            Text("每个文件夹可以分别设置收什么、要不要自动复制、是否包括子文件夹。原文件都会保留；正在下载的文件等下载完才收，同一个文件再下载一次不会重复记录。截图时请关闭右下角浮动缩略图。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -328,6 +328,12 @@ struct SettingsView: View {
     @ViewBuilder
     private func folderRuleRows(for url: URL) -> some View {
         let rule = watcher.rule(for: url)
+        if let problem = watcher.status(for: url).problem {
+            Label(problem, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         HStack {
             Text("收进来")
             Spacer()
@@ -350,6 +356,14 @@ struct SettingsView: View {
             set: { copies in
                 var updated = watcher.rule(for: url)
                 updated.copiesToClipboard = copies
+                watcher.setRule(updated, for: url)
+            }
+        ))
+        settingsToggle("包括子文件夹", isOn: Binding(
+            get: { rule.includesSubfolders },
+            set: { includes in
+                var updated = watcher.rule(for: url)
+                updated.includesSubfolders = includes
                 watcher.setRule(updated, for: url)
             }
         ))
@@ -723,15 +737,30 @@ private struct OverlayScrollerConfigurator: NSViewRepresentable {
 private struct DoneGlassButton: View {
     let size: CGFloat
     let action: () -> Void
+    /// Held pressed from the click until settings starts folding away.
+    @State private var isConfirming = false
+
+    /// Long enough for the swell to show (the press spring is most of the
+    /// way there by then); closing at once on release swapped the page for
+    /// its snapshot before the press was ever seen.
+    private static let confirmDelay: TimeInterval = 0.14
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            guard !isConfirming else { return }
+            isConfirming = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.confirmDelay) {
+                action()
+                isConfirming = false
+            }
+        } label: {
             Image(systemName: "checkmark")
                 .font(.system(size: 16, weight: .bold))
                 .frame(width: size, height: size)
                 .contentShape(Circle())
         }
-        .buttonStyle(PressFeedbackButtonStyle())
+        // Also for Return, which presses the button without a pointer.
+        .buttonStyle(DoneButtonStyle(isConfirming: isConfirming))
         .keyboardShortcut(.defaultAction)
         // The same clear glass as the 设置 capsule.
         .clipShelfGlass(in: Circle())
@@ -748,6 +777,15 @@ private struct DoneGlassButton: View {
     }
 }
 
+
+private struct DoneButtonStyle: ButtonStyle {
+    let isConfirming: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .pressFeedback(configuration.isPressed || isConfirming)
+    }
+}
 
 /// While set, settings rows drop their edge blur. Only for the one-off CPU
 /// render made before settings is first shown (see `SettingsWindowController`);
