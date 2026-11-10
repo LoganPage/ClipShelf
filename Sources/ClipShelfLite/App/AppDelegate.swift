@@ -24,23 +24,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         CursorSetCoalescer.install()
         normalizeGlobalHotKeyIfNeeded()
         AppIconPreferences.applySavedChoice()
-        updateDockIcon(animated: false)
+        prepareDockIcon()
         // Selection colour and click-recovery time are no longer in Settings:
         // everyone uses the defaults.
         if SelectionColorPreferences.selectedPreset != .coolGrayBlue {
             SelectionColorPreferences.reset()
         }
         DragSelectionPreferences.resetToDefault()
-        configureStatusItem()
         showWindow()
-        DispatchQueue.main.async {
-            Self.closeEmptySystemSettingsWindows()
+        // Not needed for the first frame: done once the window is drawn.
+        LaunchDeferral.afterFirstFrame { [weak self] in
+            self?.configureStatusItem()
+            HotKeyManager.shared.register()
         }
         watcher.start()
         HotKeyManager.shared.action = { [weak self] in
             self?.showWindow()
         }
-        HotKeyManager.shared.register()
         do {
             controlServer = try RuntimeControlServer.startIfConfigured(store: store)
         } catch {
@@ -208,9 +208,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 window.standardWindowButton(button)?.isHidden = true
             }
             window.center()
-            let backdrop = Self.makeVibrantContentView(
-                hosting: ClipShelfHostingView(rootView: MainView(store: store, watcher: watcher))
-            )
+            let hosting = ClipShelfHostingView(rootView: MainView(store: store, watcher: watcher))
+            // The window's minimum size is set directly below. Letting the
+            // hosting view derive it made SwiftUI size the whole main view
+            // once more before its first layout (~50 ms at launch).
+            hosting.sizingOptions = []
+            // Full-size content: the content view is the whole window.
+            window.minSize = MainView.minimumSize
+            let backdrop = Self.makeVibrantContentView(hosting: hosting)
             self.backdrop = backdrop
             window.contentView = backdrop
             window.isReleasedWhenClosed = false
@@ -227,16 +232,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return backdrop
     }
 
-    /// SwiftUI's placeholder Settings scene is never used (settings live in the
-    /// main window), but macOS can restore it from an earlier session as a blank
-    /// window. Close it and stop it from being restored again.
-    private static func closeEmptySystemSettingsWindows() {
-        for window in NSApp.windows where window.identifier?.rawValue.contains("Settings_window") == true {
-            window.isRestorable = false
-            window.close()
-        }
-    }
-
     @objc func chooseFolder() {
         watcher.chooseFolder()
     }
@@ -245,9 +240,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         store.isClipboardHistoryEnabled.toggle()
     }
 
+    @objc func toggleSettingsFromMenuBar() {
+        toggleSettingsFromShortcut()
+    }
+
     func toggleSettingsFromShortcut() {
         if SettingsWindowController.shared.isVisible {
-            SettingsWindowController.shared.close()
+            SettingsWindowController.shared.requestClose()
         } else {
             showSettings()
         }
@@ -306,6 +305,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var dockIconIsDark: Bool?
     private var dockIconTimer: Timer?
+
+    /// At launch the Dock already shows the bundle icon, which is the light
+    /// one, so only a dark appearance needs a new tile. Drawing it takes
+    /// ~0.1 s, so that waits until the window is drawn.
+    private func prepareDockIcon() {
+        guard AppearancePreferences.resolvedColorScheme == .dark else {
+            dockIconIsDark = false
+            return
+        }
+        LaunchDeferral.afterFirstFrame { [weak self] in
+            self?.updateDockIcon(animated: false)
+        }
+    }
 
     /// The running app's Dock tile follows light / dark mode, melting from
     /// one glass icon into the other instead of switching abruptly.

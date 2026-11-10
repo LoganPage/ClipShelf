@@ -732,58 +732,114 @@ private struct OverlayScrollerConfigurator: NSViewRepresentable {
     }
 }
 
-/// Round, tinted Liquid Glass checkmark, like the confirm button on macOS 26
-/// system sheets. Return also triggers it.
+/// How ✓ looks pressed; the closing image draws it the same way.
+enum DoneButtonLook {
+    static let pressedScale: CGFloat = 1.14
+    static let litOpacity: CGFloat = 0.9
+    static let symbolSize: CGFloat = 16
+}
+
+/// Round Liquid Glass checkmark, like the confirm button on macOS 26
+/// system sheets. Return, Esc and the close shortcuts confirm through it too.
 private struct DoneGlassButton: View {
     let size: CGFloat
     let action: () -> Void
-    /// Held pressed from the click until settings starts folding away.
+    /// Held pressed from the click until settings has folded away.
     @State private var isConfirming = false
 
-    /// Long enough for the swell to show (the press spring is most of the
+    /// Long enough for the press to show (the press spring is most of the
     /// way there by then); closing at once on release swapped the page for
     /// its snapshot before the press was ever seen.
     private static let confirmDelay: TimeInterval = 0.14
 
     var body: some View {
-        Button {
-            guard !isConfirming else { return }
-            isConfirming = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.confirmDelay) {
-                action()
-                isConfirming = false
-            }
-        } label: {
+        Button(action: confirm) {
             Image(systemName: "checkmark")
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: DoneButtonLook.symbolSize, weight: .bold))
                 .frame(width: size, height: size)
                 .contentShape(Circle())
         }
-        // Also for Return, which presses the button without a pointer.
         .buttonStyle(DoneButtonStyle(isConfirming: isConfirming))
         .keyboardShortcut(.defaultAction)
-        // The same clear glass as the 设置 capsule.
-        .clipShelfGlass(in: Circle())
-        // The whole glass circle answers the press, not just the ✓.
-        .pressGroup()
         // Prepare the closing animation while the pointer is on its way to click.
         .onHover { inside in
             if inside {
                 SettingsWindowController.shared.prefetchClosingSnapshot()
             }
         }
+        // Where the closing image draws ✓ lit.
+        .background {
+            GeometryReader { proxy in
+                let frame = proxy.frame(in: .global)
+                Color.clear
+                    .onAppear { SettingsWindowController.shared.doneButtonFrame = frame }
+                    .onChange(of: frame) { SettingsWindowController.shared.doneButtonFrame = $0 }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SettingsWindowController.confirmCloseNotification)) { _ in
+            confirm()
+        }
+        // Stays lit while folding away; un-lights out of sight.
+        .onReceive(NotificationCenter.default.publisher(for: SettingsWindowController.didCloseNotification)) { _ in
+            isConfirming = false
+        }
         .help("完成")
         .accessibilityLabel("完成")
     }
+
+    private func confirm() {
+        SettingsWindowController.shared.doneWillConfirm()
+        guard !isConfirming else { return }
+        isConfirming = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.confirmDelay) {
+            action()
+        }
+    }
 }
 
-
+/// Pressed, the whole glass circle swells clearly and fills with the
+/// accent colour, the ✓ turning white, like a system confirm button.
 private struct DoneButtonStyle: ButtonStyle {
     let isConfirming: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .pressFeedback(configuration.isPressed || isConfirming)
+        DoneButtonBody(label: configuration.label, isPressed: configuration.isPressed || isConfirming)
+    }
+}
+
+private struct DoneButtonBody<Label: View>: View {
+    @Environment(\.accessibilityLook) private var look
+    let label: Label
+    let isPressed: Bool
+    /// Follows the press, but stays a moment after a quick click, like the
+    /// swell itself (see `PressFeedback.minimumHold`).
+    @State private var isLit = false
+    @State private var pressedAt: CFTimeInterval = 0
+
+    var body: some View {
+        label
+            .foregroundStyle(isLit ? Color.white : Color.primary)
+            // The colour fades in on the glass, rather than re-tinting the
+            // glass itself, which swapped it in one step.
+            .background {
+                Circle()
+                    .fill(Color.accentColor)
+                    .opacity(isLit ? DoneButtonLook.litOpacity : 0)
+            }
+            .clipShelfGlass(in: Circle())
+            .pressFeedback(isPressed, scale: DoneButtonLook.pressedScale)
+            .onChange(of: isPressed) { pressed in
+                if pressed {
+                    pressedAt = CACurrentMediaTime()
+                    withAnimation(.easeOut(duration: look.reduceMotion ? 0 : 0.13)) { isLit = true }
+                } else {
+                    let wait = max(0, PressFeedback.minimumHold - (CACurrentMediaTime() - pressedAt))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                        guard !isPressed else { return }
+                        withAnimation(.easeInOut(duration: 0.25)) { isLit = false }
+                    }
+                }
+            }
     }
 }
 
@@ -877,6 +933,8 @@ enum SettingsPanelSpace {
 /// A progressive frosted band: fully blurred at the top of the panel, fading
 /// to nothing at its bottom edge.
 private struct EdgeBlurBand: View {
+    @Environment(\.glassStandIn) private var standIn
+    @Environment(\.colorScheme) private var colorScheme
     /// Which panel edge the band is fully frosted at.
     let edge: VerticalEdge
 
@@ -884,7 +942,10 @@ private struct EdgeBlurBand: View {
         // Drawn upright for both edges and only the fade reversed: a flipped
         // band also flipped how its glass bends the light.
         Rectangle()
-            .fill(.ultraThinMaterial)
+            // The page's CPU render (the closing animation's image) can't
+            // show what is behind anyway, and blurring there made each
+            // render take ~0.3 s on the main thread: a flat frost instead.
+            .fill(standIn ? AnyShapeStyle(Color(white: colorScheme == .dark ? 0.16 : 0.9).opacity(0.85)) : AnyShapeStyle(.ultraThinMaterial))
             .mask(
                 LinearGradient(
                     stops: [

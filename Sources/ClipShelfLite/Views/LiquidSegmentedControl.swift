@@ -14,12 +14,16 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
     /// Off when it sits inside a glass capsule that is already there (an
     /// opened pull-down). The only change from the first version.
     var drawsBackground = true
+    /// Tinted like the cards, following the glass slider (the main window's
+    /// type bar), instead of the system's frosted glass.
+    var followsGlassSlider = false
     /// Told when a press starts and ends (after the click hold), e.g. so a
     /// surrounding capsule can swell with it.
     var onPressChange: ((Bool) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityLook) private var look
+    @Environment(\.glassTransparency) private var transparency
     /// Index the resting pill sits on; animated separately from `selection`
     /// so the list behind the control never animates with it.
     @State private var restingIndex: Int?
@@ -109,11 +113,20 @@ struct LiquidSegmentedControl<Value: Hashable>: View {
                 .fill(SolidSurface.control(isDark: colorScheme == .dark))
                 .overlay(Capsule().stroke(SurfaceEdge.color(isDark: colorScheme == .dark, look: look), lineWidth: SurfaceEdge.width(look: look)))
         } else if #available(macOS 26.0, *) {
+            let isDark = colorScheme == .dark
             Color.clear
-                .glassEffect(.regular, in: Capsule())
+                .glassEffect(
+                    followsGlassSlider
+                        ? .clear.tint(transparency.cardFill(isDark: isDark, increaseContrast: look.increaseContrast))
+                        : .regular,
+                    in: Capsule()
+                )
                 .overlay {
                     if look.increaseContrast {
-                        Capsule().stroke(SurfaceEdge.color(isDark: colorScheme == .dark, look: look), lineWidth: SurfaceEdge.width(look: look))
+                        Capsule().stroke(SurfaceEdge.color(isDark: isDark, look: look), lineWidth: SurfaceEdge.width(look: look))
+                    } else if followsGlassSlider {
+                        // Lit like the toolbar's glass beside it.
+                        Capsule().stroke(LitEdge.gradient(isDark: isDark), lineWidth: 0.75)
                     }
                 }
         } else {

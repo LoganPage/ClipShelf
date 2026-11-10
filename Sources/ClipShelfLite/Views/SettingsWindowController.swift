@@ -19,6 +19,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     static let shared = SettingsWindowController()
     static let willShowNotification = Notification.Name("ClipShelfSettingsWillShow")
     static let willCloseNotification = Notification.Name("ClipShelfSettingsWillClose")
+    /// Asks ✓ to confirm, as if clicked (see `requestClose`).
+    static let confirmCloseNotification = Notification.Name("ClipShelfSettingsConfirmClose")
+    /// Settings has folded away and is parked again.
+    static let didCloseNotification = Notification.Name("ClipShelfSettingsDidClose")
+
+    /// ✓'s frame in the settings page (SwiftUI global space, top-left origin).
+    var doneButtonFrame: CGRect?
+    /// ✓ is lit for this closing, so the closing image shows it lit too.
+    private var closesWithLitDone = false
+    private var doneConfirmationStarted = false
 
     /// The settings button's frame in the main window's SwiftUI global space
     /// (top-left origin). Updated by the toolbar as layout changes.
@@ -123,8 +133,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 height: mainImage.height,
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                space: parent.screen?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+                // The layout Core Animation draws from directly.
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
               ) else { return nil }
         let scale = CGFloat(mainImage.width) / max(parent.frame.width, 1)
         context.draw(mainImage, in: CGRect(x: 0, y: 0, width: mainImage.width, height: mainImage.height))
@@ -217,7 +228,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private func installInteractionMonitor() {
         guard interactionMonitor == nil else { return }
         interactionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .rightMouseUp, .keyDown, .scrollWheel]) { [weak self] event in
-            guard let self, self.isShown else { return event }
+            guard let self, self.isShown, !self.closesSettings(event) else { return event }
             // Keys go to the main window (it keeps focus), but may still edit
             // a field in settings; clicks and scrolls only count inside it.
             if event.type == .keyDown || event.window === self.panel || event.window === self.glassWindow {
@@ -250,7 +261,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             scale: parent.backingScaleFactor,
             frame: frame,
             isDark: lookKey(size: frame.size).isDark,
-            content: content
+            content: content,
+            colorSpace: parent.screen?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
         )
     }
 
@@ -299,23 +311,110 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let key = lookKey(size: targetFrame(in: parent).size)
         guard hosting.bounds.size == key.size,
               let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return }
-        // The per-row edge blur makes a CPU render ~25× slower; leave it out.
+        // Glass and the edge bands draw as flat stand-ins while rendering
+        // (see `glassStandIn`); real glass can't be drawn on the CPU.
         SettingsSnapshotMode.shared.isRendering = true
         hosting.layoutSubtreeIfNeeded()
+        let restore = Self.dropShadowsForCPURender(hosting.layer)
         hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        restore()
         SettingsSnapshotMode.shared.isRendering = false
         if let image = rep.cgImage {
             fallbackContent = (image, key)
         }
     }
 
+    /// The closing image with ✓ drawn lit and swollen, as it is on screen
+    /// when closing starts from it: the image itself is usually made before
+    /// the press (on hover, or while idle), and ✓ fell back to unlit in it.
+    private func withLitDone(_ image: CGImage, panelSize: NSSize) -> CGImage? {
+        guard let button = doneButtonFrame, button.width > 0, panelSize.width > 0,
+              let space = image.colorSpace,
+              let context = CGContext(
+                data: nil,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: space,
+                bitmapInfo: image.bitmapInfo.rawValue
+              ) else { return nil }
+        let scale = CGFloat(image.width) / panelSize.width
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let swell = DoneButtonLook.pressedScale
+        let center = CGPoint(x: button.midX * scale, y: (panelSize.height - button.midY) * scale)
+        let side = button.width * swell * scale
+        let circle = CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)
+        context.setFillColor(NSColor.controlAccentColor.withAlphaComponent(DoneButtonLook.litOpacity).cgColor)
+        context.fillEllipse(in: circle)
+
+        let config = NSImage.SymbolConfiguration(pointSize: DoneButtonLook.symbolSize, weight: .bold)
+            .applying(.init(paletteColors: [.white]))
+        if let check = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) {
+            let size = NSSize(width: check.size.width * swell * scale, height: check.size.height * swell * scale)
+            let rect = NSRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width, height: size.height)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+            check.draw(in: rect)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        return context.makeImage()
+    }
+
+    /// Takes the layer shadows (the toggles' knobs) off the page while it
+    /// is drawn on the CPU for the closing animation's image, and returns
+    /// what puts them back. On the CPU each shadow blurred a page-sized
+    /// layer (~40 ms apiece); a two-point shadow isn't missed in an image
+    /// that only shows while it shrinks away. Layer-level only, so SwiftUI
+    /// lays nothing out again.
+    private static func dropShadowsForCPURender(_ root: CALayer?) -> () -> Void {
+        guard let root else { return {} }
+        var shadowed: [(layer: CALayer, opacity: Float)] = []
+        func walk(_ layer: CALayer) {
+            if layer.shadowOpacity > 0 {
+                shadowed.append((layer, layer.shadowOpacity))
+            }
+            layer.sublayers?.forEach(walk)
+        }
+        walk(root)
+        guard !shadowed.isEmpty else { return {} }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shadowed.forEach { $0.layer.shadowOpacity = 0 }
+        CATransaction.commit()
+        return {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            shadowed.forEach { $0.layer.shadowOpacity = $0.opacity }
+            CATransaction.commit()
+        }
+    }
+
     func toggle(from parent: NSWindow?) {
-        isVisible ? close() : show(from: parent)
+        isVisible ? requestClose() : show(from: parent)
+    }
+
+    /// Closes the way clicking ✓ does: ✓ lights up and swells, then settings
+    /// folds away. For Esc, Return and the shortcuts that close settings.
+    func requestClose() {
+        guard isShown, !isAnimating else { return }
+        doneConfirmationStarted = false
+        NotificationCenter.default.post(name: Self.confirmCloseNotification, object: nil)
+        if !doneConfirmationStarted { close() }
+    }
+
+    /// ✓ was pressed (or confirmed on its behalf) and is about to close settings.
+    func doneWillConfirm() {
+        guard isShown, !isAnimating else { return }
+        doneConfirmationStarted = true
+        closesWithLitDone = true
     }
 
     func show(from parent: NSWindow?) {
         guard !isAnimating, !isShown, let parent else { return }
         self.parent = parent
+        closesWithLitDone = false
         let panel = makePanelIfNeeded()
         let frame = targetFrame(in: parent)
         NotificationCenter.default.post(name: Self.willShowNotification, object: nil)
@@ -393,6 +492,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             entry.frame == frame && CACurrentMediaTime() - entry.time < 3 ? entry.image : nil
         }
         prefetchedClose = nil
+        let litDone = closesWithLitDone
+        closesWithLitDone = false
         isShown = false
         isAnimating = true
         uninstallCloseShortcut()
@@ -405,8 +506,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             // very end of the animation, where it used to stutter.
             self.panel?.setFrameOrigin(Self.parkingOrigin)
             self.glassWindow?.setFrameOrigin(Self.parkingOrigin)
+            self.restoreAfterClosing()
             self.setAlpha(1)
             self.isAnimating = false
+            NotificationCenter.default.post(name: Self.didCloseNotification, object: nil)
             // Hand keyboard focus back only now: the key change re-renders
             // both windows (~40 ms), which used to stall the first frames of
             // the closing animation. The next turn keeps it off its last frame.
@@ -420,12 +523,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         // dissolves into it, so the hand-over never freezes on screen.
         let start = { [weak self] (snapshot: CGImage?) in
             guard let self else { return }
-            self.setAlpha(0, animatedOver: 0.18)
-            guard let snapshot, let source = self.anchorRectOnScreen(in: parent) else {
+            guard var snapshot, let source = self.anchorRectOnScreen(in: parent) else {
+                self.setAlpha(0, animatedOver: 0.18)
                 tidyUp()
                 return
             }
+            if litDone {
+                snapshot = self.withLitDone(snapshot, panelSize: frame.size) ?? snapshot
+            }
             GenieAnimator.run(image: snapshot, from: source, to: frame, opening: false, duration: Self.genieDuration, above: parent, completion: tidyUp)
+            self.fadeOutForClosing()
         }
 
         if let ready = fresh ?? cleanLiveImage(size: frame.size) {
@@ -464,14 +571,39 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 if LiquidMenuPresenter.shared.isOpen {
                     LiquidMenuPresenter.shared.dismiss()
                 } else {
-                    self.close()
+                    self.requestClose()
                 }
                 return nil
             }
+            // Return confirms like ✓, wherever focus is; a field being edited
+            // in settings or an open pull-down keeps it.
+            if self.isConfirmKey(event), !self.isEditingText, !LiquidMenuPresenter.shared.isOpen {
+                self.requestClose()
+                return nil
+            }
             guard CloseSettingsHotKeyDefaults.load().matches(event) else { return event }
-            self.close()
+            self.requestClose()
             return nil
         }
+    }
+
+    private func isConfirmKey(_ event: NSEvent) -> Bool {
+        (event.keyCode == 36 || event.keyCode == 76)
+            && event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+    }
+
+    private var isEditingText: Bool {
+        guard let panel, panel.isKeyWindow else { return false }
+        return panel.firstResponder is NSText
+    }
+
+    /// Keys that close settings change nothing on the page.
+    private func closesSettings(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        let plain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+        return (event.keyCode == 53 && plain)
+            || (isConfirmKey(event) && !isEditingText)
+            || CloseSettingsHotKeyDefaults.load().matches(event)
     }
 
     private func uninstallCloseShortcut() {
@@ -496,6 +628,34 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private func setFrames(_ frame: NSRect) {
         glassWindow?.setFrame(frame, display: true)
         panel?.setFrame(frame, display: true)
+    }
+
+    /// The live panel dissolves into the closing animation drawn above it.
+    /// Its contents fade in Core Animation, off the main thread: fading the
+    /// windows themselves updated the window server every frame, which
+    /// stalled the animation's first frames. The glass window's shadow goes
+    /// at once; the animation image has none.
+    private func fadeOutForClosing() {
+        glassWindow?.hasShadow = false
+        for view in [glassWindow?.contentView, panel?.contentView].compactMap({ $0 }) {
+            view.wantsLayer = true
+            guard let layer = view.layer else { continue }
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1
+            fade.toValue = 0
+            fade.duration = 0.18
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.opacity = 0
+            layer.add(fade, forKey: "closingFade")
+        }
+    }
+
+    private func restoreAfterClosing() {
+        for view in [glassWindow?.contentView, panel?.contentView].compactMap({ $0 }) {
+            view.layer?.removeAnimation(forKey: "closingFade")
+            view.layer?.opacity = 1
+        }
+        glassWindow?.hasShadow = true
     }
 
     private func setAlpha(_ alpha: CGFloat, animatedOver duration: TimeInterval = 0, timing: CAMediaTimingFunctionName = .easeInEaseOut) {
@@ -564,7 +724,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             if LiquidMenuPresenter.shared.isOpen {
                 LiquidMenuPresenter.shared.dismiss()
             } else {
-                self?.close()
+                self?.requestClose()
             }
         }
         // The page is transparent between its cards; without this, clicks and
@@ -654,6 +814,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let isDark: Bool
         /// The page rendered without its glass.
         let content: CGImage?
+        /// The screen's colour space: an image already in it goes to the
+        /// screen as it is, instead of being converted when the animation's
+        /// first frame is drawn (~30 ms on the main thread).
+        let colorSpace: CGColorSpace
     }
 
     /// What the panel looks like for the genie: the main window behind it,
@@ -677,8 +841,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 height: height,
                 bitsPerComponent: 8,
                 bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                space: request.colorSpace,
+                // The layout Core Animation draws from directly.
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
               ) else { return nil }
         let bounds = CGRect(x: 0, y: 0, width: width, height: height)
         let radius = GlassMetrics.panelRadius * scale

@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 struct MainView: View {
+    static let minimumSize = CGSize(width: 680, height: 552)
+
     private struct SearchSignature: Equatable {
         let revision: Int
         let kind: ClipKindFilter
@@ -163,7 +165,7 @@ struct MainView: View {
                     .allowsHitTesting(false)
             }
         }
-        .frame(minWidth: 680, minHeight: 552)
+        .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
         .environment(\.glassTransparency, glassTransparency)
         .clipShelfAccessibilityLook()
         .preferredColorScheme(resolvedColorScheme)
@@ -425,7 +427,8 @@ struct MainView: View {
                     selection: $kindFilter,
                     title: \.title,
                     segmentWidth: 64,
-                    height: GlassMetrics.controlHeight
+                    height: GlassMetrics.controlHeight,
+                    followsGlassSlider: true
                 )
 
                 Spacer(minLength: 8)
@@ -582,7 +585,7 @@ struct MainView: View {
         // the text never spills out past it.
         .clipShape(Capsule())
         .contentShape(Capsule())
-        .clipShelfGlass(in: Capsule())
+        .clipShelfGlass(in: Capsule(), followsSlider: true)
         // Lifted off the list, like Spotlight.
         .shadow(color: .black.opacity(isSearchExpanded ? 0.22 : 0), radius: 16, y: 8)
     }
@@ -661,7 +664,7 @@ struct MainView: View {
             toolbarButton("magnifyingglass", tooltip: "搜索（\(toggleSearchHotKey.displayText)）", isActive: isSearchVisible && isSearchExpanded) {
                 setSearchVisible(!isSearchVisible)
             }
-            .clipShelfGlassGroup()
+            .clipShelfGlassGroup(followsSlider: true)
             // Where the search field pours out of.
             .background(
                 GeometryReader { proxy in
@@ -699,7 +702,7 @@ struct MainView: View {
                     }
                 )
             }
-            .clipShelfGlassGroup()
+            .clipShelfGlassGroup(followsSlider: true)
 
             HStack(spacing: 0) {
                 toolbarButton("doc.on.doc", tooltip: copyActionHelp, isDimmed: actionItems.isEmpty) {
@@ -716,7 +719,7 @@ struct MainView: View {
                 }
                 .disabled(!store.canUndoDeletion)
             }
-            .clipShelfGlassGroup()
+            .clipShelfGlassGroup(followsSlider: true)
         }
     }
 

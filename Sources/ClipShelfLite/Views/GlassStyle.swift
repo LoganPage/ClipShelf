@@ -64,6 +64,16 @@ struct GlassTransparency: Equatable {
     /// Tint of a card's clear glass: nearly clear, milkier towards tinted.
     func cardTint(isDark: Bool) -> Double { isDark ? 0.3 + 0.25 * strength : 0.14 + 0.3 * strength }
 
+    /// The colour laid over a card's clear glass: smoke in dark mode, white
+    /// in light mode. Increase Contrast frosts it far more, so text stays
+    /// legible over any wallpaper. The main window's type bar and toolbar
+    /// use it too, so the slider changes them together with the cards.
+    func cardFill(isDark: Bool, increaseContrast: Bool) -> Color {
+        isDark
+            ? Color.black.opacity(increaseContrast ? max(cardTint(isDark: true), 0.6) : cardTint(isDark: true))
+            : Color.white.opacity(increaseContrast ? max(lightCardFill, 0.75) : lightCardFill)
+    }
+
     // Kept for the pre-macOS-26 fallback.
     var backdropOpacity: Double { 0.75 + 0.25 * strength }
     var backdropTint: Double { 0.3 * strength }
@@ -205,6 +215,7 @@ enum LitEdge {
 /// the type switcher's lens, tinted only as the slider moves towards tinted.
 private struct GlassSurface<S: Shape>: ViewModifier {
     @Environment(\.glassStandIn) private var standIn
+    @Environment(\.glassTransparency) private var transparency
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityLook) private var look
     let shape: S
@@ -214,6 +225,9 @@ private struct GlassSurface<S: Shape>: ViewModifier {
     var frosted = false
     /// Draws the hairline outline (off when the caller draws its own).
     var outlined = true
+    /// Tinted like the cards, following the glass slider (the main
+    /// window's toolbar); otherwise crystal-clear.
+    var followsSlider = false
 
     func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
@@ -231,14 +245,19 @@ private struct GlassSurface<S: Shape>: ViewModifier {
                 .overlay(edge.opacity(outlined || look.increaseContrast ? 1 : 0))
         } else if standIn {
             content
-                .background(shape.fill(Color.white.opacity(isDark ? 0.12 : 0.62)))
+                .background {
+                    ZStack {
+                        shape.fill(Color.white.opacity(isDark ? 0.12 : 0.62))
+                        if let tint { shape.fill(tint) }
+                    }
+                }
                 .overlay(shape.stroke(Color.white.opacity(isDark ? 0.16 : 0.85), lineWidth: 0.6))
         } else if #available(macOS 26.0, *) {
             // An outline keeps every control distinct from the card it sits
             // on, however frosted that card is. It is lit like glass rather
             // than one even line; Increase Contrast keeps a plain strong line.
             content
-                .glassEffect(glass(isDark: isDark), in: shape)
+                .glassEffect(glass(isDark: isDark, increaseContrast: look.increaseContrast), in: shape)
                 .overlay {
                     if look.increaseContrast {
                         edge
@@ -253,13 +272,14 @@ private struct GlassSurface<S: Shape>: ViewModifier {
         }
     }
 
-    /// Always crystal-clear: the slider frosts cards and records, never the
-    /// controls, so they keep standing out from the cards.
+    /// Crystal-clear, unless it follows the slider like the cards do.
     @available(macOS 26.0, *)
-    private func glass(isDark: Bool) -> Glass {
+    private func glass(isDark: Bool, increaseContrast: Bool) -> Glass {
         var glass = frosted ? Glass.regular : Glass.clear
         if let tint {
             glass = glass.tint(tint)
+        } else if followsSlider {
+            glass = glass.tint(transparency.cardFill(isDark: isDark, increaseContrast: increaseContrast))
         }
         return interactive ? glass.interactive() : glass
     }
@@ -298,9 +318,7 @@ private struct CardGlass: ViewModifier {
             // in light mode, smoked in dark mode so white text keeps contrast.
             // Increase Contrast keeps the glass but frosts it far more, so
             // text stays legible over any wallpaper, and outlines the card.
-            let fill = isDark
-                ? Color.black.opacity(look.increaseContrast ? max(transparency.cardTint(isDark: true), 0.6) : transparency.cardTint(isDark: true))
-                : Color.white.opacity(look.increaseContrast ? max(transparency.lightCardFill, 0.75) : transparency.lightCardFill)
+            let fill = transparency.cardFill(isDark: isDark, increaseContrast: look.increaseContrast)
             // Hover is a plain highlight inside the card: re-tinting one
             // card's glass redrew every card in the container (a flash
             // down the whole list as the pointer moved).
@@ -332,8 +350,8 @@ private struct CardGlass: ViewModifier {
 }
 
 extension View {
-    func clipShelfGlass<S: Shape>(in shape: S, interactive: Bool = false, tint: Color? = nil, frosted: Bool = false, outlined: Bool = true) -> some View {
-        modifier(GlassSurface(shape: shape, interactive: interactive, tint: tint, frosted: frosted, outlined: outlined))
+    func clipShelfGlass<S: Shape>(in shape: S, interactive: Bool = false, tint: Color? = nil, frosted: Bool = false, outlined: Bool = true, followsSlider: Bool = false) -> some View {
+        modifier(GlassSurface(shape: shape, interactive: interactive, tint: tint, frosted: frosted, outlined: outlined, followsSlider: followsSlider))
     }
 
     /// A card of system Liquid Glass with this view as its content, so the
@@ -373,9 +391,9 @@ extension View {
         }
     }
 
-    func clipShelfGlassGroup() -> some View {
+    func clipShelfGlassGroup(followsSlider: Bool = false) -> some View {
         padding(.horizontal, 2)
-            .clipShelfGlass(in: Capsule())
+            .clipShelfGlass(in: Capsule(), followsSlider: followsSlider)
             .pressGroup()
     }
 
