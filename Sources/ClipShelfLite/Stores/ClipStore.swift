@@ -50,9 +50,12 @@ final class ClipStore: ObservableObject {
     func start() {
         guard timer == nil else { return }
 
-        timer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: true) { [weak self] _ in
             self?.pollPasteboard()
         }
+        // Lets the system line the wake-ups up with others while idle.
+        timer.tolerance = 0.1
+        self.timer = timer
     }
 
     func copy(_ item: ClipItem) {
@@ -111,7 +114,13 @@ final class ClipStore: ObservableObject {
             )
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.add(item)
+                if !self.add(item) {
+                    // Already the newest record: its picture is on disk
+                    // once, and this second copy would never be used.
+                    self.imageEncodingQueue.async {
+                        try? FileManager.default.removeItem(at: ImageStore.shared.url(for: stored.fileName))
+                    }
+                }
                 if copyToPasteboard {
                     self.writeToPasteboard(item, imageData: data)
                 }
@@ -219,9 +228,19 @@ final class ClipStore: ObservableObject {
     }
 
     private func pollPasteboard() {
+        // Nothing new: don't ask the pasteboard server for its types on
+        // every tick.
+        let observedChangeCount = pasteboard.changeCount
+        guard observedChangeCount != changeCount else { return }
+        guard isClipboardHistoryEnabled else {
+            // Paused: what is copied now must not be recorded when
+            // recording resumes.
+            changeCount = observedChangeCount
+            return
+        }
         guard ClipboardHistoryPolicy.shouldCapture(
-            historyEnabled: isClipboardHistoryEnabled,
-            observedChangeCount: pasteboard.changeCount,
+            historyEnabled: true,
+            observedChangeCount: observedChangeCount,
             previousChangeCount: &changeCount,
             typeNames: pasteboard.types?.map(\.rawValue)
         ) else { return }
@@ -413,11 +432,18 @@ final class ClipStore: ObservableObject {
             .joined(separator: "\n")
     }
 
-    private func add(_ item: ClipItem) {
+    /// Whether the record went in (false: it is already the newest one).
+    @discardableResult
+    private func add(_ item: ClipItem) -> Bool {
         if isDuplicate(items.first, item) {
-            return
+            return false
         }
 
+        var item = item
+        // Copied again, a pinned record stays pinned.
+        if items.contains(where: { $0.isPinned && isDuplicate($0, item) }) {
+            item.isPinned = true
+        }
         items.removeAll { isDuplicate($0, item) }
         items.insert(item, at: 0)
         sortItems()
@@ -425,6 +451,7 @@ final class ClipStore: ObservableObject {
         HistoryTrimmer.trim(&items, maxItems: maxItems)
 
         save()
+        return true
     }
 
     private func addFilePaths(_ paths: [String]) {

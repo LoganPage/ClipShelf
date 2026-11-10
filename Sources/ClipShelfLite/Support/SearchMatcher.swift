@@ -49,7 +49,8 @@ enum SearchMatcher {
 
     static func searchableTexts(for item: ClipItem) -> [String] {
         var values = [item.title]
-        if let text = item.text {
+        // A text record's title is its text: indexing both doubled the work.
+        if let text = item.text, text != item.title {
             values.append(text)
         }
         values.append(contentsOf: item.filePaths)

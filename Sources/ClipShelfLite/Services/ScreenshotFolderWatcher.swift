@@ -317,7 +317,7 @@ final class ScreenshotFolderWatcher: ObservableObject {
     private func startStatusTimer() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         let interval = DispatchTimeInterval.milliseconds(Int(Self.statusCheckInterval * 1_000))
-        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.schedule(deadline: .now() + interval, repeating: interval, leeway: .seconds(2))
         timer.setEventHandler { [weak self] in
             self?.refreshStatuses()
         }
@@ -343,6 +343,15 @@ final class ScreenshotFolderWatcher: ObservableObject {
                 continue
             }
             guard flag & kFSEventStreamEventFlagItemIsFile != 0, path != folder.root else { continue }
+            // Deleted or moved away: a new file under the same name later
+            // (the same download again) is a new arrival, not one already
+            // taken.
+            if flag & (kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0,
+               seen.contains(path),
+               !FileManager.default.fileExists(atPath: path) {
+                seen.remove(path)
+                continue
+            }
             let relative = path.dropFirst(folder.root.count + 1)
             guard folder.rule.includesSubfolders || !relative.contains("/") else { continue }
             // Nothing inside hidden folders or app bundles.
@@ -455,6 +464,10 @@ final class ScreenshotFolderWatcher: ObservableObject {
               Date().timeIntervalSince(item.firstSeenAt) >= 0.15 else {
             return
         }
+
+        // Only files of the last two minutes are ever taken, so older names
+        // needn't be remembered for as long as the app runs.
+        if seen.count > 4_000 { seen.removeAll() }
 
         if Self.isImage(url) {
             // An image that doesn't decode yet is still being written.

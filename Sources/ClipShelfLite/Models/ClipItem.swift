@@ -103,6 +103,12 @@ struct ClipItem: Identifiable, Codable, Hashable {
         try container.encode(isPinned, forKey: .isPinned)
     }
 
+    /// The title as a list row shows it. A text record's title is its whole
+    /// text; a row has two lines, so only the start of a long one is laid out.
+    var rowTitle: String {
+        title.utf8.count > 4_000 ? String(title.prefix(1_000)) : title
+    }
+
     /// Where the picture is on disk.
     var imageURL: URL? {
         imageFile.map { ImageStore.shared.url(for: $0) }

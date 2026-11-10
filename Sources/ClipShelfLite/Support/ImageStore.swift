@@ -42,18 +42,25 @@ final class ImageStore: @unchecked Sendable {
     /// Deletes pictures that no record (and no undoable deletion) uses.
     /// Files younger than `minimumAge` stay: one may belong to a record that
     /// is still on its way into the history.
-    func removeUnreferenced(keeping fileNames: Set<String>, minimumAge: TimeInterval = 60, now: Date = Date()) {
+    /// Returns how many unused files were left for being too new.
+    @discardableResult
+    func removeUnreferenced(keeping fileNames: Set<String>, minimumAge: TimeInterval = 60, now: Date = Date()) -> Int {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.creationDateKey],
             options: [.skipsHiddenFiles]
-        ) else { return }
+        ) else { return 0 }
 
+        var leftForLater = 0
         for file in files where !fileNames.contains(file.lastPathComponent) {
             let created = (try? file.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
-            guard now.timeIntervalSince(created) >= minimumAge else { continue }
+            guard now.timeIntervalSince(created) >= minimumAge else {
+                leftForLater += 1
+                continue
+            }
             try? FileManager.default.removeItem(at: file)
         }
+        return leftForLater
     }
 
     static func hash(_ data: Data) -> String {

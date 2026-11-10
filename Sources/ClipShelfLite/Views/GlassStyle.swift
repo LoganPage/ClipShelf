@@ -401,10 +401,6 @@ extension View {
         modifier(GlassPanel(cornerRadius: cornerRadius, isActive: isActive))
     }
 
-    func clipShelfLiquidGlassSurface(cornerRadius: CGFloat) -> some View {
-        clipShelfGlass(in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    }
-
     @ViewBuilder
     func clipShelfLiquidGlassButtonStyle() -> some View {
         if #available(macOS 26.0, *) {

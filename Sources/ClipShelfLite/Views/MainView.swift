@@ -25,7 +25,6 @@ struct MainView: View {
     /// instead of four per row (each was updated on every scrolled frame).
     @State private var rowHover = RowHoverModel()
     @State private var pendingDragSelection: DragSelectionUpdate?
-    @State private var dragAnchorID: ClipItem.ID?
     @State private var dragSnapshotItems: [ClipItem]?
     @State private var historyScrollView: NSScrollView?
     @State private var selectionColor = SelectionColorPreferences.color
@@ -73,6 +72,8 @@ struct MainView: View {
     @State private var scrollEffect = ScrollEffectPreferences.value
     @State private var copyToast: CopyToast?
     @State private var titlebarHeight: CGFloat = 28
+    /// Bumps at midnight, so rows reading "今天" turn into "昨天".
+    @State private var dayToken = 0
     private let historyRowHeight: CGFloat = 74
     private let historyListHorizontalInset: CGFloat = GlassMetrics.edgeInset
     private let historyListBottomPadding: CGFloat = 16
@@ -278,6 +279,9 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: PinHotKeyDefaults.changedNotification)) { notification in
             pinHotKey = notification.object as? HotKeyConfiguration ?? PinHotKeyDefaults.load()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
+            dayToken &+= 1
+        }
     }
 
     private var historyList: some View {
@@ -295,6 +299,7 @@ struct MainView: View {
                                 isFocused: isFocused,
                                 isSelected: isSelected,
                                 isHovered: isHovered,
+                                dayToken: dayToken,
                                 selectionColor: selectionColor,
                                 selectionColorIsPreset: selectionColorPreset != nil,
                                 imageThumbnailCache: imageThumbnailCache,
@@ -660,7 +665,8 @@ struct MainView: View {
 
     /// Two glass capsules, like system toolbar groups: places, then actions.
     private var primaryToolbarButtons: some View {
-        HStack(spacing: 10) {
+        let hasNoActionItems = actionItems.isEmpty
+        return HStack(spacing: 10) {
             toolbarButton("magnifyingglass", tooltip: "搜索（\(toggleSearchHotKey.displayText)）", isActive: isSearchVisible && isSearchExpanded) {
                 setSearchVisible(!isSearchVisible)
             }
@@ -705,10 +711,10 @@ struct MainView: View {
             .clipShelfGlassGroup(followsSlider: true)
 
             HStack(spacing: 0) {
-                toolbarButton("doc.on.doc", tooltip: copyActionHelp, isDimmed: actionItems.isEmpty) {
+                toolbarButton("doc.on.doc", tooltip: copyActionHelp, isDimmed: hasNoActionItems) {
                     copyActionItems()
                 }
-                toolbarButton("pin", tooltip: "置顶选中的记录", isDimmed: actionItems.isEmpty) {
+                toolbarButton("pin", tooltip: "置顶选中的记录", isDimmed: hasNoActionItems) {
                     togglePinnedForActionItems()
                 }
                 toolbarButton("trash", tooltip: selectedIDs.isEmpty ? "清空记录" : "删除选中的记录") {
@@ -788,6 +794,16 @@ struct MainView: View {
         }
         filteredIndexByID = indexByID
         filteredItemsSignature = signature
+        // Records that are gone (deleted from their own row, pushed out by
+        // the history limit) leave the selection too; they used to be
+        // counted as selected still.
+        guard dragSnapshotItems == nil else { return }
+        if !selectedIDs.isEmpty {
+            let remaining = selectedIDs.filter { indexByID[$0] != nil }
+            if remaining.count != selectedIDs.count { selectedIDs = remaining }
+        }
+        if let focused = focusedID, indexByID[focused] == nil { focusedID = nil }
+        if let anchor = anchorID, indexByID[anchor] == nil { anchorID = nil }
     }
 
     private func startListEntrance(from old: ClipKindFilter, to new: ClipKindFilter) {
@@ -814,12 +830,27 @@ struct MainView: View {
     /// Where the selection glass goes. A single selection keeps one stable
     /// pane that slides from record to record; several each get their own.
     private var selectionPanes: [SelectionGlassPane] {
-        guard !selectedIDs.isEmpty else { return [] }
-        let indices = filteredItems.indices.filter { selectedIDs.contains(filteredItems[$0].id) }
+        let indices = selectedIndices
         if indices.count == 1, let index = indices.first {
             return [SelectionGlassPane(id: "single", index: index)]
         }
         return indices.map { SelectionGlassPane(id: filteredItems[$0].id.uuidString, index: $0) }
+    }
+
+    /// Where the selected records are in the list, top to bottom. Looked up
+    /// from the selection, not by going through the whole history.
+    private var selectedIndices: [Int] {
+        guard !selectedIDs.isEmpty else { return [] }
+        // The index table describes the live list; a drag works on a snapshot.
+        guard dragSnapshotItems == nil else {
+            return filteredItems.indices.filter { selectedIDs.contains(filteredItems[$0].id) }
+        }
+        return selectedIDs.compactMap { filteredIndexByID[$0] }.sorted()
+    }
+
+    private var selectedItems: [ClipItem] {
+        let items = filteredItems
+        return selectedIndices.map { items[$0] }
     }
 
     private var filteredItemIDs: [ClipItem.ID] {
@@ -867,7 +898,6 @@ struct MainView: View {
         selectedIDs.removeAll()
         focusedID = nil
         anchorID = nil
-        dragAnchorID = nil
         isDragSelecting = false
         dragSnapshotItems = nil
     }
@@ -1021,7 +1051,7 @@ struct MainView: View {
     }
 
     private var actionItems: [ClipItem] {
-        let selected = filteredItems.filter { selectedIDs.contains($0.id) }
+        let selected = selectedItems
         if !selected.isEmpty {
             return selected
         }
@@ -1035,7 +1065,7 @@ struct MainView: View {
 
     private func actionItems(for rowItem: ClipItem) -> [ClipItem] {
         if selectedIDs.contains(rowItem.id) {
-            let selected = filteredItems.filter { selectedIDs.contains($0.id) }
+            let selected = selectedItems
             if !selected.isEmpty {
                 return selected
             }
@@ -1211,15 +1241,6 @@ struct MainView: View {
         return Array(first...last)
     }
 
-    private func toggleSelectionForKeyboard(_ id: ClipItem.ID) {
-        if selectedIDs.contains(id) {
-            selectedIDs.remove(id)
-        } else {
-            selectedIDs.insert(id)
-        }
-        anchorID = id
-    }
-
     private func handleRowClick(_ item: ClipItem, event: NSEvent?) {
         guard Date() >= suppressRowTapUntil else { return }
 
@@ -1344,7 +1365,7 @@ struct MainView: View {
     }
 
     private var previewItems: [ClipItem] {
-        let selected = filteredItems.filter { selectedIDs.contains($0.id) }
+        let selected = selectedItems
         if selected.count == 1 {
             return selected
         }
@@ -1379,7 +1400,7 @@ struct MainView: View {
 
         // Several selected: step only between them (newest to oldest),
         // keeping the selection.
-        let selected = previewOrder(filteredItems.filter { selectedIDs.contains($0.id) })
+        let selected = previewOrder(selectedItems)
         if selected.count > 1 {
             guard let currentID = focusedID,
                   let position = selected.firstIndex(where: { $0.id == currentID }) else { return false }
@@ -1444,7 +1465,6 @@ struct MainView: View {
             }
         }
         pendingDragSelection = nil
-        dragAnchorID = nil
         dragSnapshotItems = nil
         let highlight = dragHighlight
         guard highlight.range != nil else { return }
@@ -1474,31 +1494,6 @@ struct MainView: View {
         let index = Int(floor(yInList / historyRowHeight))
         guard filteredItems.indices.contains(index) else { return nil }
         return filteredItems[index].id
-    }
-
-    private func edgeRowID(for location: CGPoint) -> ClipItem.ID? {
-        guard let viewportSize = historyViewportSize else { return nil }
-
-        if location.y < visibleToolbarHeight {
-            return visibleItemIndices().first.map { filteredItems[$0].id } ?? filteredItems.first?.id
-        }
-
-        if location.y > viewportSize.height {
-            return visibleItemIndices().last.map { filteredItems[$0].id } ?? filteredItems.last?.id
-        }
-
-        return nil
-    }
-
-    private var historyViewportSize: CGSize? {
-        guard let scrollView = historyScrollView else { return nil }
-        let size = scrollView.contentView.bounds.size
-        guard size.width > 0, size.height > 0 else { return nil }
-        return size
-    }
-
-    private func visibleItemIDs() -> [ClipItem.ID] {
-        visibleItemIndices().map { filteredItems[$0].id }
     }
 
     private var emptyView: some View {
@@ -1832,6 +1827,8 @@ private struct ClipRow: View, Equatable {
     let isSelected: Bool
     /// From the list's single hover tracker.
     let isHovered: Bool
+    /// Changes at midnight: the row's date text is relative to today.
+    let dayToken: Int
     let selectionColor: Color
     let selectionColorIsPreset: Bool
     let imageThumbnailCache: ImageThumbnailCache
@@ -1849,6 +1846,7 @@ private struct ClipRow: View, Equatable {
             && lhs.isFocused == rhs.isFocused
             && lhs.isSelected == rhs.isSelected
             && lhs.isHovered == rhs.isHovered
+            && lhs.dayToken == rhs.dayToken
             && lhs.selectionColor == rhs.selectionColor
             && lhs.selectionColorIsPreset == rhs.selectionColorIsPreset
             && lhs.imageThumbnailCache === rhs.imageThumbnailCache
@@ -1861,7 +1859,7 @@ private struct ClipRow: View, Equatable {
                 .clipped()
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.title)
+                Text(item.rowTitle)
                     .font(.system(size: 14, weight: .medium))
                     .lineLimit(2)
                 HStack(spacing: 8) {
@@ -2026,7 +2024,7 @@ private struct SelectionGlassLayer: View {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         if selectedIDs.contains(item.id) {
                             // The same glass as a single selection (halo included).
-                            SelectionGlassSlab(selectionColor: selectionColor, lightweight: false)
+                            SelectionGlassSlab(selectionColor: selectionColor)
                                 .modifier(SelectionPop(
                                     animates: !isDragging && !settled.contains(item.id),
                                     delay: min(Double(max(index - first, 0)) * 0.025, 0.3)
@@ -2042,7 +2040,7 @@ private struct SelectionGlassLayer: View {
                 // One selected: a single pane that slides from record to record.
                 GeometryReader { proxy in
                     ForEach(panes) { pane in
-                        SelectionGlassSlab(selectionColor: selectionColor, lightweight: false)
+                        SelectionGlassSlab(selectionColor: selectionColor)
                             .frame(width: proxy.size.width, height: rowHeight)
                             // Grows out of the record itself: scaled before
                             // it is positioned, so it pops in place.
@@ -2100,8 +2098,6 @@ private struct SelectionGlassSlab: View {
     @Environment(\.glassTransparency) private var transparency
     @Environment(\.accessibilityLook) private var look
     let selectionColor: Color
-    /// For multi-select: no blurred glow, which is costly with many panes.
-    var lightweight = false
     /// Records use the card radius; the search field passes a capsule's.
     var cornerRadius: CGFloat = GlassMetrics.cardRadius
     var verticalInset: CGFloat = 3
@@ -2677,22 +2673,38 @@ private final class TooltipBubbleView: NSView {
 private struct ScrollViewResolver: NSViewRepresentable {
     let onResolve: (NSScrollView?) -> Void
 
+    final class Coordinator {
+        weak var scrollView: NSScrollView?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
+        let coordinator = context.coordinator
         DispatchQueue.main.async {
-            let scrollView = resolveScrollView(from: view)
-            configure(scrollView)
-            onResolve(scrollView)
+            resolve(from: view, coordinator: coordinator)
         }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            let scrollView = resolveScrollView(from: nsView)
-            configure(scrollView)
-            onResolve(scrollView)
+        // Found once and remembered: every update of the main view used to
+        // search the window's whole view tree for the list again.
+        if let known = context.coordinator.scrollView, known.window != nil, known.window === nsView.window {
+            return
         }
+        let coordinator = context.coordinator
+        DispatchQueue.main.async {
+            resolve(from: nsView, coordinator: coordinator)
+        }
+    }
+
+    private func resolve(from view: NSView, coordinator: Coordinator) {
+        let scrollView = resolveScrollView(from: view)
+        coordinator.scrollView = scrollView
+        configure(scrollView)
+        onResolve(scrollView)
     }
 
     private func configure(_ scrollView: NSScrollView?) {
@@ -3242,8 +3254,8 @@ private struct DragSelectionCaptureView: NSViewRepresentable {
                 self.performAutoScrollFrame(with: event)
             }
             autoScrollTimer = timer
+            // Common modes include event tracking.
             RunLoop.main.add(timer, forMode: .common)
-            RunLoop.main.add(timer, forMode: .eventTracking)
         }
 
         private func stopAutoScroll() {

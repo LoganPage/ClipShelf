@@ -9,6 +9,16 @@ enum StatusMenuText {
     static func recordingToggleTitle(isEnabled: Bool) -> String {
         isEnabled ? "暂停记录" : "继续记录"
     }
+
+    /// A record's title in the menu: one short line. A text record's title
+    /// is its whole text, which made the menu as wide as the screen.
+    static func clipTitle(_ title: String, limit: Int = 48) -> String {
+        let line = title.prefix(limit * 4)
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        return line.count > limit ? line.prefix(limit) + "…" : line
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -414,7 +424,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item)
         } else {
             for clip in store.items.prefix(8) {
-                let item = NSMenuItem(title: clip.title, action: nil, keyEquivalent: "")
+                let item = NSMenuItem(title: StatusMenuText.clipTitle(clip.title), action: nil, keyEquivalent: "")
                 let submenu = NSMenu()
                 let copy = menuItem(title: "复制", action: #selector(copyMenuItem(_:)))
                 copy.representedObject = clip

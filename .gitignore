@@ -6,3 +6,4 @@ backups/
 *.xcuserstate
 *.swp
 *.tmp
+.swiftpm/

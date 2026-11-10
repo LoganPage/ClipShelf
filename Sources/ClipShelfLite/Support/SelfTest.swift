@@ -391,6 +391,37 @@ enum ClipShelfSelfTest {
             failure: "Undo displaced records added after the deletion"
         ))
 
+        // What didn't fit stays undoable: once there is room it comes back.
+        capacityItems.removeAll()
+        let remainderRestored = capacityUndoStack.undo(into: &capacityItems, maxItems: 3)
+        var fullItems = [newerOne]
+        var fullUndoStack = HistoryDeletionUndoStack()
+        fullUndoStack.record([HistoryDeletionEntry(item: newerTwo, originalIndex: 0)])
+        let fullRestored = fullUndoStack.undo(into: &fullItems, maxItems: 1)
+        results.append(check(
+            name: "undo keeps what a full history could not take back",
+            condition: remainderRestored.count == min(3, undoOriginalItems.count - 1)
+                && fullRestored.isEmpty
+                && fullUndoStack.canUndo
+                && fullItems == [newerOne],
+            success: "Records that did not fit stay undoable instead of being dropped",
+            failure: "Undo into a full history lost the records it could not restore"
+        ))
+
+        let longText = String(repeating: "长文本 long text ", count: 2_000)
+        let longTextItem = ClipItem(kind: .text, title: longText, text: longText)
+        results.append(check(
+            name: "long text records stay light in the menu, the list and the search index",
+            condition: StatusMenuText.clipTitle("  first line \nsecond line") == "first line"
+                && StatusMenuText.clipTitle(longText).count <= 49
+                && longTextItem.rowTitle.count == 1_000
+                && newerOne.rowTitle == newerOne.title
+                && SearchMatcher.searchableTexts(for: longTextItem).count == 1
+                && SearchMatcher.matches(longTextItem, query: "longtext"),
+            success: "Menu titles are one short line, rows lay out only the start, and the text is indexed once",
+            failure: "A long text record is still used whole in the menu, the row or twice in the search index"
+        ))
+
         var clearUndoItems = [ClipItem]()
         var clearUndoStack = HistoryDeletionUndoStack()
         clearUndoStack.record(undoOriginalItems.enumerated().map { index, item in
