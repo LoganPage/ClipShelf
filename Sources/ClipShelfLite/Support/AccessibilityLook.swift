@@ -90,6 +90,37 @@ extension View {
     }
 }
 
+// MARK: - Pictures of a window
+
+/// On while a picture of the main window is drawn for an animation (see
+/// `WindowSnapshot`). The app draws that picture itself, on the CPU, where
+/// system glass and everything inside it comes out empty: the window poured
+/// out of the menu bar as a blank grey slab. For the picture the window
+/// therefore takes its Reduce Transparency look, solid surfaces that draw
+/// anywhere.
+final class WindowPictureMode: ObservableObject {
+    static let main = WindowPictureMode()
+    @Published var isRendering = false
+}
+
+private struct SolidWhilePictured: ViewModifier {
+    @ObservedObject var mode: WindowPictureMode
+    @Environment(\.accessibilityLook) private var look
+
+    func body(content: Content) -> some View {
+        var pictured = look
+        if mode.isRendering { pictured.reduceTransparency = true }
+        return content.environment(\.accessibilityLook, pictured)
+    }
+}
+
+extension View {
+    /// Inside `clipShelfAccessibilityLook()`, whose look it adjusts.
+    func solidWhilePictured(_ mode: WindowPictureMode) -> some View {
+        modifier(SolidWhilePictured(mode: mode))
+    }
+}
+
 // MARK: - Solid surfaces (Reduce Transparency)
 
 /// Opaque colours drawn in place of glass when Reduce Transparency is on.

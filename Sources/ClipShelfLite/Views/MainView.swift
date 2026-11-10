@@ -168,6 +168,7 @@ struct MainView: View {
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
         .environment(\.glassTransparency, glassTransparency)
+        .solidWhilePictured(.main)
         .clipShelfAccessibilityLook()
         .preferredColorScheme(resolvedColorScheme)
         .background(WindowReader { window in

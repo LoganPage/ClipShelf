@@ -158,10 +158,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             SettingsWindowController.shared.prepareNow(parent: window)
         }
 
-        // Give the window server a moment to draw it before capturing.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self, weak window] in
+        // Drawn solid for its picture, glass again before it lands.
+        WindowPictureMode.main.isRendering = true
+        // Give the window a moment to take that look before capturing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak window] in
+            var image = window.flatMap { WindowSnapshot.capture($0) }
+            WindowPictureMode.main.isRendering = false
+            #if CLIPSHELF_BENCH
+            ScrollBench.revealPicture?(image)
+            #endif
             guard let self, let window else { return }
-            var image = WindowSnapshot.capture(window)
             if withSettings, let base = image {
                 image = SettingsWindowController.shared.composeOver(mainImage: base, parent: window) ?? base
             }

@@ -598,8 +598,11 @@ final class WindowBackdropView: NSView {
 /// the bottom never poke out of them.
 final class BackdropContainerView: NSView {
     private let backdrop = WindowBackdropView(cornerRadius: GlassMetrics.windowRadius)
+    /// The SwiftUI content, without the backdrop behind it.
+    let content: NSView
 
     init(content: NSView) {
+        self.content = content
         super.init(frame: .zero)
         // Layer-backed, so a change of glass level can cross-fade it.
         wantsLayer = true

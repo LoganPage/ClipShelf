@@ -20,6 +20,10 @@ enum ScrollBench {
     private static var driver: Driver?
 
     static func scheduleIfRequested() {
+        if let folder = ProcessInfo.processInfo.environment["CLIPSHELF_BENCH_PICTURES"], !folder.isEmpty {
+            savePictures(to: URL(fileURLWithPath: folder))
+            return
+        }
         guard let path = ProcessInfo.processInfo.environment["CLIPSHELF_BENCH_REPORT"], !path.isEmpty else { return }
         let seconds = Double(ProcessInfo.processInfo.environment["CLIPSHELF_BENCH_SECONDS"] ?? "") ?? 6
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -74,6 +78,44 @@ enum ScrollBench {
         }
         method_setImplementation(method, imp_implementationWithBlock(block))
     }
+
+    /// With CLIPSHELF_BENCH_PICTURES naming a folder: saves the pictures
+    /// the window animations are made from (the main window as it pours
+    /// out of the menu bar, the settings page as it pours out of its
+    /// button), then quits. They are drawn by the app itself, so this
+    /// shows what those animations actually display.
+    private static func savePictures(to folder: URL) {
+        func save(_ image: CGImage?, _ name: String) {
+            guard let image else { return }
+            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?
+                .write(to: folder.appendingPathComponent(name + ".png"))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            WindowPictureMode.main.isRendering = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.03) {
+            let main = NSApp.windows.first { $0 is ClipShelfMainWindow }
+            let started = CACurrentMediaTime()
+            let picture = main.flatMap { WindowSnapshot.capture($0) }
+            let took = (CACurrentMediaTime() - started) * 1_000
+            WindowPictureMode.main.isRendering = false
+            save(picture, "main-window")
+            try? String(format: "main window picture drawn in %.1f ms\n", took)
+                .write(to: folder.appendingPathComponent("timing.txt"), atomically: true, encoding: .utf8)
+            save(SettingsWindowController.shared.benchPageImage(), "settings-page")
+            // Then the real thing: hide the window and pour it out of the
+            // menu bar, keeping the picture that animation is given.
+            revealPicture = { save($0, "menu-bar-reveal") }
+            main?.orderOut(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                (NSApp.delegate as? AppDelegate)?.showWindowFromMenu()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { exit(0) }
+        }
+    }
+
+    /// Given the picture the menu-bar reveal animates (see AppDelegate).
+    static var revealPicture: ((CGImage?) -> Void)?
 
     private static func run(name: String, seconds: Double, scrollView: NSScrollView?, then next: @escaping () -> Void) {
         installDisplayCounter()

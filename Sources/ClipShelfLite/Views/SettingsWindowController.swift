@@ -310,6 +310,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    #if CLIPSHELF_BENCH
+    func benchPageImage() -> CGImage? {
+        renderFallback()
+        return fallbackContent?.image
+    }
+    #endif
+
     private func renderFallback() {
         guard let hosting, let parent, hosting.bounds.width > 0 else { return }
         let key = lookKey(size: targetFrame(in: parent).size)
@@ -962,7 +969,10 @@ enum WindowSnapshot {
     /// corners (live glass can't be drawn off screen, so a matching colour
     /// stands in for it).
     static func capture(_ window: NSWindow, cornerRadius: CGFloat = GlassMetrics.windowRadius) -> CGImage? {
-        guard let view = window.contentView,
+        // The content alone, over the stand-in colour below: drawn
+        // together with the main window's backdrop, the base came out as
+        // a flat window colour (near white, or near black), not as glass.
+        guard let view = (window.contentView as? BackdropContainerView)?.content ?? window.contentView,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
         view.cacheDisplay(in: view.bounds, to: rep)
         guard let content = rep.cgImage,
