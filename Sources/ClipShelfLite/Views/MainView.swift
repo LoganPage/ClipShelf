@@ -280,6 +280,9 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: PinHotKeyDefaults.changedNotification)) { notification in
             pinHotKey = notification.object as? HotKeyConfiguration ?? PinHotKeyDefaults.load()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            updateChecker.checkIfNeeded()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
             dayToken &+= 1
         }
@@ -489,21 +492,28 @@ struct MainView: View {
                 .foregroundStyle(.secondary)
                 .padding(.top, 3)
 
-            Spacer()
-
+            // A newer version: a blue arrow in a blue ring, right beside
+            // the version it replaces.
             if let update = updateChecker.availableUpdate {
                 Button {
                     updateChecker.openUpdatePage()
                 } label: {
-                    Label("更新", systemImage: "arrow.down.circle")
-                        .labelStyle(.titleAndIcon)
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.blue)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Circle())
                 }
-                .controlSize(.small)
-                .clipShelfLiquidGlassButtonStyle()
-                .foregroundStyle(Color.accentColor)
+                .buttonStyle(PressFeedbackButtonStyle())
+                .padding(.top, 2)
                 .floatingTooltip("发现新版本 \(update.versionText)，点击打开下载页")
+                .accessibilityLabel("更新到 \(update.versionText)")
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
+
+            Spacer()
         }
+        .animation(.clipShelf(.spring(response: 0.4, dampingFraction: 0.7)), value: updateChecker.availableUpdate)
         .frame(height: titleRowHeight)
         .background(WindowDragHandle())
     }

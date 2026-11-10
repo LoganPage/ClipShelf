@@ -724,15 +724,37 @@ enum ClipShelfSelfTest {
             failure: "Text preview routing captured an unsupported document type or missed a required text extension"
         ))
 
-        let packagedVersion = "1.4.1"
+        let packagedVersion = "2.0.0"
         results.append(check(
             name: "app version has one display source and safe development fallbacks",
-            condition: AppVersionInfo.windowTitle(bundleVersion: packagedVersion) == "ClipShelf 1.4.1"
+            condition: AppVersionInfo.windowTitle(bundleVersion: packagedVersion) == "ClipShelf 2.0.0"
                 && AppVersionInfo.windowTitle(bundleVersion: nil) == "ClipShelf"
                 && AppVersionInfo.statusVersion(bundleVersion: packagedVersion) == packagedVersion
                 && AppVersionInfo.statusVersion(bundleVersion: nil) == "dev",
             success: "Window title and status version share the bundle version while unbundled builds stay identifiable",
             failure: "Version display sources diverged or an unbundled build exposed a stale release version"
+        ))
+
+        // The repository's releases as GitHub lists them: both apps', newest
+        // first, with a draft and a pre-release among them.
+        let releaseFeed = Data("""
+        [{"tag_name":"windows-v9.9.9","html_url":"https://github.com/LoganPage/ClipShelf/releases/tag/windows-v9.9.9","draft":false,"prerelease":false},
+         {"tag_name":"macos-v2.2.0","html_url":"https://github.com/LoganPage/ClipShelf/releases/tag/macos-v2.2.0","draft":true,"prerelease":false},
+         {"tag_name":"macos-v2.1.5","html_url":"https://github.com/LoganPage/ClipShelf/releases/tag/macos-v2.1.5","draft":false,"prerelease":true},
+         {"tag_name":"macos-v2.0.10","html_url":"https://github.com/LoganPage/ClipShelf/releases/tag/macos-v2.0.10","draft":false,"prerelease":false},
+         {"tag_name":"macos-v2.0.9","html_url":"https://github.com/LoganPage/ClipShelf/releases/tag/macos-v2.0.9","draft":false,"prerelease":false},
+         {"tag_name":"v3.0.0","html_url":"https://github.com/LoganPage/ClipShelf/releases/tag/v3.0.0","draft":false,"prerelease":false}]
+        """.utf8)
+        let offeredUpdate = MacReleaseFeed.newestUpdate(in: releaseFeed, currentVersion: "2.0.0")
+        results.append(check(
+            name: "update check offers only newer published macOS releases",
+            condition: offeredUpdate?.versionText == "2.0.10"
+                && offeredUpdate?.pageURL.absoluteString.hasSuffix("macos-v2.0.10") == true
+                && MacReleaseFeed.newestUpdate(in: releaseFeed, currentVersion: "2.0.10") == nil
+                && MacReleaseFeed.newestUpdate(in: releaseFeed, currentVersion: "dev") == nil
+                && MacReleaseFeed.newestUpdate(in: Data("{}".utf8), currentVersion: "2.0.0") == nil,
+            success: "Windows releases, drafts, pre-releases and unprefixed tags are ignored, and 2.0.10 ranks above 2.0.9",
+            failure: "The update check offered a Windows, draft, pre-release or older release, or missed the newest macOS one"
         ))
 
         results.append(check(

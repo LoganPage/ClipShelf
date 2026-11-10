@@ -90,6 +90,9 @@ enum ScrollBench {
             try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?
                 .write(to: folder.appendingPathComponent(name + ".png"))
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            AppUpdateChecker.shared.benchOfferUpdate()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
             WindowPictureMode.main.isRendering = true
         }
