@@ -414,7 +414,8 @@ enum ClipShelfSelfTest {
             name: "long text records stay light in the menu, the list and the search index",
             condition: StatusMenuText.clipTitle("  first line \nsecond line") == "first line"
                 && StatusMenuText.clipTitle(longText).count <= 49
-                && longTextItem.rowTitle.count == 1_000
+                && longTextItem.rowTitle.count == ClipItem.rowTitleLength + 1
+                && longTextItem.rowTitle.hasSuffix("…")
                 && newerOne.rowTitle == newerOne.title
                 && SearchMatcher.searchableTexts(for: longTextItem).count == 1
                 && SearchMatcher.matches(longTextItem, query: "longtext"),

@@ -639,21 +639,47 @@ struct LiquidStepper: View {
     let onDecrement: () -> Void
     let onCommit: () -> Void
     var focus: FocusState<Bool>.Binding
+    /// The number is a native text field only while it is being typed in.
+    /// Left in place, AppKit redrew the field on most frames the page
+    /// scrolled, each time waiting for the window server: scrolling
+    /// settings dropped about one frame in six.
+    @State private var isEditing = false
 
     var body: some View {
         HStack(spacing: 0) {
             stepButton("minus", action: onDecrement)
-            TextField("", text: $text)
-                .textFieldStyle(.plain)
-                .multilineTextAlignment(.center)
+            number
                 .font(.system(size: 13, weight: .medium).monospacedDigit())
                 .frame(width: 56)
-                .focused(focus)
-                .onSubmit(onCommit)
             stepButton("plus", action: onIncrement)
         }
         .frame(height: SettingsControlMetrics.height)
         .clipShelfGlass(in: Capsule())
+        .onChange(of: focus.wrappedValue) { isFocused in
+            if !isFocused { isEditing = false }
+        }
+    }
+
+    @ViewBuilder
+    private var number: some View {
+        if isEditing {
+            TextField("", text: $text)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .focused(focus)
+                .onSubmit(onCommit)
+        } else {
+            Text(text)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    isEditing = true
+                    DispatchQueue.main.async { focus.wrappedValue = true }
+                }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("点按后输入数字")
+        }
     }
 
     private func stepButton(_ symbol: String, action: @escaping () -> Void) -> some View {

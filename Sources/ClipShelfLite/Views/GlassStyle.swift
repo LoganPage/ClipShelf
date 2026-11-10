@@ -289,8 +289,12 @@ private struct CardGlass: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.glassTransparency) private var transparency
     @Environment(\.accessibilityLook) private var look
+    @Environment(\.displayScale) private var displayScale
     let isHovered: Bool
     let isHidden: Bool
+    /// The card's height, when it never changes (rows of the list): its
+    /// rim is then a ready-made image (see `CardRimImage`).
+    var fixedHeight: CGFloat?
 
     func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
@@ -339,13 +343,47 @@ private struct CardGlass: ViewModifier {
                         // reads as a slab of glass even on a white backdrop.
                         // A plain gradient line, no blur, so scrolling stays
                         // cheap (a drop shadow would show through the glass).
-                        shape.strokeBorder(CardDepth.gradient(isDark: isDark), lineWidth: 1.5)
+                        if let fixedHeight,
+                           let rim = CardRimImage.image(height: fixedHeight, isDark: isDark, scale: displayScale) {
+                            Image(decorative: rim, scale: displayScale)
+                                .resizable(capInsets: EdgeInsets(top: 0, leading: CardRimImage.cap, bottom: 0, trailing: CardRimImage.cap))
+                                .allowsHitTesting(false)
+                        } else {
+                            shape.strokeBorder(CardDepth.gradient(isDark: isDark), lineWidth: 1.5)
+                        }
                     }
                 }
                 .animation(.easeOut(duration: 0.12), value: isHovered)
         } else {
             content.background(shape.fill(.regularMaterial).opacity(isHidden ? 0 : 1))
         }
+    }
+}
+
+/// A card's rim (see `CardDepth`) as an image that stretches sideways to
+/// any width. Drawn as a gradient stroke, SwiftUI painted every card's rim
+/// on the CPU, at the card's full size, each time a row scrolled into view;
+/// an image is drawn once and only placed.
+@MainActor
+enum CardRimImage {
+    /// The image's unstretched ends, wider than the card's corners.
+    static let cap: CGFloat = GlassMetrics.cardRadius + 8
+    private static var cache: [String: CGImage] = [:]
+
+    static func image(height: CGFloat, isDark: Bool, scale: CGFloat) -> CGImage? {
+        guard height >= 1 else { return nil }
+        let key = "\(height)-\(isDark)-\(scale)"
+        if let cached = cache[key] { return cached }
+        let renderer = ImageRenderer(
+            content: RoundedRectangle(cornerRadius: GlassMetrics.cardRadius, style: .continuous)
+                .strokeBorder(CardDepth.gradient(isDark: isDark), lineWidth: 1.5)
+                .frame(width: cap * 2 + 4, height: height)
+        )
+        renderer.scale = scale
+        guard let image = renderer.cgImage else { return nil }
+        if cache.count > 12 { cache.removeAll() }
+        cache[key] = image
+        return image
     }
 }
 
@@ -358,8 +396,8 @@ extension View {
     /// content is drawn on top of its own glass (inside a container, glass
     /// that is only a background gets composited over its siblings).
     /// `isHidden` drops the glass (e.g. while the selection glass shows).
-    func cardGlass(isHovered: Bool = false, isHidden: Bool = false) -> some View {
-        modifier(CardGlass(isHovered: isHovered, isHidden: isHidden))
+    func cardGlass(isHovered: Bool = false, isHidden: Bool = false, fixedHeight: CGFloat? = nil) -> some View {
+        modifier(CardGlass(isHovered: isHovered, isHidden: isHidden, fixedHeight: fixedHeight))
     }
 
     /// Groups many glass shapes (cards in a list) in one system

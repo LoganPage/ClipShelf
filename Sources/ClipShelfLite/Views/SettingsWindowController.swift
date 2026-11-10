@@ -211,10 +211,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private func markLiveImageStale() {
         liveImageIsStale = true
         idleCapture?.cancel()
+        let pointerAtSchedule = NSEvent.mouseLocation
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isShown, !self.isAnimating, let panel = self.panel else { return }
-            // Not mid-gesture (e.g. dragging the glass slider).
-            guard NSEvent.pressedMouseButtons == 0 else {
+            // Not mid-gesture (e.g. dragging the glass slider), and not
+            // while the pointer is on its way somewhere: the render holds
+            // the main thread for ~0.1 s, which showed as a hitch in
+            // whatever was hovered or scrolled next.
+            guard NSEvent.pressedMouseButtons == 0, NSEvent.mouseLocation == pointerAtSchedule else {
                 self.markLiveImageStale()
                 return
             }

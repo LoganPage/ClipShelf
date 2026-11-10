@@ -48,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             HotKeyManager.shared.register()
         }
         watcher.start()
+        #if CLIPSHELF_BENCH
+        ScrollBench.scheduleIfRequested()
+        #endif
         HotKeyManager.shared.action = { [weak self] in
             self?.showWindow()
         }

@@ -104,10 +104,16 @@ struct ClipItem: Identifiable, Codable, Hashable {
     }
 
     /// The title as a list row shows it. A text record's title is its whole
-    /// text; a row has two lines, so only the start of a long one is laid out.
+    /// text; a row has two lines, so only the start of a long one is laid out
+    /// (measuring a row's text takes time in proportion to its length).
     var rowTitle: String {
-        title.utf8.count > 4_000 ? String(title.prefix(1_000)) : title
+        guard title.utf8.count > Self.rowTitleLength else { return title }
+        let head = title.prefix(Self.rowTitleLength)
+        return head.endIndex == title.endIndex ? title : head + "…"
     }
+
+    /// More than two lines hold in any window that fits a screen.
+    static let rowTitleLength = 400
 
     /// Where the picture is on disk.
     var imageURL: URL? {

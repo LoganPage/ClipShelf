@@ -1936,7 +1936,8 @@ private struct ClipRow: View, Equatable {
                     isSelected: isSelected,
                     isDark: colorScheme == .dark,
                     isPreset: selectionColorIsPreset
-                ) > 0
+                ) > 0,
+                fixedHeight: 68
             )
             .animation(SelectionRowMotion.animation, value: isSelected)
             .overlay {

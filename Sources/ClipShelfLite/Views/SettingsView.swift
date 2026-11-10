@@ -2,7 +2,10 @@ import AppKit
 import SwiftUI
 
 struct SettingsView: View {
-    @ObservedObject var store: ClipStore
+    /// Not observed: the page stays built while settings is closed, and
+    /// observing the store re-evaluated all of it on every copy. Only the
+    /// recording switch follows the store (see `RecordingToggleRow`).
+    let store: ClipStore
     @ObservedObject var watcher: ScreenshotFolderWatcher
     var onClose: () -> Void = {}
     @State private var launchAtLogin = LoginItemController.isEnabled
@@ -26,6 +29,8 @@ struct SettingsView: View {
     @State private var oldHistoryStatusText = ""
     @State private var oldHistoryEligibleCount = 0
     @State private var showingClearHistoryConfirmation = false
+    /// How many records the clear-history question is about.
+    @State private var clearHistoryItemCount = 0
     @FocusState private var historyLimitIsFocused: Bool
 
     /// The 设置 capsule's height and the ✓ circle's diameter.
@@ -110,7 +115,7 @@ struct SettingsView: View {
             hostWindow = window
         })
         .confirmationDialog(
-            ClearHistoryConfirmation.title(itemCount: store.items.count),
+            ClearHistoryConfirmation.title(itemCount: clearHistoryItemCount),
             isPresented: $showingClearHistoryConfirmation,
             titleVisibility: .visible
         ) {
@@ -119,7 +124,7 @@ struct SettingsView: View {
             }
             Button("取消", role: .cancel) { }
         } message: {
-            Text(ClearHistoryConfirmation.message(itemCount: store.items.count))
+            Text(ClearHistoryConfirmation.message(itemCount: clearHistoryItemCount))
         }
         // The slider and its sample follow the saved level, also when it
         // changes from elsewhere.
@@ -371,7 +376,7 @@ struct SettingsView: View {
 
     private var historySection: some View {
         settingsSection("历史") {
-            settingsToggle("记录文字、文件和图片的复制历史", isOn: $store.isClipboardHistoryEnabled)
+            RecordingToggleRow(store: store, title: "记录文字、文件和图片的复制历史")
 
             HStack {
                 Text("最多保留记录")
@@ -399,6 +404,7 @@ struct SettingsView: View {
 
                 Button("清空历史…", role: .destructive) {
                     guard ClearHistoryConfirmation.shouldConfirm(itemCount: store.items.count) else { return }
+                    clearHistoryItemCount = store.items.count
                     showingClearHistoryConfirmation = true
                 }
                 .foregroundStyle(.red)
@@ -690,6 +696,22 @@ struct SettingsView: View {
         AppearancePreferences.mode = mode
     }
 
+}
+
+/// The one row of settings that shows the store's state (recording can also
+/// be paused from the menu bar).
+private struct RecordingToggleRow: View {
+    @ObservedObject var store: ClipStore
+    let title: String
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            LiquidToggle(isOn: $store.isClipboardHistoryEnabled)
+                .accessibilityLabel(title)
+        }
+    }
 }
 
 /// Uses the system overlay scroller, which already fades in while scrolling
